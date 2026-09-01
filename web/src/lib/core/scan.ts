@@ -9,6 +9,7 @@ import { titleFit } from "@/lib/title-fit.mjs";
 import { resolveScanTimeoutMs, scanTimeoutMessage } from "./scan-timeout.mjs";
 import { ATS_LABEL, ATS_SOURCES, type AtsSource, type DiscoveredOffer, type ExploreFilters, type FitBand, type ScanEvent } from "@/lib/explore";
 import { mergeScanResults, timedOutMessage } from "./scan-merge.mjs";
+import { parseScanJsonStdout } from "./scan-json.mjs";
 
 export type { DiscoveredOffer, ScanEvent, AtsSource } from "@/lib/explore";
 export { ATS_SOURCES } from "@/lib/explore";
@@ -220,11 +221,12 @@ function runScanner(
     let errBuf = "";
     let jsonOut = ""; // --json mode: the single stdout object accumulates here
 
-    // A broad ATS sweep can legitimately outlast the default budget (the scanner
-    // probes every company in a source, not just --limit of them). Extend it in
-    // config/profile.yml via scan.timeout_seconds. If our own timer fires, remember
-    // it so the caller can say so honestly (and the scanner flushes the
-    // matches found so far as a partial --json result on SIGTERM).
+    // Workday paginates per tenant. The profile default used to SIGTERM the
+    // child before --json wrote stdout, so the live counter showed matches
+    // and the parse then got nothing. The caller floors the budget at 12
+    // minutes. A longer scan.timeout_seconds still wins. If our own timer
+    // fires, remember it so the caller can say so, and leave 5s for the
+    // scanner to flush the partial JSON before SIGKILL.
     let timedOut = false;
     let hardKiller: ReturnType<typeof setTimeout> | undefined;
     let settled = false;
@@ -243,8 +245,6 @@ function runScanner(
       } catch {
         /* ignore */
       }
-      // Grace period: if the child can't flush its partial JSON and exit, force it
-      // so a wedged scan can't hold the request open to the route's maxDuration.
       hardKiller = setTimeout(() => {
         try {
           child.kill("SIGKILL");
@@ -362,12 +362,7 @@ function runScanner(
     });
     child.on("close", () => {
       if (useJson) {
-        let j: ScanJson | null = null;
-        try {
-          j = JSON.parse(jsonOut.trim()) as ScanJson;
-        } catch {
-          j = null;
-        }
+        const j = parseScanJsonStdout(jsonOut) as ScanJson | null;
         settle({ json: j && Array.isArray(j.offers) ? j : null, timedOut });
         return;
       }
@@ -385,7 +380,10 @@ export async function runDiscovery(filters: ExploreFilters, onEvent: (e: ScanEve
   const useJson = scannerSupportsJson();
   // Read once per run: every child gets the same budget, and the copy quotes it
   // exactly (a 1.5s budget must not read as 2s).
-  const timeoutMs = readScanTimeoutMs();
+  // Floor at 12 minutes. Workday pagination used to die at the profile
+  // default before --json flushed. A longer scan.timeout_seconds still wins.
+  // The same number is what the timeout message quotes.
+  const timeoutMs = Math.max(readScanTimeoutMs(), 12 * 60 * 1000);
   const deadlineSec = timeoutMs / 1000;
   const roleTargets = loadProfileTargets();
   const label = (a: string) => ATS_LABEL[a as AtsSource] ?? a;

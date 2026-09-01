@@ -4,9 +4,10 @@
 // --limit (e.g. Greenhouse's thousands of boards), so a broad scan can outlast
 // the default. career-ops is local-first and config-driven, so a user raises the
 // budget in config/profile.yml under `scan.timeout_seconds` — the same place
-// `scan.extractor` lives. The default keeps a safety margin under the route's
-// maxDuration (300s) so the scanner's final JSON can still be parsed and flushed
-// before the platform would cut the response.
+// `scan.extractor` lives. Discover does not use this default as the killer:
+// scan.ts floors the budget at 12 minutes so a Workday sweep can flush --json,
+// and the explore route's maxDuration (900s) outlives that floor. A configured
+// value above the floor is honored as-is.
 
 export const DEFAULT_SCAN_TIMEOUT_MS = 230_000;
 
