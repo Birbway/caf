@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Check, X, FileText, Loader2 } from "lucide-react";
@@ -8,6 +8,7 @@ import { cn } from "@/lib/cn";
 import { CompanyLogo } from "@/components/company-logo";
 import { scoreNum, scoreTone } from "@/lib/format";
 import { companyPresentation } from "@/lib/company-presentation.mjs";
+import { statusWriteError } from "@/lib/home/status-result.mjs";
 import type { Application } from "@/lib/career-ops";
 import type { CardReason } from "@/lib/machine-summary.mjs";
 
@@ -24,19 +25,35 @@ export function DecisionCard({ app, reason }: { app: Application; reason?: CardR
   const router = useRouter();
   const [busy, setBusy] = useState<"" | "Applied" | "Discarded">("");
   const [done, setDone] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [failedStatus, setFailedStatus] = useState<"Applied" | "Discarded" | null>(null);
+  const submitting = useRef(false);
   const score = scoreNum(app.score);
   const tone = scoreTone(app.score);
   const company = companyPresentation(app);
 
   const setStatus = async (status: "Applied" | "Discarded") => {
+    if (submitting.current) return;
+    submitting.current = true;
     setBusy(status);
+    setError(null);
+    setFailedStatus(null);
     try {
-      await fetch("/api/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ n: app.n, status }) });
+      const response = await fetch("/api/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ n: app.n, status }) });
+      const result = await response.json().catch(() => null);
+      const failure = statusWriteError(response.ok, result, status);
+      if (failure) {
+        setError(failure);
+        setFailedStatus(status);
+        return;
+      }
       setDone(status);
       router.refresh();
     } catch {
-      /* ignore */
+      setError("Could not confirm the change. Check your connection and pipeline, then retry.");
+      setFailedStatus(status);
     } finally {
+      submitting.current = false;
       setBusy("");
     }
   };
@@ -97,6 +114,12 @@ export function DecisionCard({ app, reason }: { app: Application; reason?: CardR
           Applied
         </button>
       </div>
+      {error && (
+        <div role="alert" className="flex items-start gap-2 text-xs text-red-600 dark:text-red-400">
+          <p className="min-w-0 flex-1">{error}</p>
+          {failedStatus && <button type="button" disabled={!!busy} onClick={() => setStatus(failedStatus)} className="shrink-0 underline disabled:opacity-60 max-sm:min-h-[44px]">Retry</button>}
+        </div>
+      )}
     </div>
   );
 }
