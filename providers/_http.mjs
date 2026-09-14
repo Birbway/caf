@@ -26,8 +26,30 @@ import { normalizeUrl } from '../url-key.mjs';
 
 export { BROWSER_LIKE_USER_AGENT, MACOS_BROWSER_LIKE_USER_AGENT };
 
-/** Per-request abort deadline; override per call with `opts.timeoutMs`. */
-const DEFAULT_TIMEOUT_MS = 10_000;
+/**
+ * Resolve the default per-request timeout from the environment.
+ *
+ * 10s suits almost every board, but a provider that returns its whole catalogue
+ * in one response can legitimately need longer, and when it does the abort
+ * surfaces as an unreachable portal rather than as a timeout — so the board
+ * reads as broken instead of slow. Raising the budget is a deployment concern
+ * rather than a code change, so it is read from the environment.
+ *
+ * Unusable values fall back to the default rather than failing a scan at
+ * request time: a typo in an env var should not take the scanner down.
+ *
+ * @param {unknown} raw - Raw env value (CAREER_OPS_HTTP_TIMEOUT_MS).
+ * @param {number} [fallback=10_000] - Value used when `raw` is unusable.
+ * @returns {number} Milliseconds.
+ */
+export function resolveDefaultTimeoutMs(raw, fallback = 10_000) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
+const DEFAULT_TIMEOUT_MS = resolveDefaultTimeoutMs(process.env.CAREER_OPS_HTTP_TIMEOUT_MS);
 let proxyAgent;
 let proxySignature;
 
