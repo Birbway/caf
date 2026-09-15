@@ -98,13 +98,24 @@ const isAbort = (err) => { const e = err?.cause ?? err; return e?.name === 'Abor
   };
 
   // Every unusable shape falls back to the documented 10s default.
+  //
+  // Sub-millisecond and 32-bit-overflow values are unusable for the same reason
+  // rather than an arithmetic one: setTimeout rewrites any delay below 1ms or
+  // above 2_147_483_647ms to 1ms, so such a value would abort every request
+  // almost immediately — the exact failure this env var exists to prevent,
+  // reached by a typo instead of a slow board.
   for (const [raw, label] of [
     [undefined, 'unset'], [null, 'null'], ['', 'empty string'], ['   ', 'whitespace'],
     ['abc', 'non-numeric'], ['0', 'zero'], ['-5', 'negative'],
     ['Infinity', 'Infinity'], ['NaN', 'NaN'],
+    ['0.5', 'sub-millisecond'], ['2147483648', 'timer overflow'],
   ]) {
     eq(`CAREER_OPS_HTTP_TIMEOUT_MS ${label} → 10s default`, resolveDefaultTimeoutMs(raw), 10_000);
   }
+
+  // The bounds are inclusive: both edges are delays setTimeout honors as written.
+  eq('1ms — the smallest delay setTimeout does not rewrite', resolveDefaultTimeoutMs('1'), 1);
+  eq('2147483647ms — the largest delay setTimeout does not rewrite', resolveDefaultTimeoutMs('2147483647'), 2_147_483_647);
 
   eq('a valid numeric string overrides the default', resolveDefaultTimeoutMs('30000'), 30_000);
   eq('a valid number overrides the default', resolveDefaultTimeoutMs(45_000), 45_000);
