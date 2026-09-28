@@ -19,9 +19,9 @@ import { roleFuzzyMatch } from './role-matcher.mjs';
 import { normalizeUrl } from './url-key.mjs';
 import {
   openTrackerTransaction, rebuildRow, normalizeCompany, companiesMatchIgnoringCorporateForm,
-  loadCanonicalStates, resolveCanonicalStateId,
+  MIN_STEM_CHARS, loadCanonicalStates, resolveCanonicalStateId,
 } from './tracker-utils.mjs';
-import { resolveColumns, parseTrackerRow, normalizeVia, normalizeTextKey, extractReqNumber } from './tracker-parse.mjs';
+import { resolveColumns, parseTrackerRow, normalizeVia, extractReqNumber } from './tracker-parse.mjs';
 import { validateFlags } from './lib/cli-flags.mjs';
 
 const CAREER_OPS = getCareerOpsRoot();
@@ -380,15 +380,19 @@ const BLIND_KEY = '\u0000blind-via:';
 // one employer under a different corporate form ("Acme Widgets, APC" vs "Acme
 // Widgets") must land together so they are compared at all — normalizeCompany()
 // keeps the suffix, so keying groups on it split those pairs into two groups and
-// a duplicate re-scan survived every cleanup run (#4421 defect 4). The first
-// normalized token is enough: any pair companiesMatchIgnoringCorporateForm()
-// accepts shares a token prefix, so it shares its first token. This key is ONLY
-// a bucket — employer identity is decided pair-wise by sameCompany() below,
-// never by this key, so "Acme Solutions" and "Acme Technologies" (same first
-// token) stay apart via the equal-length guard there rather than collapsing
-// here (a stripped key would fold them to one and delete a real row).
+// a duplicate re-scan survived every cleanup run (#4421 defect 4).
+// The key is the first MIN_STEM_CHARS characters of the normalized name, the
+// narrowest width that provably holds every pair sameCompany() accepts: the
+// corporate-form rule refuses a stem shorter than that, and an exact match
+// shares the whole string. A first-TOKEN key is too narrow — "Foo-Bar" and
+// "FooBar" are one employer under normalizeCompany() but tokenize to "foo" and
+// "foobar", so tokenizing split two rows that used to group and made them
+// unmergeable. Widening is free and narrowing is not: this key only decides
+// which pairs get compared, never whether they merge, so an over-wide bucket
+// costs a few extra comparisons while an over-narrow one leaves a duplicate
+// row in applications.md forever.
 function companyBucketKey(name) {
-  return normalizeTextKey(name, ' ').split(' ').filter(Boolean)[0] ?? '';
+  return normalizeCompany(name).slice(0, MIN_STEM_CHARS);
 }
 
 // True when two rows name the same employer: identical under normalizeCompany,
@@ -442,11 +446,17 @@ for (const [company, companyEntries] of groups) {
       if (processed.has(j)) continue;
       // Named rows share a bucket, not an employer: gate the pair on the
       // corporate-form-aware identity so suffix variants merge but two distinct
-      // employers sharing a first token do not. Blind rows already share the
-      // Via bucket and are gated on the re-post window instead.
+      // employers sharing a prefix do not. The gate is against EVERY existing
+      // cluster member, not just the anchor, because corporate-form matching is
+      // not transitive: a bare "Acme" matches both "Acme Solutions" and "Acme
+      // Technologies", so anchor-only gating pulled all three into one cluster
+      // and deleted a real row even though the two tails never match each other.
+      // Requiring the whole cluster to agree leaves "Acme Technologies" in its
+      // own cluster, where it survives. Blind rows already share the Via bucket
+      // and are gated on the re-post window instead.
       const companyOk = isBlindGroup
         ? withinBlindWindow(companyEntries[i].date, companyEntries[j].date)
-        : sameCompany(companyEntries[i].company, companyEntries[j].company);
+        : cluster.every((m) => sameCompany(m.company, companyEntries[j].company));
       // roleMatch() only compares against the seed row, so a seed with no URL
       // would admit two rows naming different postings and one would be
       // deleted. Check the candidate's URL and requisition id against every

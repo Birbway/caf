@@ -175,7 +175,13 @@ const CORPORATE_FORM_WORDS = new Set([...LEGAL_SUFFIXES, ...GENERIC_DESCRIPTORS]
 // A one-token stem carries almost no identity, and a two-letter one is usually
 // an initialism that several unrelated employers share. Refusing them costs the
 // duplicate row that exists today; accepting them risks deleting a real one.
-const MIN_STEM_CHARS = 3;
+// Exported because it doubles as the narrowest bucket width a caller can be
+// certain of: every pair companiesMatchIgnoringCorporateForm() accepts shares at
+// least this many leading characters of its normalized form (the stem length
+// floor above), and an exact normalizeCompany() match shares the whole string —
+// so grouping on the first MIN_STEM_CHARS characters can never split a pair the
+// rule would join.
+export const MIN_STEM_CHARS = 3;
 
 /**
  * True when two company cells are the same employer written with a different

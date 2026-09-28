@@ -10,7 +10,7 @@
 // stripping suffixes would map "Acme Solutions" and "Acme Technologies" to the
 // same "acme" and delete a real row, so the discrimination cases below are as
 // important as the merge case.
-import { pass, fail, run, NODE, ROOT } from './helpers.mjs';
+import { pass, fail, run, formatRunFailure, NODE, ROOT } from './helpers.mjs';
 import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -58,6 +58,12 @@ function runDedup(rows) {
   const out = run(NODE, ['dedup-tracker.mjs'], {
     env: { ...process.env, CAREER_OPS_TRACKER: tracker },
   });
+  // A crashed child leaves the fixture on disk untouched, so reading the tracker
+  // without this guard turns a crash into a vacuous pass: the distinct-company
+  // fixtures would read back their own untouched input and report success.
+  if (out === null) {
+    throw new Error(`dedup-tracker.mjs run failed: ${formatRunFailure()}`);
+  }
   return { out, md: readFileSync(tracker, 'utf-8') };
 }
 
@@ -88,5 +94,40 @@ function runDedup(rows) {
     pass('dedup keeps "Acme Solutions" / "Acme Technologies" / "Acme Robotics" apart');
   } else {
     fail(`distinct employers were over-merged to ${rows.length} rows: ${JSON.stringify(rows)}`);
+  }
+}
+
+// 2c. The transitive trap: a bare "Acme" matches BOTH "Acme Solutions" and "Acme
+// Technologies", which do not match each other. Gating only on the anchor row
+// made all three one cluster and deleted "Acme Technologies". "Acme" / "Acme
+// Solutions" is a genuine pair and still merges; the third row must survive.
+{
+  const { md } = runDedup([
+    row(1, 'Acme', '4.2/5'),
+    row(2, 'Acme Solutions', '3.1/5'),
+    row(3, 'Acme Technologies', '2.9/5'),
+  ]);
+  const rows = dataRows(md);
+  const keptTechnologies = rows.some((l) => l.includes('Acme Technologies'));
+  if (rows.length === 2 && keptTechnologies) {
+    pass('dedup keeps "Acme Technologies" when only the anchor row matches it');
+  } else {
+    fail(`non-transitive cluster deleted an unrelated employer: ${JSON.stringify(rows)}`);
+  }
+}
+
+// 2d. Regression guard for the bucket key: "Foo-Bar" and "FooBar" are one
+// employer under normalizeCompany() but tokenize to different first tokens, so
+// a first-token bucket never compared them and the exact duplicate survived.
+{
+  const { md } = runDedup([
+    row(1, 'Foo-Bar', '4.2/5'),
+    row(2, 'FooBar', '3.1/5'),
+  ]);
+  const rows = dataRows(md);
+  if (rows.length === 1 && rows[0].includes('4.2/5')) {
+    pass('dedup merges "Foo-Bar" / "FooBar" (same normalizeCompany key, different tokens)');
+  } else {
+    fail(`exact-company twins were split across buckets: ${JSON.stringify(rows)}`);
   }
 }
