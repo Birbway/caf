@@ -181,6 +181,10 @@ export function rejectPrivateOrInvalid(url) {
 }
 
 const dnsCache = new Map();
+// Hold failures for 30 s, the same TTL as providers/_dns-cache.mjs, so an outage
+// is not pinned for the whole process. Unlike that cache, this includes NXDOMAIN:
+// resolveViaDns turns all lookup failures into an empty answer.
+const DNS_NEGATIVE_TTL_MS = 30_000;
 
 // Real DNS: resolve4 + resolve6 + lookup, each tolerant of its own failure, so a
 // host that only answers on one of the three still yields an address list.
@@ -229,8 +233,9 @@ export function setHostResolver(resolver) {
 async function resolveDnsCached(hostname) {
   if (dnsCache.has(hostname)) {
     const cached = dnsCache.get(hostname);
-    if (cached instanceof Error) throw cached;
-    return cached;
+    if (Array.isArray(cached)) return cached;
+    if (Date.now() < cached.expiresAt) throw cached.error;
+    dnsCache.delete(hostname);
   }
   try {
     const addresses = await hostResolver(hostname);
@@ -246,7 +251,9 @@ async function resolveDnsCached(hostname) {
     dnsCache.set(hostname, addresses);
     return addresses;
   } catch (err) {
-    dnsCache.set(hostname, err);
+    if (!Array.isArray(dnsCache.get(hostname))) {
+      dnsCache.set(hostname, { error: err, expiresAt: Date.now() + DNS_NEGATIVE_TTL_MS });
+    }
     throw err;
   }
 }
