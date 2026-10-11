@@ -113,11 +113,14 @@
  *                               written to scan-history.tsv. A source that
  *                               serves every language version of a posting at
  *                               one URL, told apart by a `language` / `lang` /
- *                               `locale` param, returns one Job per version
- *                               with that param on its `url`, the posting's
- *                               own default language first: the URL dedup
- *                               resolves a seen row of unknown language to the
- *                               first version when no title tells it apart.
+ *                               `locale` param, returns one Job per version,
+ *                               each with `language` set and that param on its
+ *                               `url`, the posting's own default language
+ *                               first: the URL dedup resolves a seen row of
+ *                               unknown language to the first version when no
+ *                               title tells it apart. A candidate's language
+ *                               is only ever this field, never read from its
+ *                               URL, so a version without it stays a duplicate.
  */
 
 /**
