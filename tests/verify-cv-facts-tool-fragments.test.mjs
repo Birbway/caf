@@ -279,11 +279,19 @@ try {
   const visibleGrouping = [...metricClaims('Reached 1234 567 users.')];
   if (JSON.stringify(hiddenGrouping) === JSON.stringify(visibleGrouping)) pass('an invisible character does not change how digits group');
   else fail(`an invisible character regrouped digits: ${JSON.stringify(hiddenGrouping)} vs ${JSON.stringify(visibleGrouping)}`);
-  const started = performance.now();
-  factClaims(`Built it using K${'@'.repeat(200000)}x.`);
-  const elapsed = performance.now() - started;
-  if (elapsed < 5000) pass('a long run of symbols in a fragment is read in linear time');
-  else fail(`a long run of symbols in a fragment took ${Math.round(elapsed)} ms`);
+  // Growth, not a wall-clock limit: ten times the input may take about ten
+  // times as long, and quadratic growth takes a hundred times. A slow runner
+  // alone does not fail it; the large run must also be slow in absolute terms.
+  const timeSymbolRun = length => {
+    const started = performance.now();
+    factClaims(`Built it using K${'@'.repeat(length)}x.`);
+    return performance.now() - started;
+  };
+  timeSymbolRun(2000);
+  const smallRun = Math.max(timeSymbolRun(20000), 1);
+  const largeRun = timeSymbolRun(200000);
+  if (largeRun < 1000 || largeRun / smallRun < 40) pass('a long run of symbols in a fragment is read in linear time');
+  else fail(`a long run of symbols scaled superlinearly: ${Math.round(smallRun)} ms for 20,000, ${Math.round(largeRun)} ms for 200,000`);
   const longProse = toolValues('Built it using data to cut churn by half.');
   if (longProse.length === 0) pass('a long prose fragment the prose words mark is still not a tool');
   else fail(`a long prose fragment was read as a tool: ${JSON.stringify(longProse)}`);
