@@ -37,10 +37,11 @@ The warning counts the modified, removed and added files and groups the added
 ones by top-level directory, so you can tell an edit to your code from new files
 beside it.
 
-Every file under a plugin's directory is hashed, because a plugin can import any
-of them. That includes git worktrees and tool logs. If you link a plugin
-checkout into `plugins.local/`, keep worktrees and logs outside that directory,
-for example `git worktree add ../my-plugin-worktrees/fix-1`.
+Every file under a plugin's directory is hashed, except inside directories named
+`node_modules` or `.git`, which are skipped. The hash includes git worktrees and
+tool logs. If you link a plugin checkout into `plugins.local/`, keep worktrees
+and logs outside that directory, for example
+`git worktree add ../my-plugin-worktrees/fix-1`.
 
 ## Writing a plugin
 
