@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
@@ -868,29 +868,62 @@ function PartView({
     );
   }
   if (part.type === "confirm") {
-    return (
-      <div className="rounded-xl border border-brand/40 bg-brand-soft p-2.5">
-        <div className="text-xs font-medium text-foreground">{part.summary}</div>
-        {part.state === "pending" ? (
-          <div className="mt-2 flex gap-2">
-            <button
-              onClick={() => onConfirm(part.cid, true)}
-              className="rounded-full bg-brand px-3 py-1 text-xs font-medium text-brand-foreground transition-colors hover:bg-brand-200"
-            >
-              Confirm
-            </button>
-            <button
-              onClick={() => onConfirm(part.cid, false)}
-              className="rounded-full border border-border px-3 py-1 text-xs text-muted transition-colors hover:bg-surface-hover hover:text-foreground"
-            >
-              Cancel
-            </button>
-          </div>
-        ) : (
-          <div className="mt-1 text-xs text-faint">{part.state === "done" ? "✓ started" : "cancelled"}</div>
-        )}
-      </div>
-    );
+    return <ConfirmationCard key={part.cid} part={part} onConfirm={onConfirm} />;
   }
   return null;
+}
+
+function ConfirmationCard({ part, onConfirm }: {
+  part: Extract<Part, { type: "confirm" }>;
+  onConfirm: (cid: string, accept: boolean) => void;
+}) {
+  const id = useId();
+  const summaryId = `${id}-summary`;
+  const resultId = `${id}-result`;
+  const resultRef = useRef<HTMLDivElement>(null);
+  const decisionRef = useRef<HTMLButtonElement | null>(null);
+
+  // Only continue focus from the decision control being removed. Arrival,
+  // history restoration and unrelated focus must never pull the user here.
+  useLayoutEffect(() => {
+    const decision = decisionRef.current;
+    if (part.state === "pending" || !decision) return;
+    decisionRef.current = null;
+    if (document.activeElement === decision || document.activeElement === document.body) {
+      resultRef.current?.focus();
+    }
+  }, [part.state]);
+
+  function decide(button: HTMLButtonElement, accept: boolean) {
+    decisionRef.current = document.activeElement === button ? button : null;
+    onConfirm(part.cid, accept);
+  }
+
+  return (
+    <div role="group" aria-labelledby={summaryId} className="rounded-xl border border-brand/40 bg-brand-soft p-2.5">
+      <div id={summaryId} className="text-xs font-medium text-foreground">{part.summary}</div>
+      {part.state === "pending" ? (
+        <div className="mt-2 flex gap-2">
+          <button
+            aria-label={`Confirm: ${part.summary}`}
+            onClick={(e) => decide(e.currentTarget, true)}
+            className="rounded-full bg-brand px-3 py-1 text-xs font-medium text-brand-foreground transition-colors hover:bg-brand-200"
+          >
+            Confirm
+          </button>
+          <button
+            aria-label={`Cancel: ${part.summary}`}
+            onClick={(e) => decide(e.currentTarget, false)}
+            className="rounded-full border border-border px-3 py-1 text-xs text-muted transition-colors hover:bg-surface-hover hover:text-foreground"
+          >
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <div ref={resultRef} tabIndex={-1} aria-labelledby={`${summaryId} ${resultId}`} className="mt-1 rounded text-xs text-faint focus-visible:outline-2 focus-visible:outline-brand">
+          <span id={resultId}>{part.state === "done" ? "✓ started" : "cancelled"}</span>
+        </div>
+      )}
+    </div>
+  );
 }
