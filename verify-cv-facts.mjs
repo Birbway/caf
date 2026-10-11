@@ -464,14 +464,15 @@ function isDottedName(word) {
  * source that says "Node", or "next quarter" for "Next.js", then backs the
  * claim. A dotted name (see `isDottedName`) names a product or a site, so
  * these are kept without the shape and prose checks the rest of the fragment
- * needs. Words after the connector stay unread, as in
- * `toolNameBeforeConnector`.
+ * needs. A word is split at a slash first, so "Node.js/Express" yields
+ * "Node.js". The plain name beside it stays unread. Words after the connector
+ * stay unread, as in `toolNameBeforeConnector`.
  */
 function dottedNamesBeforeConnector(value) {
   if (!value.includes('.')) return [];
   const words = value.trim().split(/\s+/);
   const connector = words.findIndex(word => TOOL_PROSE_CONNECTORS.has(normalizeFact(word)));
-  return words.slice(0, connector < 0 ? words.length : connector).filter(isDottedName);
+  return words.slice(0, connector < 0 ? words.length : connector).flatMap(word => word.split('/')).filter(isDottedName);
 }
 
 /**
@@ -568,10 +569,11 @@ export function factClaims(text, sourceNormalized = null) {
     // ("Tableau.Grew pipeline") reads as one name here and blocks, which is
     // the fail-closed side of that ambiguity. It stays as it is beside this one rather than being
     // replaced, because reading through the dot can lengthen a fragment past
-    // the three words `isLikelyTool` accepts ("Node.js/Express on AWS
+    // the three words `isLikelyTool` accepts ("Node.js's event loop on AWS
     // Lambda"), and then the name the shorter capture did check would go
     // unchecked. `dottedNamesBeforeConnector` recovers a dotted name from such
-    // a fragment only when it stands as a word of its own.
+    // a fragment only when it stands as a word of its own, or is joined to
+    // another by a slash.
     ['tool', /\b(?:using|built with|worked with|technologies?\s*:\s*|tech stack\s*:\s*)((?:[^.;\n]|\.(?=[\p{L}\p{N}]))+?)(?=\s+\bfor\b|\.(?![\p{L}\p{N}])|[;\n]|$)/giu],
   ];
   for (const [kind, pattern] of patterns) {

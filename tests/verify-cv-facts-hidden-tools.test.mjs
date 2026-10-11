@@ -81,6 +81,13 @@ try {
     '- Planned the next quarter.', '- Built the app using Next.js on Vercel Edge.', ['next.js']);
   blocksOn('a dotted name in a long "worked with" fragment is compared whole',
     '- Planned the next quarter.', '- Worked with Next.js on Vercel Edge.', ['next.js']);
+  blocksOn('a dotted name joined to another by a slash is compared whole',
+    '- Built APIs using Node.', '- Built the API using Node.js/Express on AWS Lambda.', ['node.js']);
+  for (const text of ['Ran experiments using A/B splits on landing pages.', 'Grew pipeline using paid/organic mix on LinkedIn.']) {
+    const found = toolValues(text);
+    if (!found.some(value => value.includes('/') || value === 'a' || value === 'b' || value === 'paid' || value === 'organic')) pass(`a slash between plain words is not read as a name: ${text}`);
+    else fail(`a slash between plain words was read as a name (${text}): ${JSON.stringify(found)}`);
+  }
   blocksOn('a name that opens with a dot in a long fragment is compared whole',
     '- Built services using C#.', '- Built services using .NET on Azure App Service.', ['.net']);
   // Only a word whose every dot-separated part has two or more characters,
