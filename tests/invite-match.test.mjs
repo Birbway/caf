@@ -15,7 +15,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 import { execFileSync } from 'child_process';
-import { matchInvite, normalizeCompanyName, extractCompany, extractPlatform, isAIInterviewerPlatform, classifyEmail, analyzeInvite, applyRejectionStatus, selectApplyTarget } from '../invite-match.mjs';
+import { matchInvite, normalizeCompanyName, extractCompany, extractInterviewer, formatInviteNote, extractPlatform, isAIInterviewerPlatform, classifyEmail, analyzeInvite, applyRejectionStatus, applyInviteStatus, selectApplyTarget } from '../invite-match.mjs';
 import { pass, fail } from './helpers.mjs';
 
 console.log('\ninvite-match.mjs — interview invite matching');
@@ -291,6 +291,42 @@ function makeSandboxTracker(rows) {
   rmSync(sb.dir, { recursive: true, force: true });
 }
 
+// --- #1960: --apply-to-Interview path (applyInviteStatus, real sandboxed tracker) ---
+
+{
+  const sb = makeSandboxTracker([
+    '| 1 | 2026-06-01 | Fabrikam | Engineer | 4.0/5 | Applied | ❌ | — | — |',
+  ]);
+  const applied = applyInviteStatus(1, { date: '2026-06-15', interviewer: 'Jane Doe' }, { appsFile: sb.tracker });
+  eq('applyInviteStatus reports the Interview transition', applied.newStatus, 'Interview');
+  eq('applyInviteStatus reports changed:true', applied.changed, true);
+  const content = readFileSync(sb.tracker, 'utf-8');
+  eq('applyInviteStatus actually writes Interview to the tracker on disk', /\|\s*Interview\s*\|/.test(content), true);
+  eq('applyInviteStatus records date and interviewer in the notes column', content.includes('Interview: 2026-06-15 with Jane Doe'), true);
+  rmSync(sb.dir, { recursive: true, force: true });
+}
+
+{
+  // Re-running against an already-Interview row must be a safe no-op.
+  const sb = makeSandboxTracker([
+    '| 1 | 2026-06-01 | Fabrikam | Engineer | 4.0/5 | Interview | ❌ | — | Interview: 2026-06-15 with Jane Doe |',
+  ]);
+  const applied = applyInviteStatus(1, { date: '2026-06-15', interviewer: 'Jane Doe' }, { appsFile: sb.tracker });
+  eq('applyInviteStatus is idempotent — no-op re-run reports changed:false', applied.changed, false);
+  eq('applyInviteStatus idempotent re-run still reports newStatus Interview', applied.newStatus, 'Interview');
+  rmSync(sb.dir, { recursive: true, force: true });
+}
+
+{
+  // A tracker # that doesn't exist must fail structured, not throw uncaught.
+  const sb = makeSandboxTracker([
+    '| 1 | 2026-06-01 | Fabrikam | Engineer | 4.0/5 | Applied | ❌ | — | — |',
+  ]);
+  const applied = applyInviteStatus(999, {}, { appsFile: sb.tracker });
+  eq('applyInviteStatus on a nonexistent tracker # reports a structured error, not a thrown exception', typeof applied.error, 'string');
+  rmSync(sb.dir, { recursive: true, force: true });
+}
+
 // --- #2100 CodeRabbit major finding: --apply's sole-candidate branch must
 // require a confidence gate, not auto-select any single fuzzy match ---
 
@@ -464,4 +500,68 @@ eq('CLI: --help --bogus does not print usage on error', helpBogusResult.stdout.i
 const mistypedResult = runCli(['--sumary']);
 eq('CLI: mistyped flag (--sumary) exits non-zero (code 1)', mistypedResult.status, 1);
 eq('CLI: mistyped flag stderr names the mistyped flag', mistypedResult.stderr.includes('--sumary'), true);
+
+// --- #1960: extractInterviewer & formatInviteNote ---
+
+eq('extractInterviewer: "Interviewer: Jane Doe"', extractInterviewer('Interviewer: Jane Doe'), 'Jane Doe');
+eq('extractInterviewer: "Speaking with: Bob Smith"', extractInterviewer('Speaking with: Bob Smith'), 'Bob Smith');
+eq('extractInterviewer: conversational speaking with', extractInterviewer('You will be speaking with Sarah Connor on Tuesday'), 'Sarah Connor');
+eq('extractInterviewer: conversational meeting with', extractInterviewer('You\'ll be meeting with David Miller to discuss the role'), 'David Miller');
+eq('extractInterviewer: preserves accented characters', extractInterviewer('Interviewer: René Descartes'), 'René Descartes');
+eq('extractInterviewer: avoids matching the company name', extractInterviewer('Your interview with Acme Corp on Monday', 'Acme Corp'), null);
+eq('extractInterviewer: filters out generic non-person phrases', extractInterviewer('Looking forward to speaking with the team'), null);
+eq('extractInterviewer: returns null for empty text', extractInterviewer(''), null);
+
+eq('formatInviteNote: date and interviewer combined', formatInviteNote({ date: '2026-06-15', interviewer: 'Jane Doe' }), 'Interview: 2026-06-15 with Jane Doe');
+eq('formatInviteNote: date only', formatInviteNote({ date: '2026-06-15', interviewer: null }), 'Interview: 2026-06-15');
+eq('formatInviteNote: interviewer only', formatInviteNote({ date: null, interviewer: 'Jane Doe' }), 'Interview with Jane Doe');
+eq('formatInviteNote: neither date nor interviewer present', formatInviteNote({}), 'Interview scheduled');
+
+// --- #1960: selectApplyTarget invite confidence gate ---
+
+const inviteExactResult = {
+  candidates: [{ appNumber: 701, nameScore: 1 }],
+  classification: 'invite',
+  phraseStrength: null,
+};
+const inviteExactSel = selectApplyTarget(inviteExactResult, null);
+eq('selectApplyTarget auto-applies a sole exact-company candidate for invite classification', !inviteExactSel.error && inviteExactSel.target.appNumber, 701);
+
+const inviteFuzzyResult = {
+  candidates: [{ appNumber: 702, nameScore: 0.6 }],
+  classification: 'invite',
+  phraseStrength: null,
+};
+const inviteFuzzySel = selectApplyTarget(inviteFuzzyResult, null);
+eq('selectApplyTarget refuses to auto-apply a sole fuzzy candidate for invite classification', !!inviteFuzzySel.error && inviteFuzzySel.code === 2, true);
+eq('selectApplyTarget exposes candidate on fuzzy invite refusal', inviteFuzzySel.candidate && inviteFuzzySel.candidate.appNumber, 702);
+
+const inviteIdSel = selectApplyTarget(inviteFuzzyResult, 702);
+eq('selectApplyTarget honors explicit --id for invite classification even with fuzzy candidate', !inviteIdSel.error && inviteIdSel.target.appNumber, 702);
+
+// --- #1960: CLI --apply on invite text ---
+
+{
+  const sb = makeSandboxTracker([
+    '| 1 | 2026-06-01 | Fabrikam | Engineer | 4.0/5 | Applied | ❌ | — | — |',
+  ]);
+  const inviteEmail = 'Schedule your interview with Fabrikam\nDate: 2026-06-20\nInterviewer: Alex Rivera';
+  try {
+    const stdout = execFileSync(process.execPath, [SCRIPT_PATH, '--apply'], {
+      encoding: 'utf-8',
+      cwd: dirname(SCRIPT_PATH),
+      env: { ...process.env, CAREER_OPS_TRACKER: sb.tracker },
+      input: inviteEmail,
+    });
+    const parsed = JSON.parse(stdout);
+    eq('CLI: --apply on invite text advances status to Interview', parsed.applied.newStatus, 'Interview');
+    eq('CLI: --apply on invite text marks changed: true', parsed.applied.changed, true);
+    const content = readFileSync(sb.tracker, 'utf-8');
+    eq('CLI: --apply on invite text actually writes to tracker file', /\|\s*Interview\s*\|/.test(content), true);
+    eq('CLI: --apply on invite text writes date and interviewer note', content.includes('Interview: 2026-06-20 with Alex Rivera'), true);
+  } finally {
+    rmSync(sb.dir, { recursive: true, force: true });
+  }
+}
+
 
