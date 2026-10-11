@@ -1,7 +1,9 @@
 package data
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,21 +55,86 @@ func resolveReportPath(careerOpsPath, trackerPath, link string) string {
 	return link
 }
 
+// repoRootMarker identifies a career-ops checkout. path-resolver.mjs is chosen
+// because that file IS the Node implementation of this same resolution, so the
+// two cannot disagree about which directory is the root.
+const repoRootMarker = "path-resolver.mjs"
+
+// ancestorWithMarker returns the first directory at or above `start` that holds
+// the marker, or "" when there is none.
+//
+// Only fs.ErrNotExist is treated as "not here". Any other stat error means the
+// directory exists and could not be examined, and walking past it would anchor
+// the data root somewhere else entirely — so it is surfaced rather than
+// swallowed into a silent fallback.
+func ancestorWithMarker(start string) (string, error) {
+	dir := start
+	for {
+		_, err := os.Stat(filepath.Join(dir, repoRootMarker))
+		if err == nil {
+			return dir, nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", fmt.Errorf("look for %s in %s: %w", repoRootMarker, dir, err)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", nil
+		}
+		dir = parent
+	}
+}
+
+// FindRepoRoot locates the career-ops checkout independent of the working
+// directory, or "" when it cannot be found.
+//
+// AGENTS.md and DATA_CONTRACT.md both say a relative CAREER_OPS_ROOT /
+// CAREER_OPS_TRACKER is "resolved relative to the repository root", and
+// path-resolver.mjs does that with no reference to cwd at all — it resolves
+// against its own __dirname.
+//
+// Two sources, in order of reliability:
+//
+//	cwd and its ancestors     being run from anywhere inside the checkout
+//	the executable and its    a binary built in the checkout but run from
+//	ancestors                 outside it, which cwd cannot answer
+//
+// Exported so main.go uses this one rather than keeping a second search of its
+// own: CAREER_OPS_TRACKER resolves through here, and two walkers that disagree
+// would let the dashboard and its tracker land on different roots.
+func FindRepoRoot() (string, error) {
+	if cwd, err := os.Getwd(); err == nil {
+		root, statErr := ancestorWithMarker(cwd)
+		if statErr != nil {
+			return "", statErr
+		}
+		if root != "" {
+			return root, nil
+		}
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return "", nil
+	}
+	if resolved, linkErr := filepath.EvalSymlinks(exe); linkErr == nil {
+		exe = resolved
+	}
+	root, statErr := ancestorWithMarker(filepath.Dir(exe))
+	if statErr != nil {
+		return "", statErr
+	}
+	return root, nil
+}
+
+// getRepoRoot keeps the previous contract for callers that have nowhere to put
+// an error: the checkout when it can be found, cwd otherwise.
 func getRepoRoot() string {
+	if root, err := FindRepoRoot(); err == nil && root != "" {
+		return root
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "."
-	}
-	current := cwd
-	for {
-		if _, err := os.Stat(filepath.Join(current, "path-resolver.mjs")); err == nil {
-			return current
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			break
-		}
-		current = parent
 	}
 	return cwd
 }
@@ -544,7 +611,10 @@ func ComputeMetrics(apps []model.CareerApplication) model.PipelineMetrics {
 }
 
 // NormalizeStatus normalizes raw status text to a canonical form.
-// Aliases match states.yml -- keep in sync with career-ops/states.yml
+// Aliases match templates/states.yml, which Node and web load directly. Keep
+// them in sync; TestNormalizeStatusCoversStatesYAML fails on a states.yml
+// spelling this function resolves differently, and test-all.mjs guards the
+// other direction (no literal here that states.yml has never heard of).
 func NormalizeStatus(raw string) string {
 	// Strip markdown bold and trailing dates
 	s := strings.ReplaceAll(raw, "**", "")
@@ -556,12 +626,14 @@ func NormalizeStatus(raw string) string {
 
 	switch {
 	// Most restrictive first — accepts English, Spanish, and Turkish
-	case s == "hired" || s == "contratado" || s == "contratada" || s == "accepted" || s == "accept" || s == "kabul edildi" || s == "kabul_edildi" || s == "işe alındı" || s == "ise alindi":
+	case s == "hired" || s == "contratado" || s == "contratada" || s == "accepted" || s == "accept" || s == "kabul edildi" || s == "kabul_edildi" || s == "işe alındı" || s == "ise alindi" || s == "işe alindi":
 		return "hired"
-	case strings.Contains(s, "no aplicar") || strings.Contains(s, "no_aplicar") || s == "skip" || strings.Contains(s, "geo blocker") || strings.Contains(s, "uygun değil") || strings.Contains(s, "uygun_değil") || strings.Contains(s, "uygun degil") || strings.Contains(s, "uygun_degil"):
+	case strings.Contains(s, "no aplicar") || strings.Contains(s, "no_aplicar") || s == "skip" || s == "monitor" || strings.Contains(s, "geo blocker") || strings.Contains(s, "geo_blocker") || strings.Contains(s, "uygun değil") || strings.Contains(s, "uygun_değil") || strings.Contains(s, "uygun degil") || strings.Contains(s, "uygun_degil"):
 		return "skip"
 	case strings.Contains(s, "interview") || strings.Contains(s, "entrevista") || strings.Contains(s, "mülakat") || strings.Contains(s, "mulakat"):
 		return "interview"
+	case s == "assessment" || s == "screening" || s == "online assessment" || s == "online_assessment" || s == "online screening":
+		return "assessment"
 	case s == "offer" || strings.Contains(s, "oferta") || strings.Contains(s, "teklif"):
 		return "offer"
 	case strings.Contains(s, "responded") || strings.Contains(s, "respondido") || strings.Contains(s, "yanıt verildi") || strings.Contains(s, "yanıt_verildi") || strings.Contains(s, "yanit verildi") || strings.Contains(s, "yanit_verildi"):
@@ -573,7 +645,7 @@ func NormalizeStatus(raw string) string {
 	case strings.Contains(s, "discarded") || strings.Contains(s, "descartado") || s == "descartada" || s == "cerrada" || s == "cancelada" ||
 		strings.HasPrefix(s, "duplicado") || strings.HasPrefix(s, "dup") || strings.Contains(s, "iptal edildi") || strings.Contains(s, "iptal_edildi") || strings.Contains(s, "ıptal edildi") || strings.Contains(s, "ıptal_edildi"):
 		return "discarded"
-	case strings.Contains(s, "evaluated") || strings.Contains(s, "evaluada") || s == "condicional" || s == "hold" || s == "monitor" || s == "evaluar" || s == "verificar" || strings.Contains(s, "değerlendirildi") || strings.Contains(s, "degerlendirildi"):
+	case strings.Contains(s, "evaluated") || strings.Contains(s, "evaluada") || s == "condicional" || s == "hold" || s == "evaluar" || s == "verificar" || strings.Contains(s, "değerlendirildi") || strings.Contains(s, "degerlendirildi"):
 		return "evaluated"
 	default:
 		return s
@@ -872,7 +944,7 @@ func UpdateApplicationStatusAndNotes(careerOpsPath string, app model.CareerAppli
 // Reject malformed UI input cheaply; the writer validates against states.yml.
 func isCanonicalStatusName(status string) bool {
 	switch strings.ToLower(status) {
-	case "evaluated", "applied", "responded", "interview", "offer", "hired", "rejected", "discarded", "skip":
+	case "evaluated", "applied", "responded", "assessment", "interview", "offer", "hired", "rejected", "discarded", "skip":
 		return true
 	}
 	return false
@@ -892,20 +964,22 @@ func StatusPriority(status string) int {
 		return 0
 	case "offer":
 		return 1
-	case "responded":
+	case "assessment":
 		return 2
-	case "applied":
+	case "responded":
 		return 3
-	case "evaluated":
+	case "applied":
 		return 4
-	case "skip":
+	case "evaluated":
 		return 5
-	case "rejected":
+	case "skip":
 		return 6
-	case "discarded":
+	case "rejected":
 		return 7
-	default:
+	case "discarded":
 		return 8
+	default:
+		return 9
 	}
 }
 
@@ -940,19 +1014,20 @@ func ComputeProgressMetrics(apps []model.CareerApplication, history ...map[int]i
 	}
 
 	// Funnel: each stage counts all apps that reached at least that stage.
-	// An app in "interview" has passed through evaluated -> applied -> responded -> interview.
+	// An app in "interview" has passed through evaluated -> applied -> responded -> assessment -> interview.
 	// "hired" is terminal success and proves every earlier stage (a landed job
 	// proves the offer, the interviews, the response, and the submission), so it
-	// counts into all four tiers — matching computeFunnel() in stats.mjs, the
+	// counts into all four existing funnel tiers — matching computeFunnel() in stats.mjs, the
 	// canonical funnel definition, whose docstring already describes this exact
 	// math as mirroring this function.
 	total := len(apps)
-	applied := statusCounts["applied"] + statusCounts["responded"] + statusCounts["interview"] + statusCounts["offer"] + statusCounts["hired"] + statusCounts["rejected"]
-	responded := statusCounts["responded"] + statusCounts["interview"] + statusCounts["offer"] + statusCounts["hired"] + statusCounts["rejected"]
+	applied := statusCounts["applied"] + statusCounts["responded"] + statusCounts["assessment"] + statusCounts["interview"] + statusCounts["offer"] + statusCounts["hired"] + statusCounts["rejected"]
+	responded := statusCounts["responded"] + statusCounts["assessment"] + statusCounts["interview"] + statusCounts["offer"] + statusCounts["hired"] + statusCounts["rejected"]
+	assessment := statusCounts["assessment"] + statusCounts["interview"] + statusCounts["offer"] + statusCounts["hired"]
 	interview := statusCounts["interview"] + statusCounts["offer"] + statusCounts["hired"]
 	offer := statusCounts["offer"] + statusCounts["hired"]
 	if len(history) > 0 {
-		applied, responded, interview, offer = 0, 0, 0, 0
+		applied, responded, assessment, interview, offer = 0, 0, 0, 0, 0
 		ranks := make(map[int]int)
 		var unnumberedRanks []int
 		for _, app := range apps {
@@ -982,9 +1057,12 @@ func ComputeProgressMetrics(apps []model.CareerApplication, history ...map[int]i
 				responded++
 			}
 			if rank >= 3 {
-				interview++
+				assessment++
 			}
 			if rank >= 4 {
+				interview++
+			}
+			if rank >= 5 {
 				offer++
 			}
 		}
@@ -1000,11 +1078,15 @@ func ComputeProgressMetrics(apps []model.CareerApplication, history ...map[int]i
 		{Label: "Tracked", Count: total, Pct: 100.0},
 		{Label: "Applied", Count: applied, Pct: safePct(applied, total)},
 		{Label: "Responded", Count: responded, Pct: safePct(responded, applied)},
+		{Label: "Assessment", Count: assessment, Pct: safePct(assessment, applied)},
 		{Label: "Interview", Count: interview, Pct: safePct(interview, applied)},
 		{Label: "Offer", Count: offer, Pct: safePct(offer, applied)},
 	}
 
-	// Rates (relative to applied)
+	// Rates (relative to applied). The denominator travels with them so the
+	// renderer can tell an absent rate from a measured 0% — see
+	// model.ProgressMetrics.RatesDenominator.
+	pm.RatesDenominator = applied
 	if applied > 0 {
 		pm.ResponseRate = float64(responded) / float64(applied) * 100
 		pm.InterviewRate = float64(interview) / float64(applied) * 100
