@@ -59,6 +59,22 @@ const PROSE_FRAGMENTS = new Set(['building']);
 // report (#4004).
 const DETERMINER_LEAD_RE = /^(?:the|that|this|these|those|our|your|their|its|his|her|my)(?:\s+|$)/i;
 const DECLARED_TOOL_TRIGGER_RE = /^(?:technologies?|tech stack)\s*:/i;
+// The articles and prepositions in TOOL_PROSE_WORDS that can sit inside a
+// list item. They join names as readily as they join prose ("Kubernetes on
+// AWS"), so on their own they do not make an item prose; see
+// `toolNameBeforeConnector`. "and", "with" and "in" are left out because the
+// list is split on them. "for" is left out because a capture ends at a "for"
+// after a space, and an item that still starts with one ("Kafka,for
+// analytics") is prose. A closed class, like the determiners above.
+const TOOL_PROSE_CONNECTORS = new Set(['a', 'an', 'at', 'by', 'from', 'of', 'on', 'the', 'to']);
+// "Worked with" takes a team or a person as often as a tool ("worked with
+// Finance on pricing"), so `toolNameBeforeConnector` is not applied to a list
+// it opens. Tested against the start of the match, which is the trigger.
+const WORKED_WITH_RE = /^worked with\b/i;
+// "using" opening a later list item: "using React, using Kubernetes". The
+// other prose triggers end in "with", which the list is split on, so they
+// never open an item.
+const INNER_TOOL_TRIGGER_RE = /^\s*using\s+/i;
 const TOOL_PHRASE_PATTERN = /^(?=.{1,80}$)[\p{L}\p{N}.][\p{L}\p{N}+#./-]*(?:\s+[\p{L}\p{N}.][\p{L}\p{N}+#./-]*){0,2}$/u;
 const DELEGATED_PARTY_RE = /\b(?:vendors?|agenc(?:y|ies)|contractors?|consultanc(?:y|ies)|consultants?|external teams?|outsourc(?:ed|ing)|implementation partners?)\b/i;
 const DELEGATION_RE = /\b(?:commissioned|coordinated|directed|engaged|hired|managed|oversaw|partnered with|supervised)\b/i;
@@ -427,6 +443,42 @@ function isLikelyTool(value, sourceNormalized) {
 }
 
 /**
+ * The tool-shaped name a connector hid inside a fragment `isLikelyTool`
+ * rejected, or '' when there is none.
+ *
+ * A prose word rejects its whole fragment, which is right for ordinary
+ * English and wrong for a name followed by a connector: in "Kubernetes on AWS"
+ * the "on" discarded Kubernetes, so the name the trigger introduced was never
+ * checked. When every prose word in the fragment is a connector
+ * (`TOOL_PROSE_CONNECTORS`), the words before the first one are that name, and
+ * they are kept if `looksToolShaped` accepts them. Any other prose word still
+ * rejects the whole fragment, so "Ops on deployment" yields nothing:
+ * "deployment" marks it as a sentence about work.
+ *
+ * Only the name before the connector is kept. What follows one is usually
+ * where or when the tool was used ("Looker on Mondays", "GCP at Initech").
+ * #4394 kept a place after "in" or "with" as a claim that allow_facts clears.
+ * Reading this position the same way would block those words too, so it is
+ * left unread.
+ *
+ * The name must be tool-shaped, so a lowercase head such as "data" in "data
+ * on Mondays" stays with `isLikelyTool` and this never widens its default
+ * acceptance. Like `isLikelyTool`, it reads at most three words, so a longer
+ * fragment such as "Kubernetes on Google Cloud" is still dropped whole.
+ */
+function toolNameBeforeConnector(value) {
+  const trimmed = value.trim();
+  if (!TOOL_PHRASE_PATTERN.test(trimmed)) return '';
+  const words = trimmed.split(/\s+/).map(word => ({ word, normalized: normalizeFact(word) }));
+  const proseWords = words.filter(({ normalized }) => TOOL_PROSE_WORDS.has(normalized));
+  if (!proseWords.every(({ normalized }) => TOOL_PROSE_CONNECTORS.has(normalized))) return '';
+  const connector = words.findIndex(({ normalized }) => TOOL_PROSE_CONNECTORS.has(normalized));
+  if (connector <= 0) return '';
+  const name = words.slice(0, connector).map(({ word }) => word).join(' ');
+  return looksToolShaped(name) ? name : '';
+}
+
+/**
  * Extract explicitly asserted employer, title, and tool claims from text.
  *
  * `sourceNormalized` (from `normalizeFact(stripMarkup(sourceText))`, as
@@ -477,6 +529,16 @@ export function factClaims(text, sourceNormalized = null) {
     // in "Head of AI") must still be allowed.
     ['title', /\b(?:[Ss]erved [Aa]s|[Ww]orked [Aa]s|[Tt]itle\s*:\s*|[Rr]ole\s*:\s*)\s*(?:an?\s+|the\s+)?([A-Z][\w/-]+(?:\s+(?:of|for|and|the)\s+[A-Z][\w/-]*|\s+[A-Z][\w/-]*){0,4})|\b(?:[Ww]orked [Aa]t|[Jj]oined)\s+[A-Z][\w&.'-]*(?:\s+[A-Z][\w&.'-]*){0,4}\s+[Aa]s\s+(?:an?\s+|the\s+)?([A-Z][\w/-]+(?:\s+(?:of|for|and|the)\s+[A-Z][\w/-]*|\s+[A-Z][\w/-]*){0,4})/g],
     ['tool', /\b(?:using|built with|worked with|technologies?\s*:\s*|tech stack\s*:\s*)([^.;\n]+?)(?=\s+\bfor\b|[.;\n]|$)/gi],
+    // The same capture, except that a dot ends it only where no letter or
+    // digit follows. The pattern above stops inside "Node.js", "ASP.NET" and
+    // ".NET", so nothing after the dot was read: "using Node.js and Kafka"
+    // never checked Kafka. A sentence missing the space after its period
+    // ("Tableau.Grew pipeline") reads as one name here and blocks, which is
+    // the fail-closed side of that ambiguity. It stays as it is beside this one rather than being
+    // replaced, because reading through the dot can lengthen a fragment past
+    // the three words `isLikelyTool` accepts ("Node.js on AWS Lambda"), and
+    // then the name the shorter capture did check would go unchecked.
+    ['tool', /\b(?:using|built with|worked with|technologies?\s*:\s*|tech stack\s*:\s*)((?:[^.;\n]|\.(?=[\p{L}\p{N}]))+?)(?=\s+\bfor\b|\.(?![\p{L}\p{N}])|[;\n]|$)/giu],
   ];
   for (const [kind, pattern] of patterns) {
     for (const match of clean.matchAll(pattern)) {
@@ -494,13 +556,31 @@ export function factClaims(text, sourceNormalized = null) {
           ? []
           : rawText.split(/,|\band\b|\bwith\b|\bin\b/i).filter(raw => !DETERMINER_LEAD_RE.test(raw.trim())))
         : [match[1] || match[2]];
+      const connectorRule = kind === 'tool' && !WORKED_WITH_RE.test(match[0]);
       for (const raw of rawValues) {
-        const value = normalizeFact(raw);
-        if (value && (kind !== 'tool' || isLikelyTool(raw, sourceNormalized))) claims.push({ kind, value });
+        // A later item can open with its own "using": "using React, using
+        // Kubernetes". Read it after that trigger, the way the first item is
+        // read, instead of dropping the item as prose for holding "using". A
+        // determiner after it marks prose as it does after the first trigger,
+        // so that item is read whole, as it always was.
+        const afterTrigger = kind === 'tool' ? raw.replace(INNER_TOOL_TRIGGER_RE, '') : raw;
+        const innerTrigger = afterTrigger !== raw && !DETERMINER_LEAD_RE.test(afterTrigger.trim());
+        const fragment = innerTrigger ? afterTrigger : raw;
+        const value = normalizeFact(fragment);
+        if (!value) continue;
+        if (kind !== 'tool' || isLikelyTool(fragment, sourceNormalized)) claims.push({ kind, value });
+        else if (connectorRule || innerTrigger) {
+          const name = toolNameBeforeConnector(fragment);
+          if (name) claims.push({ kind, value: normalizeFact(name) });
+        }
       }
     }
   }
-  return claims;
+  // Report each claim once. Both tool patterns read most names, so without
+  // this every tool would be listed twice. Repeated employer and title claims
+  // collapse too, as they already did in verifyFacts.
+  const seen = new Set();
+  return claims.filter(({ kind, value }) => !seen.has(`${kind}\n${value}`) && seen.add(`${kind}\n${value}`));
 }
 
 /** Split generated/source documents into bounded statements for attribution checks. */
