@@ -131,9 +131,10 @@ const DRIFT_LIST_CAP = 5;
 /**
  * One-line account of a drifted tree for the tamper warning. Paths of each kind
  * (modified, removed, added) are grouped: a file at the plugin root is named,
- * every other path counts toward its top-level directory. A worktree or a log
- * directory therefore reads as one item whichever kind its files fall under,
- * and an edit to a root file always has an item of its own. The hash itself is
+ * every other path counts toward its top-level directory, and a directory with
+ * a single changed file names that file. A worktree or a log directory
+ * therefore reads as one item whichever kind its files fall under, and an edit
+ * to a root file always has an item of its own. The hash itself is
  * untouched: this only describes it.
  *
  * @param {{ modified: string[], added: string[], removed: string[] }} drift
@@ -148,13 +149,14 @@ export function describeDrift({ modified, added, removed }) {
       if (slash === -1) roots.push(f);
       else {
         const dir = f.slice(0, slash + 1);
-        dirs.set(dir, (dirs.get(dir) || 0) + 1);
+        dirs.set(dir, [...(dirs.get(dir) || []), f]);
       }
     }
     const byName = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
     const items = [
       ...roots.sort(byName),
-      ...[...dirs].sort(([a, na], [b, nb]) => nb - na || byName(a, b)).map(([d, n]) => `${d} (${n})`),
+      ...[...dirs].sort(([a, fa], [b, fb]) => fb.length - fa.length || byName(a, b))
+        .map(([d, files]) => (files.length === 1 ? files[0] : `${d} (${files.length})`)),
     ];
     return items.slice(0, DRIFT_LIST_CAP).join(', ') +
       (items.length > DRIFT_LIST_CAP ? ` and ${items.length - DRIFT_LIST_CAP} more groups` : '');

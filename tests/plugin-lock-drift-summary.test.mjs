@@ -102,7 +102,7 @@ test('describeDrift counts each kind and groups added paths by top-level directo
     ],
   });
   assert.match(text, /1 modified: index\.mjs/);
-  assert.match(text, /7 added: worktrees\/ \(6\), logs\/ \(1\)/);
+  assert.match(text, /7 added: worktrees\/ \(6\), logs\/run\.log/);
   assert.doesNotMatch(text, /removed/, 'a kind with no paths is left out');
   assert.doesNotMatch(text, /f0\.mjs/, 'added files are summarized, not listed one by one');
 });
@@ -114,7 +114,7 @@ test('describeDrift lists modified paths before added ones, whatever they sort t
     added: Array.from({ length: 31 }, (_, i) => `.remember/logs/save-${i}.log`),
   });
   assert.ok(text.indexOf('index.mjs') < text.indexOf('.remember/'), 'the real edit leads the message');
-  assert.match(text, /removed: lib\/ \(1\)/);
+  assert.match(text, /removed: lib\/gone\.mjs/);
   assert.ok(text.indexOf('removed:') < text.indexOf('.remember/'), 'removed paths also lead the added ones');
   assert.match(text, /31 added: \.remember\/ \(31\)/);
 });
@@ -144,6 +144,15 @@ test('a real edit is not buried when pinned clutter changes too', () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('a directory with one changed file names the file instead of counting it', () => {
+  const text = lock.describeDrift({
+    modified: ['lib/util.mjs', 'docs/a.md', 'docs/b.md'],
+    removed: [],
+    added: [],
+  });
+  assert.equal(text, '3 modified: docs/ (2), lib/util.mjs');
+});
+
 test('removed paths are grouped the same way, so a deleted worktree is one line', () => {
   const files = Array.from({ length: 12 }, (_, i) => `worktrees/w1/f${i}.mjs`);
   const { root, dir, man } = pinnedPlugin(files);
@@ -165,7 +174,7 @@ test('lockGate still blocks a drifted local plugin, and the warning explains the
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /possible tampering/);
     assert.match(warnings[0], /1 modified: index\.mjs/);
-    assert.match(warnings[0], /7 added: worktrees\/ \(6\), logs\/ \(1\)/);
+    assert.match(warnings[0], /7 added: worktrees\/ \(6\), logs\/run\.log/);
     assert.match(warnings[0], /node plugins\.mjs trust lp/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -179,7 +188,7 @@ test('the hash stays total: a directory with a .git file is not skipped', () => 
     put(dir, 'nested/code.mjs', 'export default 1;\n');
     const { result, warnings } = gate(man, root);
     assert.equal(result.load, false, 'a file added beside a .git marker is still drift');
-    assert.match(warnings[0], /nested\/ \(/, 'the nested files are counted, not hidden');
+    assert.match(warnings[0], /1 added: nested\/code\.mjs/, 'the file beside the marker is counted, not hidden');
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
