@@ -78,4 +78,5 @@ test('a populated summary still renders under its heading', () => {
 
 test('a numeric summary renders its value, like any other scalar field', () => {
   assert.match(render(payload(2026)), /<div class="summary-text">2026<\/div>/);
+  assert.match(render(payload(0)), /<div class="summary-text">0<\/div>/);
 });

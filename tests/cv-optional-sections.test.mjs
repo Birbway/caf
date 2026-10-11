@@ -49,7 +49,7 @@
 import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { pass, fail, ROOT } from './helpers.mjs';
-import { stripEmptySections, isEmptyRenderedSection, stripEmptyRenderedSections } from '../cv-sections-core.mjs';
+import { stripEmptySections, isEmptySection, isEmptyRenderedSection, stripEmptyRenderedSections } from '../cv-sections-core.mjs';
 
 console.log('\ncv-sections-core.mjs — optional sections leave no bare header');
 
@@ -245,6 +245,8 @@ for (const { file, format, after, hasCertifications, hasCompetencies, hasInteres
     // A number renders (escapeHtml prints scalars), so it is content.
     check(`${name}: a numeric summary keeps the summary block`,
       stripEmptySections(template, { ...FULL, summary: 2026 }, format).includes(summaryMarker), true);
+    check(`${name}: a summary of 0 keeps the summary block`,
+      stripEmptySections(template, { ...FULL, summary: 0 }, format).includes(summaryMarker), true);
 
     // Summary and competencies both empty: two adjacent sections, and the
     // competencies marker is where the summary's boundary stops. Both must go
@@ -475,6 +477,32 @@ check('html: the same summary with a following marker is stripped up to that mar
     SUMMARY_NO_FOLLOWING_MARKER.replace('<div>{{EXPERIENCE}}', '<!-- WORK EXPERIENCE -->\n<div>{{EXPERIENCE}}'),
     { ...FULL, summary: '' }, 'html'),
   '<html><body>\n<!-- WORK EXPERIENCE -->\n<div>{{EXPERIENCE}}</div>\n</body></html>');
+
+// The `<!-- END -->` sentinel is a marker, but it is not a section: a template
+// can mark its summary, leave {{EXPERIENCE}} unmarked, and close with the
+// sentinel. Stopping at END would strip the experience block with the summary,
+// so the summary stops at a following section marker only.
+const SUMMARY_THEN_UNMARKED_EXPERIENCE = [
+  '<html><body>',
+  '<!-- PROFESSIONAL SUMMARY -->',
+  '<div>{{SUMMARY_TEXT}}</div>',
+  '<div>{{EXPERIENCE}}</div>',
+  '<!-- END -->',
+  '</body></html>',
+].join('\n');
+check('html: an empty summary does not run on to <!-- END --> and take an unmarked {{EXPERIENCE}} with it',
+  stripEmptySections(SUMMARY_THEN_UNMARKED_EXPERIENCE, { ...FULL, summary: '' }, 'html'), SUMMARY_THEN_UNMARKED_EXPERIENCE);
+check('html: the same template with a section marker before <!-- END --> still strips the summary',
+  stripEmptySections(
+    SUMMARY_THEN_UNMARKED_EXPERIENCE.replace('<div>{{EXPERIENCE}}', '<!-- WORK EXPERIENCE -->\n<div>{{EXPERIENCE}}'),
+    { ...FULL, summary: '' }, 'html'),
+  '<html><body>\n<!-- WORK EXPERIENCE -->\n<div>{{EXPERIENCE}}</div>\n<!-- END -->\n</body></html>');
+
+// --- A summary of 0 is a value, not an absent one -----------------------------
+// escapeHtml prints 0, so `0` must not read as empty (a truthiness check would).
+check('isEmptySection: a numeric 0 summary is content', isEmptySection({ summary: 0 }, 'summary'), false);
+check('isEmptySection: null, undefined, an object and blank text are empty',
+  [null, undefined, {}, '', '  \n'].every((summary) => isEmptySection({ summary }, 'summary')), true);
 
 // --- Skills is not always the last section ---------------------------------
 // A custom template may put Skills above Education. The Skills boundary must
