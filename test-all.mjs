@@ -227,7 +227,7 @@ async function runDiscovered(filter = null) {
     // counters. Importing them is what loses the result, so this cannot be
     // fixed in finish(); it has to happen where the suite is invoked.
     if (/from ['"]node:test['"]/.test(src)) {
-      const out = run(NODE, ['--test', f]);
+      const out = run(NODE, ['--test', f], { timeout: 60000 });
       if (out === null) {
         const detail = lastRunFailure();
         fail(`${rel} — node:test suite failed (exit ${detail?.status ?? '?'})`);
