@@ -251,6 +251,14 @@ async function resolveDnsCached(hostname) {
   }
 }
 
+// What a DNS filter answers for a name it blocks: 0.0.0.0 and ::. That is
+// Pi-hole's default, and what AdGuard DNS and Control D answered for the
+// trackers they blocked on 2026-10-11; hosts-file blocklists map names to
+// 0.0.0.0 too. No site is published at either address, so an answer whose only
+// private addresses are these is the user's own filter at work, not a host
+// resolving into private space. The request is blocked all the same.
+const SINKHOLE_ADDRESSES = new Set(['0.0.0.0', '::']);
+
 // Second layer of the egress guard: `rejectPrivateOrInvalid` only sees the
 // literal host, so a public hostname that *resolves* to private space still
 // gets through it. Resolve and re-check every address before the request is
@@ -261,15 +269,20 @@ export async function validateUrlSecurity(urlString) {
   const hostname = url.hostname;
   const host = normalizeHost(hostname);
   const addresses = await resolveDnsCached(host);
+  // Every private address, not only the first: whether a DNS filter gave the
+  // answer depends on all of them.
+  const blocked = [];
   for (const ip of addresses) {
     const norm = normalizeHost(ip);
     const mapped = extractMappedIPv4(norm);
     const candidates = mapped ? [norm, mapped] : [norm];
-    for (const candidate of candidates) {
-      if (PRIVATE_HOST_PATTERNS.some((pattern) => pattern.test(candidate))) {
-        throw new Error(`Access denied: Egress guard blocked private target IP ${ip}`);
-      }
-    }
+    const hit = candidates.find((candidate) => PRIVATE_HOST_PATTERNS.some((pattern) => pattern.test(candidate)));
+    if (hit) blocked.push({ ip, hit });
+  }
+  if (blocked.length > 0) {
+    const denied = new Error(`Access denied: Egress guard blocked private target IP ${blocked[0].ip}`);
+    if (blocked.every(({ hit }) => SINKHOLE_ADDRESSES.has(hit))) denied.livenessCode = 'dns_sinkhole';
+    throw denied;
   }
 }
 
@@ -300,9 +313,16 @@ export async function installLivenessRouteGuard(page) {
         // opened by hand to confirm: 11,178 characters of live posting and a
         // working apply control, called uncertain because of a dead tracker.
         //
+        // A tracker the user's own DNS filter blocks says nothing about the
+        // posting either. validateUrlSecurity tags that answer `dns_sinkhole`.
+        // Measured 2026-10-11 over 35 postings on 19 boards, with Control D
+        // as the resolver: 20 read blocked_host because of Google Analytics,
+        // DoubleClick, Cloudflare Insights, LinkedIn's scripts and the like, and
+        // 11 of the 20 had a visible apply control. AdGuard DNS: 12 blocked_host.
+        //
         // The request is still aborted either way, so the egress guard loses
         // nothing. Only the VERDICT stops being poisoned, and only for a
-        // subresource: if the main document itself cannot resolve, that is a
+        // subresource: if the main document itself has no usable address, that is a
         // real finding about the posting and still counts.
         // Whether this was the main document or a subresource can only be asked
         // of a real Playwright request. Callers may pass a lighter route double
@@ -318,7 +338,8 @@ export async function installLivenessRouteGuard(page) {
         const isMainDocument = canTell
           ? request.isNavigationRequest() && request.frame() === page.mainFrame()
           : true;
-        if (err?.livenessCode !== 'dns_no_addresses' || isMainDocument) {
+        const noUsableAddress = err?.livenessCode === 'dns_no_addresses' || err?.livenessCode === 'dns_sinkhole';
+        if (!noUsableAddress || isMainDocument) {
           page._blockedByGuard = { code: 'blocked_host', reason: err.message };
         }
         return route.abort('blockedbyclient');
