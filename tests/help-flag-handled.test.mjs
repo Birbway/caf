@@ -201,7 +201,6 @@ const KNOWN_WITHOUT_HELP = new Set([
   // comparison if a file by that name existed.
   'batch/aggregate-tokens.mjs',
   'keyword-match.mjs',
-  'migrate-scan-runs.mjs',
   'plugins/h1b-sponsor/install-h1b-index.mjs',
   'plugins/h1b-sponsor/token.mjs',
   'scripts/export-ats-text.mjs',
