@@ -182,7 +182,12 @@ export async function POST(req: NextRequest) {
   const tsvDir = path.join(root, "batch", "tracker-additions");
   fs.mkdirSync(tsvDir, { recursive: true });
   const slug = company.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 30);
-  const tsvFile = path.join(tsvDir, `${num.padStart(3, "0")}-${slug}.tsv`);
+  const tsvName = `${num.padStart(3, "0")}-${slug}.tsv`;
+  const tsvFile = path.join(tsvDir, tsvName);
+  // Guard: ensure the resolved path stays inside the target directory
+  if (!tsvFile.startsWith(tsvDir + path.sep)) {
+    return NextResponse.json({ error: "invalid company name" }, { status: 400 });
+  }
   const header = "num\tdate\tcompany\trole\tstatus\tscore\tpdf\treport\tnotes\turl";
   const row = [
     num,
