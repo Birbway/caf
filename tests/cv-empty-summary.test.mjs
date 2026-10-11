@@ -1,9 +1,8 @@
-// tests/cv-empty-summary.test.mjs — build-cv-html.mjs drops the Professional
+// tests/cv-empty-summary.test.mjs: build-cv-html.mjs drops the Professional
 // Summary block, heading and container, when the payload's summary renders no
-// text (#5019). Driven through the CLI rather than cv-sections-core.mjs alone,
-// because the builder's slot check sits between the two: a summary the strip
-// removes but SUMMARY_TEXT still carries would fail the build as "populated
-// payload content" with no slot.
+// text (#5019). tests/cv-optional-sections.test.mjs covers the strip itself;
+// this drives the CLI from payload to written file, and checks an empty
+// summary against every shipped HTML template.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';

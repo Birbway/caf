@@ -42,9 +42,10 @@
 //
 // The professional summary (#5019) is the one optional section held as text
 // rather than as a list of entries, so blank and whitespace-only text count as
-// empty. It is the first section in every shipped HTML template, so a boundary
-// that ran to end-of-input would take the whole CV with it. Like Skills it
-// stops only at a following marker, and a template with none is left alone.
+// empty. It is the first section in every shipped HTML template, so in a
+// template with no marker after it, a boundary that ran to end-of-input would
+// take the whole CV with it. Like Skills it stops only at a following marker,
+// and a template with none is left alone.
 import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { pass, fail, ROOT } from './helpers.mjs';
@@ -245,8 +246,9 @@ for (const { file, format, after, hasCertifications, hasCompetencies, hasInteres
     check(`${name}: a numeric summary keeps the summary block`,
       stripEmptySections(template, { ...FULL, summary: 2026 }, format).includes(summaryMarker), true);
 
-    // Summary and competencies both empty: stripping either one removes the
-    // marker the other's boundary could have stopped at.
+    // Summary and competencies both empty: two adjacent sections, and the
+    // competencies marker is where the summary's boundary stops. Both must go
+    // and Work Experience must survive.
     const noOpening = stripEmptySections(template, { ...FULL, summary: '', competencies: [] }, format);
     check(`${name}: empty summary+competencies drops the summary`, noOpening.includes(summaryMarker), false);
     check(`${name}: empty summary+competencies drops competencies`, noOpening.includes(competenciesMarker), false);

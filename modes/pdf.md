@@ -93,7 +93,7 @@ Run `npm run jd:similarity -- {bundle-root}/jd/current.md {bundle-root}/jd/previ
 
 - Single-column layout (no sidebars, no parallel columns)
 - Standard headers: "Professional Summary", "Work Experience", "Education", "Skills", "Certifications", "Projects"
-- Optional sections (Core Competencies, Work Experience, Projects, Education, Certifications, Awards & Honors, Skills) are dropped entirely — header included — when their array is empty or absent
+- Optional sections (Professional Summary, Core Competencies, Work Experience, Projects, Education, Certifications, Awards & Honors, Skills) are dropped entirely — header included — when their array is empty or absent, or for Professional Summary when its text is empty or whitespace-only
 - No text in images/SVGs
 - No critical info in PDF headers/footers (ATS ignores them)
 - UTF-8, selectable text (not rasterized)

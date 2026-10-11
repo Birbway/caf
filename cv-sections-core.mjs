@@ -31,6 +31,15 @@
 // to match against `undefined`. Awards, by contrast, is defined for both
 // formats.
 //
+// The professional summary (#5019) is optional too: some house styles leave it
+// out and open on the experience bullets. It is the one section held as text
+// rather than as a list of entries, so isEmptySection() treats blank and
+// whitespace-only text as empty. The LaTeX template has no summary, so it is
+// html-only. It is also the first section in every shipped HTML template, so
+// it uses the marker-only boundary described for Skills below. In a template
+// with no marker after the summary, an end-of-input fallback would take the
+// whole CV with it.
+//
 // ── The Skills sentinel: part of the template contract ───────────────────────
 //
 // Skills is the LAST section in every shipped template, which makes it the one
@@ -96,6 +105,8 @@ const TEX_BOUNDARY = String.raw`(?=%{4,}\s|$)`;
 // a marker, so these stop at the `<!-- END -->` / `%%%% END %%%%` sentinel when
 // Skills is last and at the next section's marker when it is not. See "The
 // Skills sentinel" above before changing these, and never add an `|$` branch.
+// The HTML summary uses the HTML one for the same reason: it sits first, so a
+// template with no marker after it must keep its bare header.
 //
 // The LaTeX one anchors the banner to the start of a line (hence the `m` flag on
 // the pattern that uses it). Without `^`, dropping the `|$` branch lets the
@@ -110,6 +121,7 @@ const TEX_END_SENTINEL = String.raw`(?=^%{4,}\s)`;
 
 const PATTERNS = {
   html: {
+    summary: new RegExp(String.raw`<!--\s+PROFESSIONAL SUMMARY\s+-->[\s\S]*?` + HTML_END_SENTINEL),
     competencies: new RegExp(String.raw`<!--\s+CORE COMPETENCIES\s+-->[\s\S]*?` + HTML_BOUNDARY),
     experience: new RegExp(String.raw`<!--\s+WORK EXPERIENCE\s+-->[\s\S]*?` + HTML_BOUNDARY),
     projects: new RegExp(String.raw`<!--\s+PROJECTS\s+-->[\s\S]*?` + HTML_BOUNDARY),
@@ -130,11 +142,21 @@ const PATTERNS = {
   },
 };
 
-export const OPTIONAL_SECTIONS = ['competencies', 'experience', 'projects', 'education', 'certifications', 'awards', 'interests', 'skills'];
+export const OPTIONAL_SECTIONS = ['summary', 'competencies', 'experience', 'projects', 'education', 'certifications', 'awards', 'interests', 'skills'];
 
+// Sections whose payload value is text rather than a list of entries.
+const TEXT_SECTIONS = new Set(['summary']);
+
+// A list is empty when it has no entries. stripEmptyRenderedSections() hands
+// every section in as a list, text sections included, so that check runs first.
+// Text is empty when it would render nothing: absent, blank, whitespace-only,
+// or a falsy or structural value the HTML builder prints as ''. A number still
+// renders, so it counts as content.
 export function isEmptySection(payload, section) {
-  const entries = payload?.[section];
-  return !Array.isArray(entries) || entries.length === 0;
+  const value = payload?.[section];
+  if (Array.isArray(value)) return value.length === 0;
+  if (TEXT_SECTIONS.has(section)) return !value || typeof value === 'object' || String(value).trim() === '';
+  return true;
 }
 
 // Remove every optional section that has no entries in `payload`. Returns the
