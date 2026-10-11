@@ -141,6 +141,28 @@ test("API: Unexpected file types and safe response headers", async () => {
   }
 });
 
+test("API: RFC 8187 filename* encoding percent-encodes reserved characters including parentheses", async () => {
+  const { root, outputDir, manifestPath, cleanup } = setupTestEnv();
+  try {
+    const filename = "résumé (Jane).pdf";
+    fs.writeFileSync(path.join(outputDir, filename), "pdf content");
+    const id = Buffer.from(filename).toString("base64url");
+    const req = new Request(`http://localhost:3000/api/documents?id=${id}`);
+
+    const res = await handleDocumentsRequest(req, root, manifestPath, mockIsRegularContainedFile);
+    assert.equal(res.status, 200);
+
+    const disposition = res.headers.get("content-disposition");
+    assert.ok(disposition);
+    // ASCII fallback replaces non-ASCII characters with '?'
+    assert.ok(disposition.includes('filename="r?sum? (Jane).pdf"'));
+    // RFC 8187 filename* must percent-encode '(', ')', and '*' in addition to encodeURIComponent
+    assert.ok(disposition.includes("filename*=UTF-8''r%C3%A9sum%C3%A9%20%28Jane%29.pdf"));
+  } finally {
+    cleanup();
+  }
+});
+
 test("API: Sibling directory containment regression (output-evil)", async () => {
   const { root, outputDir, manifestPath, cleanup } = setupTestEnv();
   const evilDir = path.join(root, "output-evil");

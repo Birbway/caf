@@ -45,8 +45,9 @@ export function discoverDocuments(opts: DiscoverOptions): DiscoveredDocument[] {
         const rawKind = (cols[5] ?? "").trim().toLowerCase();
 
         let kind: DocumentKind = "unknown";
-        if (rawKind === "cv") kind = "cv";
-        else if (rawKind === "cover") kind = "cover";
+        if (rawKind === "cover") kind = "cover";
+        else if (rawKind === "cv" || rawKind === "") kind = "cv";
+        else kind = "unknown";
 
         if (pdfRel) {
           const pdfAbs = path.normalize(path.resolve(workspaceRoot, pdfRel));
@@ -212,7 +213,7 @@ export async function handleDocumentsRequest(
 
       const buf = fs.readFileSync(fd);
       const asciiFilename = doc.filename.replace(/[^\x20-\x7E]/g, "?").replace(/(["\\])/g, "\\$1");
-      const encodedFilename = encodeURIComponent(doc.filename);
+      const encodedFilename = encodeURIComponent(doc.filename).replace(/[()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
       return new Response(new Uint8Array(buf), {
         status: 200,
         headers: {

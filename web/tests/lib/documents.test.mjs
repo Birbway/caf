@@ -352,7 +352,41 @@ test("Malformed or partially populated manifest rows", () => {
     assert.equal(results.length, 1);
     assert.equal(results[0].filename, "cv-malformed.pdf");
     assert.equal(results[0].reportId, null);
-    assert.equal(results[0].kind, "cv"); // fallback classification because kind is blank
+    assert.equal(results[0].kind, "cv"); // defaults to cv when kind is blank
+  } finally {
+    cleanup();
+  }
+});
+
+test("Manifest row with no kind defaults to cv matching cv-selection behavior", () => {
+  const { root, outputDir, manifestPath, isRegularContainedFile, cleanup } = setupTestEnv();
+  try {
+    // Filename does NOT start with cv- or contain cover, so fallback filename heuristics would yield unknown
+    fs.writeFileSync(path.join(outputDir, "Jane-Doe-Resume.pdf"), "fake pdf");
+    const manifestContent = [
+      "# report\tpdf\thtml\tformat\tdate\tkind",
+      "42\toutput/Jane-Doe-Resume.pdf\t\tletter\t2026-08-01\t", // empty kind column
+      "43\toutput/legacy-without-kind-col.pdf\t\tletter\t2026-08-01", // row written before kind column existed (#3959)
+    ].join("\n");
+    fs.writeFileSync(path.join(outputDir, "legacy-without-kind-col.pdf"), "fake pdf");
+    fs.writeFileSync(manifestPath, manifestContent);
+
+    const results = discoverDocuments({
+      outputDir,
+      manifestPath,
+      workspaceRoot: root,
+      isRegularContainedFile
+    });
+
+    const doc42 = results.find(d => d.filename === "Jane-Doe-Resume.pdf");
+    assert.ok(doc42);
+    assert.equal(doc42.kind, "cv");
+    assert.equal(doc42.reportId, "42");
+
+    const doc43 = results.find(d => d.filename === "legacy-without-kind-col.pdf");
+    assert.ok(doc43);
+    assert.equal(doc43.kind, "cv");
+    assert.equal(doc43.reportId, "43");
   } finally {
     cleanup();
   }
