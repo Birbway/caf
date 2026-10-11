@@ -1,6 +1,15 @@
+import { buildConversationContext } from "@/lib/assistant-history.mjs";
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
-import { resolveCli } from "@/lib/clis";
+import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from "@/lib/clis";
 import { careerOpsRoot, readMemory, doctorState } from "@/lib/career-ops";
+import { CAPS } from "@/lib/worker-capabilities.mjs";
+import { scopeFrom } from "@/lib/claude-invocation.mjs";
+import { fencingReport } from "@/lib/cli-fencing.mjs";
+
+// Deny list DERIVED, never hand-written: every one of the six advisor argvs
+// that spelled its own omitted MultiEdit, which --permission-mode acceptEdits
+// then auto-approves (#2185, #2507).
+const ADVISOR_SCOPE = scopeFrom("Read,WebFetch,Glob,Grep");
 
 export const runtime = "nodejs"; // child_process (spawn) requires the Node runtime
 export const dynamic = "force-dynamic";
@@ -18,12 +27,12 @@ The args are a single JSON object. The dashboard parses the envelope and perform
 
 ACTIONS:
 - navigate {"path":"/pipeline?tab=OFFER&min=4"} — take the user to a section. Valid paths: /, /pipeline, /portals, /analytics, /cv, /config, /apply, /pipeline/{n} (a report), /jobs/{id} (a worker). The path may carry a query string.
-- filterPipeline {"tab":"OFFER","min":4,"q":"text","sort":"score","dir":-1} — filter the pipeline table in place. tab ∈ INBOX, ALL, EVALUATED, APPLIED, RESPONDED, INTERVIEW, OFFER, HIRED, REJECTED, DISCARDED, SKIP; min = score floor 0–5.
+- filterPipeline {"tab":"OFFER","min":4,"q":"text","sort":"score","dir":-1} — filter the pipeline table in place. tab ∈ INBOX, ALL, EVALUATED, APPLIED, RESPONDED, ASSESSMENT, INTERVIEW, OFFER, HIRED, REJECTED, DISCARDED, SKIP; min = score floor 0–5.
 - evaluate {"url":"https://…","title":"Evaluate · Acme","subtitle":"Role"} — spin ONE read-only evaluation worker on a SPECIFIC posting URL. Only when you actually have a real URL (e.g. from the page the user is on).
 - evaluateCompany {"company":"Anthropic"} — evaluate ALL of the user's PENDING inbox postings for that company. Emit the COMPANY NAME ONLY — never URLs; the app resolves the concrete postings itself. Big batches ask the user to confirm first.
 - research {"target":"https://… or 'my portfolio'","title":"Research · X"} — spin a read-only research worker.
 - generatePdf {"n":"42"} — generate an ATS-optimized CV tailored to application #42 (runs the real pdf mode → output/ + marks the tracker PDF column). Spends tokens.
-- setStatus {"n":"42","status":"Applied"} — move a tracked application to a new state (asks the user to confirm first). Canonical states: Evaluated, Applied, Responded, Interview, Offer, Hired, Rejected, Discarded, SKIP. Use the application number (the "#42" on its report page).
+- setStatus {"n":"42","status":"Applied"} — move a tracked application to a new state (asks the user to confirm first). Canonical states: Evaluated, Applied, Responded, Assessment, Interview, Offer, Hired, Rejected, Discarded, SKIP. Use the application number (the "#42" on its report page).
 - apply {"url":"https://…"} — open the apply form-proxy for a posting URL (we re-render the real form in plain language; the user verifies and submits it themselves — never auto-submit).
 - setApplyField {"field":"Why this role?","value":"<the answer>"} — write or revise an answer in the apply form the user is filling (only when an APPLY FORM is shown in your context). Use the field's label or id. When the user asks to make an answer shorter/sharper/etc, generate the new text and emit this.
 - remember {"fact":"the concise fact"} — durably remember a preference/fact about the user (carries across sessions and across whichever CLI runs).
@@ -51,22 +60,26 @@ export async function POST(req: Request) {
   } catch {
     return new Response(JSON.stringify({ error: "bad json" }), { status: 400 });
   }
-  const { message, cliId, pageContext } = body;
-  if (!message || !cliId) {
+  const { message, cliId: requestedCliId, pageContext } = body;
+  if (!message || !requestedCliId) {
     return new Response(JSON.stringify({ error: "message and cliId required" }), { status: 400 });
   }
 
-  const resolved = resolveCli(cliId);
+  const resolved = resolveCliOrFallback(requestedCliId);
   if (!resolved) {
-    return new Response(JSON.stringify({ error: `CLI '${cliId}' not found on this machine` }), {
+    return new Response(JSON.stringify(cliUnavailableError(requestedCliId)), {
       status: 404,
       headers: { "Content-Type": "application/json" },
     });
   }
   const { spec, binPath } = resolved;
+  // The CLI actually running: fencing and argv below are keyed on it.
+  const cliId = spec.id;
+  const substitution = cliSubstitutionNotice(resolved);
 
-  const history = (body.history ?? []).slice(-8);
-  const convo = history.map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`).join("\n");
+  let convo: string;
+  try { convo = buildConversationContext(body.history ?? []); }
+  catch { return Response.json({ error: "Invalid conversation history" }, { status: 400 }); }
   const pageLine = pageContext
     ? `\n\nCURRENT PAGE (the user is looking at this right now): ${pageContext}\nWhen the user's message is ambiguous ("this", "it", "apply", "evaluate this", "draft it"), assume it refers to what's on the current page.`
     : "";
@@ -102,14 +115,35 @@ export async function POST(req: Request) {
         "--include-partial-messages",
         "--permission-mode",
         "acceptEdits",
+        // --strict-mcp-config with no --mcp-config loads ZERO MCP servers, so the
+        // tool lists here describe everything this agent can reach. Required for a
+        // non-writing worker: without it a user MCP server could supply a write tool
+        // the capability record forbids, and cli-fencing refuses to certify that (#2507).
+        "--strict-mcp-config",
         "--allowedTools",
-        "Read,WebFetch,Glob,Grep",
+        ADVISOR_SCOPE.allowed,
         "--disallowedTools",
-        "Bash,Write,Edit,NotebookEdit,Task",
+        ADVISOR_SCOPE.disallowed,
       ]
     : spec.args(prompt);
 
-  const child = spawnHeadlessCli(binPath, args, { cwd: careerOpsRoot(), env: process.env });
+  // The advisor reads and fetches but must never write — the same intent the
+  // Claude branch spells as Read,WebFetch,Glob,Grep with Bash/Write/Edit denied.
+  // networkReadOnly, not localReadOnly, because WebFetch is in that allow list.
+  let child;
+  try {
+    child = spawnHeadlessCli(
+      binPath,
+      args,
+      { cwd: careerOpsRoot(), env: process.env },
+      { cliId, capabilities: CAPS.networkReadOnly },
+    );
+  } catch (e) {
+    // Fencing refuses an argv that contradicts the capability record. Report it
+    // in this route's own error shape rather than letting the throw escape POST
+    // as an unhandled rejection and an unstructured 500.
+    return Response.json({ error: e instanceof Error ? e.message : "failed to start the CLI" }, { status: 500 });
+  }
 
   const encoder = new TextEncoder();
   // `closed` + kill timer in the OUTER scope so cancel() can flip `closed` before
@@ -152,6 +186,15 @@ export async function POST(req: Request) {
       const emit = (s: string) => {
         if (safeEnqueue(s)) emitted = true;
       };
+      // Same honesty as /api/run: a runtime with no verified fencing mechanism
+      // runs with its default access, and that must be visible rather than
+      // inferred from which CLI happens to be selected (#2507). This stream is
+      // plain text, so the notice is a leading line rather than an event.
+      const fencing = fencingReport({ cliId, cliName: spec.name, capabilities: CAPS.networkReadOnly });
+      if (fencing.notice) safeEnqueue(`⚠️ ${fencing.notice}
+
+`);
+      if (substitution) safeEnqueue(`⚠️ ${substitution}\n\n`);
 
       child.stdout.on("data", (d: Buffer) => {
         if (closed) return;
