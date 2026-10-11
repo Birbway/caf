@@ -204,7 +204,6 @@ const KNOWN_WITHOUT_HELP = new Set([
   'migrate-scan-runs.mjs',
   'plugins/h1b-sponsor/install-h1b-index.mjs',
   'plugins/h1b-sponsor/token.mjs',
-  'scripts/export-ats-text.mjs',
 
   // Not user-facing CLIs, so `--help` is not a question anyone asks them. They
   // carry the isMainModule guard because something else invokes them — a
