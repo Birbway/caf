@@ -129,33 +129,40 @@ export function diffPlugin(manifest, lockEntry) {
 const DRIFT_LIST_CAP = 5;
 
 /**
- * One-line account of a drifted tree for the tamper warning. Modified and
- * removed paths lead and are listed, since those are edits to files the owner
- * trusted. Added paths are grouped by top-level directory with a count, so a
- * worktree or a log directory reads as one line rather than crowding the
- * message. The hash itself is untouched: this only describes it.
+ * One-line account of a drifted tree for the tamper warning. Paths of each kind
+ * (modified, removed, added) are grouped: a file at the plugin root is named,
+ * every other path counts toward its top-level directory. A worktree or a log
+ * directory therefore reads as one item whichever kind its files fall under,
+ * and an edit to a root file always has an item of its own. The hash itself is
+ * untouched: this only describes it.
  *
  * @param {{ modified: string[], added: string[], removed: string[] }} drift
  * @returns {string}
  */
 export function describeDrift({ modified, added, removed }) {
-  const cap = (items, noun) => items.slice(0, DRIFT_LIST_CAP).join(', ') +
-    (items.length > DRIFT_LIST_CAP ? ` and ${items.length - DRIFT_LIST_CAP} more${noun}` : '');
-  const parts = [];
-  if (modified.length) parts.push(`${modified.length} modified: ${cap(modified, '')}`);
-  if (removed.length) parts.push(`${removed.length} removed: ${cap(removed, '')}`);
-  if (added.length) {
-    const counts = new Map();
-    for (const f of added) {
+  const group = (paths) => {
+    const roots = [];
+    const dirs = new Map();
+    for (const f of paths) {
       const slash = f.indexOf('/');
-      const group = slash === -1 ? f : f.slice(0, slash + 1);
-      counts.set(group, (counts.get(group) || 0) + 1);
+      if (slash === -1) roots.push(f);
+      else {
+        const dir = f.slice(0, slash + 1);
+        dirs.set(dir, (dirs.get(dir) || 0) + 1);
+      }
     }
-    const isDir = g => g.endsWith('/');
-    const groups = [...counts].sort(([a, na], [b, nb]) =>
-      nb - na || Number(isDir(a)) - Number(isDir(b)) || (a < b ? -1 : a > b ? 1 : 0));
-    parts.push(`${added.length} added: ${cap(groups.map(([g, n]) => isDir(g) ? `${g} (${n})` : g), ' groups')}`);
-  }
+    const byName = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+    const items = [
+      ...roots.sort(byName),
+      ...[...dirs].sort(([a, na], [b, nb]) => nb - na || byName(a, b)).map(([d, n]) => `${d} (${n})`),
+    ];
+    return items.slice(0, DRIFT_LIST_CAP).join(', ') +
+      (items.length > DRIFT_LIST_CAP ? ` and ${items.length - DRIFT_LIST_CAP} more groups` : '');
+  };
+  const parts = [];
+  if (modified.length) parts.push(`${modified.length} modified: ${group(modified)}`);
+  if (removed.length) parts.push(`${removed.length} removed: ${group(removed)}`);
+  if (added.length) parts.push(`${added.length} added: ${group(added)}`);
   return parts.join('; ');
 }
 

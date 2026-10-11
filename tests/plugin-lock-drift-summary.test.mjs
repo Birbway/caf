@@ -8,10 +8,11 @@
 // so a worktree edit or a new log line is real drift as far as the lock can
 // tell. lockGate then skips the plugin with a tamper warning.
 //
-// The warning used to print the first five changed paths in sorted order, with
-// no total and no split between modified, added and removed files. A real edit
-// to index.mjs sat among whatever sorted ahead of it. The hash stays total; the
-// message now explains the drift instead.
+// The warning used to print the first five changed paths in directory-walk
+// order, with removed paths last, and gave no total and no split between
+// modified, added and removed files. A real edit to index.mjs sat among
+// whatever the walk reached ahead of it, and a removed file was the first to be
+// cut. The hash itself is unchanged; the message now explains the drift.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -34,11 +35,12 @@ const put = (dir, rel, text = 'x\n') => {
 };
 
 /** A pinned local plugin: <root>/plugins.local/lp with index.mjs and a lock entry. */
-function pinnedPlugin() {
+function pinnedPlugin(extraPinned = []) {
   const root = mkdtempSync(join(tmpdir(), 'co-drift-'));
   const dir = join(root, 'plugins.local', 'lp');
   put(dir, 'index.mjs', 'export default {};\n');
   put(dir, 'lib/util.mjs', 'export const a = 1;\n');
+  for (const rel of extraPinned) put(dir, rel, 'first\n');
   const man = manifestFor(dir);
   const tree = lock.hashPluginTree(dir);
   const entry = {
@@ -112,7 +114,8 @@ test('describeDrift lists modified paths before added ones, whatever they sort t
     added: Array.from({ length: 31 }, (_, i) => `.remember/logs/save-${i}.log`),
   });
   assert.ok(text.indexOf('index.mjs') < text.indexOf('.remember/'), 'the real edit leads the message');
-  assert.ok(text.indexOf('lib/gone.mjs') < text.indexOf('.remember/'));
+  assert.match(text, /removed: lib\/ \(1\)/);
+  assert.ok(text.indexOf('removed:') < text.indexOf('.remember/'), 'removed paths also lead the added ones');
   assert.match(text, /31 added: \.remember\/ \(31\)/);
 });
 
@@ -122,9 +125,33 @@ test('describeDrift names a root-level added file itself and caps long lists', (
     removed: [],
     added: ['new.mjs', 'a/1', 'b/1', 'c/1', 'd/1', 'e/1', 'f/1'],
   });
-  assert.match(text, /8 modified: m0\.mjs, m1\.mjs, m2\.mjs, m3\.mjs, m4\.mjs and 3 more/);
-  assert.match(text, /7 added: .* and 2 more/);
+  assert.match(text, /8 modified: m0\.mjs, m1\.mjs, m2\.mjs, m3\.mjs, m4\.mjs and 3 more groups/);
+  assert.match(text, /7 added: .* and 2 more groups/);
   assert.match(text, /\bnew\.mjs\b/, 'a file at the plugin root is its own group');
+});
+
+test('a real edit is not buried when pinned clutter changes too', () => {
+  // The clutter was present when the plugin was trusted, so it drifts as
+  // "modified", the kind that used to be listed flat and cut at five.
+  const logs = Array.from({ length: 31 }, (_, i) => `.tool-logs/save-${i}.log`);
+  const { root, dir, man } = pinnedPlugin(logs);
+  try {
+    for (const rel of logs) put(dir, rel, 'appended\n');
+    put(dir, 'index.mjs', 'export default { edited: 1 };\n');
+    const { result, warnings } = gate(man, root);
+    assert.equal(result.load, false);
+    assert.match(warnings[0], /32 modified: index\.mjs, \.tool-logs\/ \(31\)/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('removed paths are grouped the same way, so a deleted worktree is one line', () => {
+  const files = Array.from({ length: 12 }, (_, i) => `worktrees/w1/f${i}.mjs`);
+  const { root, dir, man } = pinnedPlugin(files);
+  try {
+    rmSync(join(dir, 'worktrees'), { recursive: true });
+    const { warnings } = gate(man, root);
+    assert.match(warnings[0], /12 removed: worktrees\/ \(12\)/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('lockGate still blocks a drifted local plugin, and the warning explains the drift', () => {
