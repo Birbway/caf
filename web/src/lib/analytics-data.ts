@@ -83,7 +83,12 @@ function reportArchetype(content: string, fallbackArchetype: string): string {
   return scalar(machine, "archetype_primary") || scalar(machine, "archetype") || archetypeTable || meta.fields.find((field) => field.label === "Archetype")?.value || fallbackArchetype;
 }
 
-/** Pure counterpart to the Go dashboard's report + tracker-note enrichment. */
+/** Read-only Search stats display metadata, not a second lifecycle engine.
+ * Unlike the Go TUI's general-purpose note enrichment, these USD-only charts
+ * require explicit work-mode evidence and must not guess on-site from a city.
+ * Keep those reviewed evidence/unit boundaries here until the core exposes
+ * an equivalent row-metadata contract; statuses and history remain core-owned.
+ */
 export function enrichAnalyticsApplication(app: Application, reportContent = ""): AnalyticsApplication {
   const notes = app.notes ?? "";
   const notePay = highestMoney(notes);

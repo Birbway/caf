@@ -113,9 +113,10 @@ export function computeProgressMetrics(applications = [], achievements) {
   };
 }
 
-export function resolveAnalyticsTab(raw) {
+/** Match main's URL-driven views; unknown/missing values keep Progress useful. */
+export function resolveAnalyticsView(raw) {
   const value = Array.isArray(raw) ? raw[0] : raw;
-  return value === "search-stats" ? "search-stats" : "progress";
+  return value === "search-stats" || value === "insights" ? value : "progress";
 }
 
 function isoWeek(date) {

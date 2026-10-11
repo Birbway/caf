@@ -9,7 +9,7 @@ import {
   computeStatsMetrics,
   deriveSeniority,
   generateInsights,
-  resolveAnalyticsTab,
+  resolveAnalyticsView,
 } from "../../src/lib/analytics-metrics.mjs";
 
 const app = (status, score = "4.0/5", date = "2026-09-18", extra = {}) => ({ status, score, date, role: "Senior AI Engineer", ...extra });
@@ -45,6 +45,26 @@ test("progress preserves core history for rejected and discarded rows", async ()
   const metrics = computeProgressMetrics(applications, achievements);
   assert.deepEqual(metrics.funnel.map(stage => stage.count), [3, 2, 2, 2, 1]);
   assert.equal(metrics.totalOffers, 1);
+});
+
+test("Assessment history never becomes an interview or offer after rebasing main", async () => {
+  const applications = ["Assessment", "Interview", "Offer", "Discarded", "Rejected", "SKIP"]
+    .map((status, i) => app(status, "4/5", "2026-10-11", { n: String(i + 1) }));
+  const history = "4\t2026-10-01\tAssessment\tDiscarded\n5\t2026-10-01\tOffer\tRejected\n6\t2026-10-01\tOffer\tSKIP";
+  const achievements = await cumulativeProgressWithHistory(applications, history,
+    fileURLToPath(new URL("../../../", import.meta.url)));
+  assert.deepEqual(achievements, { applied: 5, responded: 5, interviews: 3, offers: 2 });
+  assert.deepEqual(computeProgressMetrics(applications, achievements).funnel.map(stage => stage.count), [6, 5, 5, 3, 2]);
+});
+
+test("one view resolver selects all three views and defaults unknown values", () => {
+  for (const view of ["progress", "insights", "search-stats"]) {
+    assert.equal(resolveAnalyticsView(view), view);
+    assert.equal(resolveAnalyticsView([view, "bogus"]), view);
+  }
+  for (const raw of [undefined, "", "bogus", "INSIGHTS", [], ["bogus", "search-stats"]]) {
+    assert.equal(resolveAnalyticsView(raw), "progress");
+  }
 });
 
 test("progress uses cumulative funnel semantics, including hired and rejected", () => {
@@ -150,7 +170,7 @@ test("strategic insights are deterministic with complete and missing data", () =
   assert.deepEqual(generateInsights(computeStatsMetrics([])), []);
 });
 
-test("empty metrics and invalid analytics tabs are stable", () => {
+test("empty progress and Search stats metrics are stable", () => {
   const progress = computeProgressMetrics([]);
   const stats = computeStatsMetrics([]);
   assert.equal(progress.tracked, 0);
@@ -158,7 +178,4 @@ test("empty metrics and invalid analytics tabs are stable", () => {
   assert.deepEqual(progress.weeklyActivity, []);
   assert.deepEqual(stats.archetypes, []);
   assert.equal(stats.pay.count, 0);
-  assert.equal(resolveAnalyticsTab(undefined), "progress");
-  assert.equal(resolveAnalyticsTab("bogus"), "progress");
-  assert.equal(resolveAnalyticsTab(["search-stats"]), "search-stats");
 });

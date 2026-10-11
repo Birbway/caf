@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { ArrowUpRight, BarChart3, BriefcaseBusiness, CircleDollarSign, MapPin, Sparkles, Target } from "lucide-react";
-import type { AnalyticsApplication } from "@/lib/analytics-data";
 import { PageFrame } from "@/components/page-frame";
 
 type ProgressMetrics = {
@@ -29,33 +28,9 @@ type StatsMetrics = {
 
 const BAR_TONES = ["bg-brand", "bg-sky-400", "bg-emerald-400", "bg-yellow-300", "bg-orange-300", "bg-pink-400"];
 
-export function AnalyticsView({
-  applications,
-  progress,
-  stats,
-  insights,
-  tab,
-  sankey,
-  coreFunnel,
-}: {
-  applications: AnalyticsApplication[];
-  progress: ProgressMetrics;
-  stats: StatsMetrics;
-  insights: string[];
-  tab: "progress" | "search-stats";
-  sankey?: React.ReactNode;
-  coreFunnel?: React.ReactNode;
-}) {
-  return (
-    <AnalyticsShell total={applications.length} tab={tab}>
-      {tab === "progress" ? <><ProgressPanel metrics={progress} />{sankey}{coreFunnel}</> : <StatsPanel metrics={stats} insights={insights} />}
-    </AnalyticsShell>
-  );
-}
-
-export function AnalyticsShell({ total, tab, children }: {
+export function AnalyticsShell({ total, view, children }: {
   total: number;
-  tab: "progress" | "search-stats" | "insights";
+  view: "progress" | "search-stats" | "insights";
   children: React.ReactNode;
 }) {
   return (
@@ -75,13 +50,13 @@ export function AnalyticsShell({ total, tab, children }: {
       </header>
 
       <nav aria-label="Analytics views" className="mt-5 -mb-px flex gap-1 overflow-x-auto border-b border-border">
-        <AnalyticsTab href="/analytics" active={tab === "progress"} icon={<BarChart3 className="size-3.5" />}>
+        <AnalyticsTab href="/analytics" active={view === "progress"} icon={<BarChart3 className="size-3.5" />}>
           Search progress
         </AnalyticsTab>
-        <AnalyticsTab href="/analytics?view=insights" active={tab === "insights"} icon={<Sparkles className="size-3.5" />}>
+        <AnalyticsTab href="/analytics?view=insights" active={view === "insights"} icon={<Sparkles className="size-3.5" />}>
           Insights
         </AnalyticsTab>
-        <AnalyticsTab href="/analytics?tab=search-stats" active={tab === "search-stats"} icon={<Target className="size-3.5" />}>
+        <AnalyticsTab href="/analytics?view=search-stats" active={view === "search-stats"} icon={<Target className="size-3.5" />}>
           Search stats
         </AnalyticsTab>
       </nav>
@@ -106,7 +81,7 @@ function AnalyticsTab({ href, active, icon, children }: { href: string; active: 
   );
 }
 
-function ProgressPanel({ metrics }: { metrics: ProgressMetrics }) {
+export function ProgressPanel({ metrics }: { metrics: ProgressMetrics }) {
   const maxWeeklyActivity = Math.max(1, ...metrics.weeklyActivity.map((row) => row.count));
   return (
     <div className="mt-6 space-y-5">
@@ -158,7 +133,7 @@ function ProgressPanel({ metrics }: { metrics: ProgressMetrics }) {
   );
 }
 
-function StatsPanel({ metrics, insights }: { metrics: StatsMetrics; insights: string[] }) {
+export function StatsPanel({ metrics, insights }: { metrics: StatsMetrics; insights: string[] }) {
   const scoredRoleCount = metrics.qualityTiers.reduce((sum, row) => sum + row.count, 0);
   return (
     <div className="mt-6 space-y-5">
