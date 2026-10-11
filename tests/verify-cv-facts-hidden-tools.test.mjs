@@ -70,6 +70,35 @@ try {
     unrelated, '- Built the API using Node.js on AWS Lambda.', ['node']);
   blocksOn('a dotted name in a bullet with no period is still checked',
     unrelated, '- Built the API using Node.js\n- Led the platform team\n', ['node']);
+  // The dotted name itself is compared whole in a long fragment too. Cut at
+  // the dot, it is checked as "node" or "next", which a source that says
+  // "Node" or "next quarter" appears to back.
+  blocksOn('a dotted name before a connector in a long fragment is compared whole',
+    '- Built APIs using Node.', '- Built the API using Node.js on AWS Lambda.', ['node.js']);
+  blocksOn('a dotted name in a long fragment with no connector is compared whole',
+    '- Built APIs using Node.', '- Built the API using Node.js 20 LTS runtime.', ['node.js']);
+  blocksOn('a long fragment does not reduce a dotted name to its first segment',
+    '- Planned the next quarter.', '- Built the app using Next.js on Vercel Edge.', ['next.js']);
+  blocksOn('a dotted name in a long "worked with" fragment is compared whole',
+    '- Planned the next quarter.', '- Worked with Next.js on Vercel Edge.', ['next.js']);
+  blocksOn('a name that opens with a dot in a long fragment is compared whole',
+    '- Built services using C#.', '- Built services using .NET on Azure App Service.', ['.net']);
+  // Only a word whose every dot-separated part has two or more characters,
+  // and whose first and last parts each hold a letter, reads as a dotted name.
+  // An abbreviation, a version number, or a figure with a unit in a long
+  // fragment is not one.
+  for (const [text, number] of [
+    ['Ran outreach using weekly regional sales U.S. lists.', 'u.s'],
+    ['Deployed using Ubuntu 22.04 LTS images.', '22.04'],
+    ['Grew MAUs using lifecycle push campaigns reaching 12.5M users.', '12.5m'],
+    ['Grew signups using referral loops driving 10.5k signups.', '10.5k'],
+    ['Cut latency using edge caching under 99.9ms at p95.', '99.9ms'],
+    ['Built APIs using Express servers running Node v18.17 LTS.', 'v18.17'],
+  ]) {
+    const found = toolValues(text);
+    if (!found.includes(number)) pass(`a dotted abbreviation, version or figure is not a dotted name: ${text}`);
+    else fail(`a dotted abbreviation, version or figure was read as a dotted name (${text}): ${JSON.stringify(found)}`);
+  }
 
   // A list item that opens with its own trigger is read after that trigger.
   // It used to be discarded as prose, because "using" is itself a prose word.

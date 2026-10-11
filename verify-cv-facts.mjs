@@ -75,6 +75,13 @@ const WORKED_WITH_RE = /^worked with\b/i;
 // other prose triggers end in "with", which the list is split on, so they
 // never open an item.
 const INNER_TOOL_TRIGGER_RE = /^\s*using\s+/i;
+// A name with a dot inside it: "Node.js", "ASP.NET", ".NET". Every part between
+// dots has two or more characters, so an abbreviation ("U.S.", "e.g.") is not
+// one. `isDottedName` also wants a letter in the first and the last part, so a
+// version ("22.04", "v18.17") or a figure with a unit ("12.5M", "99.9ms") is
+// not one either.
+const DOTTED_NAME_RE = /^(?:\.[\p{L}\p{N}]{2,}|[\p{L}\p{N}][\p{L}\p{N}+#-]+(?:\.[\p{L}\p{N}][\p{L}\p{N}+#-]+)+)$/u;
+const LETTER_RE = /\p{L}/u;
 const TOOL_PHRASE_PATTERN = /^(?=.{1,80}$)[\p{L}\p{N}.][\p{L}\p{N}+#./-]*(?:\s+[\p{L}\p{N}.][\p{L}\p{N}+#./-]*){0,2}$/u;
 const DELEGATED_PARTY_RE = /\b(?:vendors?|agenc(?:y|ies)|contractors?|consultanc(?:y|ies)|consultants?|external teams?|outsourc(?:ed|ing)|implementation partners?)\b/i;
 const DELEGATION_RE = /\b(?:commissioned|coordinated|directed|engaged|hired|managed|oversaw|partnered with|supervised)\b/i;
@@ -442,6 +449,31 @@ function isLikelyTool(value, sourceNormalized) {
   return !words.some(word => TOOL_PROSE_WORDS.has(word));
 }
 
+function isDottedName(word) {
+  if (!DOTTED_NAME_RE.test(word)) return false;
+  const parts = word.split('.').filter(Boolean);
+  return LETTER_RE.test(parts[0]) && LETTER_RE.test(parts[parts.length - 1]);
+}
+
+/**
+ * The dotted names among the words before the first connector of a fragment
+ * `isLikelyTool` rejected, whatever the fragment's length.
+ *
+ * The three-word limit drops "Node.js on AWS Lambda" whole, which leaves the
+ * name to the pattern that stops at the dot, and that one checks "node". A
+ * source that says "Node", or "next quarter" for "Next.js", then backs the
+ * claim. A dotted name (see `isDottedName`) names a product or a site, so
+ * these are kept without the shape and prose checks the rest of the fragment
+ * needs. Words after the connector stay unread, as in
+ * `toolNameBeforeConnector`.
+ */
+function dottedNamesBeforeConnector(value) {
+  if (!value.includes('.')) return [];
+  const words = value.trim().split(/\s+/);
+  const connector = words.findIndex(word => TOOL_PROSE_CONNECTORS.has(normalizeFact(word)));
+  return words.slice(0, connector < 0 ? words.length : connector).filter(isDottedName);
+}
+
 /**
  * The tool-shaped name a connector hid inside a fragment `isLikelyTool`
  * rejected, or '' when there is none.
@@ -536,8 +568,10 @@ export function factClaims(text, sourceNormalized = null) {
     // ("Tableau.Grew pipeline") reads as one name here and blocks, which is
     // the fail-closed side of that ambiguity. It stays as it is beside this one rather than being
     // replaced, because reading through the dot can lengthen a fragment past
-    // the three words `isLikelyTool` accepts ("Node.js on AWS Lambda"), and
-    // then the name the shorter capture did check would go unchecked.
+    // the three words `isLikelyTool` accepts ("Node.js/Express on AWS
+    // Lambda"), and then the name the shorter capture did check would go
+    // unchecked. `dottedNamesBeforeConnector` recovers a dotted name from such
+    // a fragment only when it stands as a word of its own.
     ['tool', /\b(?:using|built with|worked with|technologies?\s*:\s*|tech stack\s*:\s*)((?:[^.;\n]|\.(?=[\p{L}\p{N}]))+?)(?=\s+\bfor\b|\.(?![\p{L}\p{N}])|[;\n]|$)/giu],
   ];
   for (const [kind, pattern] of patterns) {
@@ -569,9 +603,10 @@ export function factClaims(text, sourceNormalized = null) {
         const value = normalizeFact(fragment);
         if (!value) continue;
         if (kind !== 'tool' || isLikelyTool(fragment, sourceNormalized)) claims.push({ kind, value });
-        else if (connectorRule || innerTrigger) {
-          const name = toolNameBeforeConnector(fragment);
-          if (name) claims.push({ kind, value: normalizeFact(name) });
+        else {
+          const names = dottedNamesBeforeConnector(fragment);
+          if (connectorRule || innerTrigger) names.push(toolNameBeforeConnector(fragment));
+          for (const name of names) if (name) claims.push({ kind, value: normalizeFact(name) });
         }
       }
     }
