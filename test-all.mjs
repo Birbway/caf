@@ -60,6 +60,8 @@ import * as yaml from 'js-yaml';
 import { pass, fail, warn, run, runAcrossUtcDay, runAcrossLocalDay, lastRunFailure, formatRunFailure, fileExists, finish, results, linkNodeModules, ROOT, QUICK, NODE, DEFAULT_SCRIPT_TIMEOUT_MS, getBash, toBashPath, hermeticGitEnv } from './tests/helpers.mjs';
 import { flagValue, hasFlag } from './lib/cli-flags.mjs';
 import { collectMjsFiles, isNestedCheckout, isUnderNestedCheckout } from './lib/mjs-files.mjs';
+import { FROZEN_EVALUATION_MODES, KNOWN_EVALUATION_MODES, discoverEvaluationModes, readModeText, structuralGaps } from './tests/evaluation-mode-parity-helpers.mjs';
+import { childFailureExcerpt } from './lib/failure-excerpt.mjs';
 import { SCRATCH_PREFIX, isScratchDir, markScratchOwner, sweepScratchDirs } from './lib/scratch-dirs.mjs';
 
 /**
@@ -69,6 +71,9 @@ import { SCRATCH_PREFIX, isScratchDir, markScratchOwner, sweepScratchDirs } from
  * @returns {string} File contents.
  */
 function readFile(path) {
+  // Several earlier checks walk modes before the parity gate. They must use
+  // the same contained reader or a pointer could escape before parity runs.
+  if (/^modes[\\/]/.test(path)) return readModeText(ROOT, path);
   const fullPath = join(ROOT, path);
   let content = readFileSync(fullPath, 'utf-8');
   if (content.trim().startsWith('..') && content.trim().split('\n').length === 1) {
@@ -227,8 +232,13 @@ async function runDiscovered(filter = null) {
         const detail = lastRunFailure();
         fail(`${rel} — node:test suite failed (exit ${detail?.status ?? '?'})`);
         // Surface the runner's own summary; a bare "failed" is not actionable.
-        const tail = (detail?.stderr || detail?.stdout || '').split('\n').filter(Boolean).slice(-12);
-        for (const line of tail) console.log(`      ${line}`);
+        // The trailing window alone is not actionable either: node prints the
+        // error message above the frames, so a twelve-line tail kept
+        // `actual: false, expected: true` and dropped the interpolated value
+        // that says WHICH assertion and by how much (#4017).
+        for (const line of childFailureExcerpt(detail)) {
+          console.log(`      ${line}`);
+        }
       } else {
         // Both reporters: TAP prints "# pass N", the default spec reporter
         // prints "ℹ pass N". Cosmetic — the pass/fail verdict is the exit code.
@@ -492,38 +502,6 @@ const scripts = [
   { name: 'invite-match.mjs --self-test', expectExit: 0 },
   { name: 'tracker-sync-check.mjs --self-test', expectExit: 0 },
   { name: 'updater-migration-tests.mjs', expectExit: 0 },
-  // The second outlier, on the same grounds as tracker-writer-lock-tests.mjs
-  // below and measured the same way. It spawns five node subprocesses
-  // (merge-tracker, verify-pipeline) against throwaway mkdtempSync trees, and
-  // that cost is the behaviour under test rather than slack to be trimmed.
-  //
-  // Measured on windows-latest across six green runs: 10.9s, 11.7s, 11.9s,
-  // 12.0s, 12.4s, 13.8s, which makes it the SLOWEST script in this section
-  // there, a hair above tracker-writer-lock-tests.mjs at 11.6s on the same run.
-  // A seventh run ran past the 30s default and was killed mid-suite
-  // (`exit null, signal SIGTERM`) while ubuntu, macos and every other check on
-  // that commit passed (#4010, same shape as #2906). Locally on an idle box it
-  // is 4.2s, so the spread is Windows process creation under runner load.
-  //
-  // SLOW_SCRIPT_WARN_FRACTION could not have given notice: at a typical 12s of
-  // 30s this never reaches the 75% warning, so it goes from silent to killed
-  // with nothing in between. The ceiling is the only signal it has.
-  { name: 'tracker-columns-tests.mjs', expectExit: 0, timeoutMs: 180_000 },
-  // The one script in this list that genuinely needs longer than the shared
-  // budget. It spawns competing writer processes for 27 contention cases, and
-  // that cost is the behaviour under test rather than slack to be trimmed.
-  //
-  // Measured on current main on a 24-core Windows box, four consecutive runs:
-  // 13.4s, 17.8s, 19.8s, 20.1s — already 67% of the default 30s before a
-  // 2-core CI runner's load is added. On windows-latest it crossed the line and
-  // was killed mid-matrix (`exit null, signal SIGTERM`), while every other
-  // check on the same commit passed (#2906).
-  //
-  // Raised here rather than in run()'s default so the outlier is treated as an
-  // outlier: every other script keeps the 30s bound, and a NEW script that
-  // starts taking half a minute still fails loudly instead of inheriting a
-  // budget sized for this one.
-  { name: 'tracker-writer-lock-tests.mjs', expectExit: 0, timeoutMs: 180_000 },
   { name: 'validate-portals.mjs --file templates/portals.example.yml', expectExit: 0 },
   { name: 'validate-system-paths-coverage.mjs --self-test', expectExit: 0 },
   // The bare coverage run is NOT here on purpose: this section executes each
@@ -1265,8 +1243,9 @@ try {
 
   // Headed-fallback-on-challenge path (liveness-browser.mjs). Fake Playwright
   // pages script the goto/evaluate calls so we can exercise the wrapper without
-  // launching a browser. checkUrlLiveness reads body text first, apply controls
-  // second — the fake returns them in that order.
+  // launching a browser. checkUrlLiveness reads the page repeatedly while it
+  // hydrates, so the fakes tell the two reads apart by the extractor passed in:
+  // only the apply-control extractor calls querySelectorAll.
   const { checkUrlLiveness, checkUrlLivenessWithFallback, isChallengeResult, jitteredDelayMs } =
     await import(pathToFileURL(join(ROOT, 'liveness-browser.mjs')).href);
 
@@ -1282,15 +1261,13 @@ try {
     fail(`jitteredDelayMs out of spec (disabled=${disabled}, inRange=${inRange})`);
   }
 
-  const fakePage = ({ status, finalUrl, bodyText, applyControls }) => {
-    let evalCall = 0;
-    return {
-      async goto() { return { status: () => status }; },
-      async waitForTimeout() {},
-      url() { return finalUrl; },
-      async evaluate() { evalCall += 1; return evalCall === 1 ? bodyText : applyControls; },
-    };
-  };
+  const isControlsRead = (fn) => String(fn).includes('querySelectorAll');
+  const fakePage = ({ status, finalUrl, bodyText, applyControls }) => ({
+    async goto() { return { status: () => status }; },
+    async waitForTimeout() {},
+    url() { return finalUrl; },
+    async evaluate(fn) { return isControlsRead(fn) ? applyControls : bodyText; },
+  });
   const URL = 'https://www.pracuj.pl/praca/sap-consultant,oferta,1004870954';
   const challengePage = () => fakePage({
     status: 403,
@@ -1324,7 +1301,7 @@ try {
         async evaluate(fn) {
           // Both extractors mention innerText, so discriminate on the selector
           // call that only the apply-control extractor makes.
-          const isControls = String(fn).includes('querySelectorAll');
+          const isControls = isControlsRead(fn);
           const filled = textReads >= (spec.fillAfter ?? 0);
           if (!isControls) textReads += 1;
           if (isControls) return filled ? (spec.controls ?? []) : [];
@@ -1332,14 +1309,13 @@ try {
         },
       };
     });
-    let evalCall = 0;
     Object.assign(page, {
       async goto() { return { status: () => status }; },
       async waitForTimeout() {},
       url() { return finalUrl; },
       frames() { return [main, ...built]; },
       mainFrame() { return main; },
-      async evaluate() { evalCall += 1; return evalCall === 1 ? shellText : []; },
+      async evaluate(fn) { return isControlsRead(fn) ? [] : shellText; },
     });
     return page;
   };
@@ -1376,10 +1352,10 @@ try {
     fail(`410 precedence lost to frame aggregation: ${JSON.stringify(goneWithFrame)}`);
   }
 
-  // A 410 must not pay the frame poll: the status already decided it, and a
+  // A 410 must not pay the frame wait: the status already decided it, and a
   // dead posting whose error page renders into an iframe would otherwise wait
   // for that error page to fill before saying what it knew at byte one.
-  // Count only the 500ms poll waits; the 2000ms hydration wait always happens.
+  // Count only the 500ms frame-wait ticks.
   let pollWaits = 0;
   const gonePage = framedPage({
     status: 410,
@@ -1389,7 +1365,7 @@ try {
   gonePage.waitForTimeout = async (ms) => { if (ms === 500) pollWaits += 1; };
   const goneFast = await checkUrlLiveness(gonePage, SHELL);
   if (goneFast.result === 'expired' && goneFast.code === 'http_gone' && pollWaits === 0) {
-    pass('HTTP 410 short-circuits before the frame poll (no wait spent)');
+    pass('HTTP 410 short-circuits before the frame wait (no wait spent)');
   } else {
     fail(`410 did not short-circuit: ${JSON.stringify(goneFast)}, poll waits=${pollWaits}`);
   }
@@ -1411,20 +1387,17 @@ try {
   // bamboohr.com posting URL, not point at a real, permanently-live one.
   const BAMBOO_URL = 'https://example-co.bamboohr.com/careers/1';
   const bambooRetryPage = ({ reloadBodyText, reloadApplyControls = [] }) => {
-    let evalCall = 0;
+    // Empty render until reload() is called, the given render after it.
+    let reloaded = false;
     return {
       async goto() { return { status: () => 200 }; },
       async waitForTimeout() {},
       url() { return BAMBOO_URL; },
-      async evaluate() {
-        evalCall += 1;
-        // 1st/2nd calls: initial (empty) render. 3rd/4th: post-reload render.
-        if (evalCall === 1) return '';
-        if (evalCall === 2) return [];
-        if (evalCall === 3) return reloadBodyText;
-        return reloadApplyControls;
+      async evaluate(fn) {
+        if (isControlsRead(fn)) return reloaded ? reloadApplyControls : [];
+        return reloaded ? reloadBodyText : '';
       },
-      async reload() { return { status: () => 200 }; },
+      async reload() { reloaded = true; return { status: () => 200 }; },
     };
   };
 
@@ -1465,7 +1438,7 @@ try {
   const nonBambooPage = fakePage({ status: 200, finalUrl: URL, bodyText: '', applyControls: [] });
   nonBambooPage.reload = async () => { nonBambooReloadCalled = true; return { status: () => 200 }; };
   const nonBambooInsufficient = await checkUrlLiveness(nonBambooPage, URL);
-  if (nonBambooInsufficient.result === 'expired' && nonBambooInsufficient.code === 'insufficient_content' && !nonBambooReloadCalled) {
+  if (nonBambooInsufficient.result === 'uncertain' && nonBambooInsufficient.code === 'empty_page' && !nonBambooReloadCalled) {
     pass('the reload retry is scoped to BambooHR hosts only');
   } else {
     fail(`reload retry leaked to a non-BambooHR host: ${JSON.stringify(nonBambooInsufficient)}, reloadCalled=${nonBambooReloadCalled}`);
@@ -1704,9 +1677,8 @@ try {
         },
         async waitForTimeout() {},
         url: () => 'https://careers.example.com/jobs/1',
-        async evaluate() {
-          this._n = (this._n || 0) + 1;
-          return this._n === 1 ? 'Senior Analyst. '.repeat(30) : ['Apply for this job'];
+        async evaluate(fn) {
+          return String(fn).includes('querySelectorAll') ? ['Apply for this job'] : 'Senior Analyst. '.repeat(30);
         },
       };
     };
@@ -3726,9 +3698,14 @@ if (
   }
 
   // 6. Risk Summary row exists and follows the "activates automatically" pattern
+  // End bound is searched FROM the section start, not globally: any section
+  // added before Risk Summary that also carries a "Block format:" example
+  // would otherwise make the end index precede the start and slice to empty,
+  // failing this check for a reason that has nothing to do with the row.
+  const riskSummaryStart = ofertaMode.indexOf('## Risk Summary (after Block G)');
   const riskSummarySection = ofertaMode.slice(
-    ofertaMode.indexOf('## Risk Summary (after Block G)'),
-    ofertaMode.indexOf('Block format:')
+    riskSummaryStart,
+    ofertaMode.indexOf('Block format:', riskSummaryStart)
   );
   if (
     riskSummarySection.includes('AI-screening disclosure') &&
@@ -4265,6 +4242,16 @@ if (
   fail('AGENTS.md missing offer-prep mode row or CLAUDE.md is not importing AGENTS.md');
 }
 
+// The trigger table is how a free-form request reaches a mode; a mode the
+// router exposes but the table omits is reachable only by its exact name (#4901).
+for (const mode of ['discover', 'text']) {
+  if (new RegExp(`^\\|[^\\n]*\\| \`${mode}\` \\|$`, 'm').test(agentsMdDoc)) {
+    pass(`AGENTS.md trigger table has a row for ${mode}`);
+  } else {
+    fail(`AGENTS.md trigger table has no row for ${mode} (#4901)`);
+  }
+}
+
 const dataContractDoc = readFile('DATA_CONTRACT.md');
 const gitignoreDoc = readFile('.gitignore');
 const updaterSrc = readFile('update-system.mjs');
@@ -4349,49 +4336,50 @@ if (
   fail('Chinese modes missing company-type compensation reliability checks');
 }
 
-// ── Localized oferta.md structural parity (#3669) ──
-// Six localized oferta.md files were frozen at a pre-Block-G shape: no Block G,
+// ── Localized evaluation-mode structural parity (#3669, #3828) ──
+// Localized evaluation modes were frozen at a pre-Block-G shape: no Block G,
 // no Risk Summary, and `## G)` meaning the draft-answers block that is `## H)`
-// in the canonical. A locale WITHOUT an oferta.md falls back to the canonical
-// and gets all of it, so a stale translation is worse than none. This pins the
-// structural contract on EVERY modes/*/oferta.md: the report-format letters
-// A)–H) present, `## Risk Summary` between G) and H), and the header field
-// labels + `## Risk Summary` literal in English (the web viewer maps them by
-// name and silently drops what it does not know). The allowlist below names the
+// in the canonical. A locale WITHOUT an evaluation mode falls back to the
+// canonical and gets all of it, so a stale translation is worse than none.
+// This pins the structural contract on EVERY localized evaluation mode: the
+// report-format letters A)–H) present, `## Risk Summary` between G) and H), and
+// the header field labels + `## Risk Summary` literal in English (the web
+// viewer maps them by name and silently drops what it does not know).
+//
+// Evaluation modes are discovered by content, not by name: any
+// modes/<lang>/*.md that opens a `## A)` report block is one, so the seven
+// market mode sets that keep theirs under a market name (angebot, offre,
+// naukri, lowongan, annuncio, gonggo, vacature) are checked alongside the
+// oferta.md files and a future one cannot hide from the check by its filename
+// (#3828). The allowlist in tests/evaluation-mode-parity-helpers.mjs names the
 // files still frozen; a re-synced file MUST be removed from it (the check fails
-// loudly otherwise), so the list can only shrink. Denominator asserted: the
-// locale walk must find the known files, or the whole check is blind.
+// loudly otherwise). Entries the walk no longer finds also fail, so the list
+// can only shrink. Denominator
+// asserted against the full list of known files, or the check would go blind
+// one file at a time.
 {
-  const FROZEN_OFERTA = new Set(['da', 'pl', 'pt', 'ua']);
-  const REQUIRED_HEADINGS = ['## A)', '## B)', '## C)', '## D)', '## E)', '## F)', '## G)', '## Risk Summary', '## H)'];
-  const REQUIRED_LABELS = ['**Date:**', '**URL:**', '**Archetype:**', '**Score:**', '**Legitimacy:**', '**PDF:**'];
-  const withOferta = readdirSync(join(ROOT, 'modes'), { withFileTypes: true })
-    .filter(d => d.isDirectory() && existsSync(join(ROOT, 'modes', d.name, 'oferta.md')))
-    .map(d => d.name).sort();
-  const structuralGaps = (text) => {
-    const gaps = REQUIRED_HEADINGS.filter(h => !text.includes(h)).concat(REQUIRED_LABELS.filter(l => !text.includes(l)));
-    const g = text.lastIndexOf('## G)'), rs = text.lastIndexOf('## Risk Summary'), h = text.lastIndexOf('## H)');
-    if (gaps.length === 0 && !(g < rs && rs < h)) gaps.push('order G) → Risk Summary → H)');
-    return gaps;
-  };
-  if (withOferta.length < 8 || !withOferta.includes('zh') || !withOferta.includes('ru')) {
-    fail(`localized oferta.md walk found ${withOferta.length} files (${withOferta.join(', ')}) — expected ≥8 incl. zh and ru; the parity check would be blind`);
+  const evaluationModes = discoverEvaluationModes(ROOT);
+  const undiscovered = KNOWN_EVALUATION_MODES.filter(f => !evaluationModes.includes(f));
+  if (undiscovered.length > 0) {
+    fail(`localized evaluation-mode walk did not find ${undiscovered.join(', ')} (renamed, or its \`## A)\` block is gone?) — found ${evaluationModes.length}: ${evaluationModes.join(', ')}`);
   } else {
-    const canonicalGaps = structuralGaps(readFile('modes/oferta.md'));
-    const stillFrozen = [], resynced = [], drifted = [];
-    for (const lang of withOferta) {
-      const gaps = structuralGaps(readFile(`modes/${lang}/oferta.md`));
-      if (FROZEN_OFERTA.has(lang)) (gaps.length === 0 ? resynced : stillFrozen).push(lang);
-      else if (gaps.length > 0) drifted.push(`${lang} (${gaps.join(', ')})`);
+    const canonicalGaps = structuralGaps(readModeText(ROOT, 'modes/oferta.md'));
+    const stillFrozen = [], resynced = [], drifted = [], unknownFrozen = [...FROZEN_EVALUATION_MODES].filter(f => !evaluationModes.includes(f));
+    for (const file of evaluationModes) {
+      const gaps = structuralGaps(readModeText(ROOT, `modes/${file}`));
+      if (FROZEN_EVALUATION_MODES.has(file)) (gaps.length === 0 ? resynced : stillFrozen).push(file);
+      else if (gaps.length > 0) drifted.push(`${file} (${gaps.join(', ')})`);
     }
     if (canonicalGaps.length > 0) {
       fail(`canonical modes/oferta.md lost its own report-format contract: ${canonicalGaps.join(', ')}`);
+    } else if (unknownFrozen.length > 0) {
+      fail(`FROZEN_EVALUATION_MODES names files the walk did not find (renamed or deleted?): ${unknownFrozen.join(', ')}`);
     } else if (drifted.length > 0) {
-      fail(`localized oferta.md drifted from the canonical report structure: ${drifted.join('; ')}`);
+      fail(`localized evaluation mode drifted from the canonical report structure: ${drifted.join('; ')}`);
     } else if (resynced.length > 0) {
-      fail(`localized oferta.md re-synced but still listed as frozen — remove from FROZEN_OFERTA in test-all.mjs and tick it in #3669: ${resynced.join(', ')}`);
+      fail(`localized evaluation mode re-synced but still listed as frozen — remove from FROZEN_EVALUATION_MODES in tests/evaluation-mode-parity-helpers.mjs and tick it in #3669 (oferta.md) or #3828 (market-named): ${resynced.join(', ')}`);
     } else {
-      pass(`localized oferta.md structural parity: ${withOferta.length - stillFrozen.length} of ${withOferta.length} files carry A)–H) + Risk Summary + English header labels; still frozen (allowlisted, #3669): ${stillFrozen.join(', ') || 'none'}`);
+      pass(`localized evaluation-mode structural parity: ${evaluationModes.length - stillFrozen.length} of ${evaluationModes.length} files carry A)–H) + Risk Summary + English header labels; still frozen (allowlisted, #3669/#3828): ${stillFrozen.join(', ') || 'none'}`);
     }
   }
 }
@@ -5640,24 +5628,23 @@ try {
     fail(`tracker writers bypass shared transaction scope: ${unsafeWriters.join(', ')}`);
   }
 
-  const dashboardWriter = readFile('dashboard/internal/data/career.go');
-  const dashboardStart = dashboardWriter.indexOf('func UpdateApplicationStatusAndNotes(');
-  const dashboardTail = dashboardStart === -1 ? '' : dashboardWriter.slice(dashboardStart);
-  const nextDashboardFunction = dashboardTail.indexOf('\nfunc ', 1);
-  const dashboardBody = nextDashboardFunction === -1
-    ? dashboardTail
-    : dashboardTail.slice(0, nextDashboardFunction);
-  const acquireAt = dashboardBody.indexOf('acquireTrackerLock(');
-  const deferredReleaseAt = dashboardBody.indexOf('defer func()');
-  const readAt = dashboardBody.indexOf('os.ReadFile(filePath)');
-  const replaceAt = dashboardBody.indexOf('writeFileAtomic(filePath');
-  if (acquireAt >= 0 && deferredReleaseAt > acquireAt && readAt > deferredReleaseAt
-      && replaceAt > readAt
-      && !/os\.WriteFile\(filePath,\s*\[\]byte\(strings\.Join\(lines/.test(dashboardBody)) {
-    pass('dashboard tracker update structurally holds the lock across read and atomic replacement');
+  // The dashboard must use the same canonical writer as the CLI. Keep this
+  // boundary check beside the root-writer contract so a future UI refactor
+  // cannot silently reintroduce a direct tracker mutation that skips the
+  // shared lock, lifecycle ledger, or follow-up transaction.
+  const dashboardWriter = readFile('dashboard/internal/data/status_writer.go');
+  const runWriterStart = dashboardWriter.indexOf('func runStatusWriter(');
+  const runWriterBody = runWriterStart === -1 ? '' : dashboardWriter.slice(runWriterStart);
+  const delegatesToCanonicalWriter = runWriterBody.includes('set-status.mjs')
+    && runWriterBody.includes('exec.CommandContext')
+    && runWriterBody.includes('"--report-link"')
+    && !/writeFile(?:Atomic|Sync)\s*\(/.test(runWriterBody);
+  if (delegatesToCanonicalWriter) {
+    pass('dashboard status writer delegates tracker mutations to set-status.mjs transaction scope');
   } else {
-    fail('dashboard tracker update escapes the cross-runtime transaction scope');
+    fail('dashboard status writer bypasses the shared set-status transaction scope');
   }
+
 } catch (e) {
   fail(`tracker writer lock contract tests crashed: ${e.message}`);
 }
@@ -8182,21 +8169,29 @@ try {
 
   const historyRow = formatScanHistoryRow(hostileOffer, '2026-06-18');
   const history = parseScanHistoryLine(historyRow);
+  // The stored cells carry the formula escaping; parseScanHistoryLine undoes it.
+  const stored = Object.fromEntries(SCAN_HISTORY_COLUMNS.map((name, i) => [name, historyRow.split('\t')[i]]));
   if (
     historyRow.split('\t').length === SCAN_HISTORY_COLUMNS.length && // every declared column, empty ones included
     !historyRow.includes('\n') && !historyRow.includes('\r') &&
-    history.posted_at === '' && // no postedAt on hostileOffer
-    history.trust_score === '' && history.trust_flags === '' && // no trust signal
+    !historyRow.split('\t').some(col => /[\r\n\t]/.test(col)) &&
+    history.posted_at === '' &&
+    history.trust_score === '' && history.trust_flags === '' &&
     history.url === 'https://jobs.example.com/123|evil' &&
     history.title.includes('- [ ] https://evil.example/job') &&
-    history.company === "'=ACME\\Corp | R&D" &&
-    history.location === "'@Remote EU" &&
-    history.requisition_id === "'=R1 DROP x" &&
-    history.language === "'@en -GB"
+    stored.company === "'=ACME\\Corp | R&D" &&
+    stored.location === "'@Remote EU" &&
+    stored.requisition_id === "'=R1 DROP x" &&
+    stored.language === "'@en -GB" &&
+    history.company === '=ACME\\Corp | R&D' &&
+    history.location === '@Remote EU' &&
+    history.requisition_id === '=R1 DROP x' &&
+    history.language === '@en -GB' &&
+    history.listing_key === ''
   ) {
-    pass('scan-history writer preserves row shape and neutralizes spreadsheet formulas');
+    pass('scan-history writer preserves row shape and neutralizes spreadsheet formulas; the reader gets the values back');
   } else {
-    fail(`scan-history metadata sanitizer produced unsafe TSV row: ${JSON.stringify(history)}`);
+    fail(`scan-history metadata sanitizer produced unsafe TSV row: ${JSON.stringify({ stored, history })}`);
   }
 
   // ── postedAt persistence ──
@@ -8216,10 +8211,12 @@ try {
   const datedHistory = parseScanHistoryLine(formatScanHistoryRow(datedOffer, '2026-07-09'));
   const noDateHistory = parseScanHistoryLine(formatScanHistoryRow({ ...datedOffer, postedAt: undefined }, '2026-07-09'));
   if (
-    datedHistory.posted_at === '2026-06-18' && // epoch ms → YYYY-MM-DD
-    datedHistory.normalized_company === 'acme' && // normalized company key (#2093)
-    noDateHistory.posted_at === '' && // missing postedAt → empty, never a bogus date
-    noDateHistory.normalized_company === 'acme'
+    datedHistory.posted_at === '2026-06-18' &&
+    datedHistory.normalized_company === 'acme' &&
+    datedHistory.listing_key === '' &&
+    noDateHistory.posted_at === '' &&
+    noDateHistory.normalized_company === 'acme' &&
+    noDateHistory.listing_key === ''
   ) {
     pass('scan-history writer appends postedAt as an ISO trailing column (empty when absent)');
   } else {
@@ -8254,8 +8251,9 @@ try {
   const cleanHist = parseScanHistoryLine(formatScanHistoryRow(cleanOffer, '2026-07-09'));
   if (
     flaggedHist.trust_score === '60' && flaggedHist.trust_flags === 'missing_apply_url,suspicious_domain' &&
-    flaggedHist.normalized_company === 'acme' && // normalized company key (#2093)
-    cleanHist.trust_score === '' && cleanHist.trust_flags === '' // score 100 → not flagged → empty
+    flaggedHist.normalized_company === 'acme' &&
+    flaggedHist.listing_key === '' &&
+    cleanHist.trust_score === '' && cleanHist.trust_flags === '' && cleanHist.listing_key === ''
   ) {
     pass('scan-history writer appends trust score + flags trailing columns when flagged, empty otherwise (#1743)');
   } else {
@@ -10065,13 +10063,15 @@ try {
 // ── RESERVE-REPORT-NUM RANGE RESERVATION (#1426) ────────────────
 // Manual multi-agent fan-outs need N report numbers up front. --count N
 // reserves a contiguous range (per-slot atomic sentinels); tests run against
-// a temp dir via the CAREER_OPS_REPORTS_DIR override.
+// a temp dir via the CAREER_OPS_REPORTS_DIR override. CAREER_OPS_BATCH_STATE
+// points every run at a fixture-local batch-state.tsv, so failed rows in the
+// install's real batch/batch-state.tsv cannot occupy fixture numbers (#4391).
 console.log('\n🧪 Testing reserve-report-num env override and range reservation...');
 try {
   const RESERVE = join(ROOT, 'reserve-report-num.mjs');
   const reserveRun = (args, dir, tracker = join(dir, 'applications.md')) => execFileSync(NODE, [RESERVE, ...args], {
     encoding: 'utf-8',
-    env: { ...process.env, CAREER_OPS_REPORTS_DIR: dir, CAREER_OPS_TRACKER: tracker },
+    env: { ...process.env, CAREER_OPS_REPORTS_DIR: dir, CAREER_OPS_TRACKER: tracker, CAREER_OPS_BATCH_STATE: join(dir, 'batch-state.tsv') },
   }).trim();
 
   // Importing the module must expose the same allocator used by the CLI,
@@ -10118,7 +10118,7 @@ try {
     }));
   `], {
     encoding: 'utf-8',
-    env: { ...process.env, CAREER_OPS_REPORTS_DIR: apiTmp, CAREER_OPS_TRACKER: apiTracker },
+    env: { ...process.env, CAREER_OPS_REPORTS_DIR: apiTmp, CAREER_OPS_TRACKER: apiTracker, CAREER_OPS_BATCH_STATE: join(apiTmp, 'batch-state.tsv') },
   }).trim();
   let apiResult = null;
   try { apiResult = JSON.parse(apiProbe); } catch {}
@@ -10201,6 +10201,7 @@ try {
     await allocatorApi.reserveReportNumbers(2, {
       reportsDir: unsafeRangeReports,
       trackerPath: unsafeRangeTracker,
+      batchStateFile: join(unsafeRangeTmp, 'batch-state.tsv'),
     });
   } catch (err) {
     unsafeRangeError = err;
@@ -10460,7 +10461,7 @@ try {
     try {
       const spawnReserve = () => new Promise(resolve => {
         const child = spawn(NODE, [RESERVE, '--count', '4'], {
-          env: { ...process.env, CAREER_OPS_REPORTS_DIR: concTmp },
+          env: { ...process.env, CAREER_OPS_REPORTS_DIR: concTmp, CAREER_OPS_BATCH_STATE: join(concTmp, 'batch-state.tsv') },
         });
         let stdout = '';
         child.stdout.on('data', chunk => { stdout += chunk; });
@@ -10497,7 +10498,7 @@ try {
       execFileSync(NODE, [RESERVE, ...args], {
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env, CAREER_OPS_REPORTS_DIR: dir, CAREER_OPS_TRACKER: join(dir, 'applications.md') },
+        env: { ...process.env, CAREER_OPS_REPORTS_DIR: dir, CAREER_OPS_TRACKER: join(dir, 'applications.md'), CAREER_OPS_BATCH_STATE: join(dir, 'batch-state.tsv') },
       });
       return null;
     } catch (err) {
@@ -12598,7 +12599,10 @@ try {
 // PDF was generated, so merge-tracker should flip only matching ❌ cells to ✅.
 console.log('\n🧪 Testing merge-tracker PDF flag sync from data/pdf-index.tsv (#1429)...');
 try {
-  const runPdfSyncFixture = (name, trackerRow, pdfIndex = null, additions = []) => {
+  // A manifest row only means PDF-ready while its file is on disk (#4777), so a
+  // fixture lists the files it expects to exist. The deleted-PDF cases live in
+  // tests/merge-tracker.test.mjs.
+  const runPdfSyncFixture = (name, trackerRow, pdfIndex = null, additions = [], pdfFiles = []) => {
     const tmp = mkdtempSync(join(tmpdir(), `career-ops-merge-pdf-${name}-`));
     mkdirSync(join(tmp, 'data'), { recursive: true });
     const additionsDir = join(tmp, 'additions');
@@ -12609,6 +12613,10 @@ try {
       '|---|------|---------|------|-------|--------|-----|--------|-------|\n' +
       trackerRow + '\n');
     if (pdfIndex !== null) writeFileSync(join(tmp, 'data', 'pdf-index.tsv'), pdfIndex);
+    for (const file of pdfFiles) {
+      mkdirSync(dirname(join(tmp, file)), { recursive: true });
+      writeFileSync(join(tmp, file), '%PDF-1.4\n');
+    }
     if (additions.length > 0) {
       mkdirSync(additionsDir, { recursive: true });
       for (const addition of additions) {
@@ -12632,6 +12640,8 @@ try {
     '| 7 | 2026-01-04 | Acme | Engineer | 4.2/5 | Evaluated | ❌ | [12](../reports/012-acme-2026-01-04.md) | ok |',
     '# report\tpdf\thtml\tformat\tdate\n' +
       '012\toutput/cv-acme.pdf\toutput/cv-acme.html\tletter\t2026-01-04\n',
+    [],
+    ['output/cv-acme.pdf'],
   );
   if (matching.result !== null && matching.merged.includes('| ✅ | [12](../reports/012-acme-2026-01-04.md) |')) {
     pass('merge-tracker flips a stale ❌ PDF cell when pdf-index.tsv has the row report number');
@@ -12670,6 +12680,7 @@ try {
       name: '001-umbrella.tsv',
       content: '1\t2026-01-07\tUmbrella\tEngineer\t4.1/5\tEvaluated\t❌\t[41](../reports/041-umbrella-2026-01-07.md)\tok\n',
     }],
+    ['output/cv-umbrella.pdf'],
   );
   if (newAddition.result !== null && newAddition.merged.includes('| 1 | 2026-01-07 | Umbrella | Engineer | 4.1/5 | Evaluated | ✅ | [41](../reports/041-umbrella-2026-01-07.md) | ok |')) {
     pass('merge-tracker applies pdf-index.tsv to a newly merged tracker row in the same run');
@@ -12724,6 +12735,7 @@ try {
     reevalRow,
     '# report\tpdf\thtml\tformat\tdate\n1\toutput/acme-1.pdf\t\t\t2026-01-04\n2\toutput/acme-2.pdf\t\t\t2026-02-01\n',
     [reevalTsv(2)],
+    ['output/acme-1.pdf', 'output/acme-2.pdf'],
   );
   const keptRow = keptFlag.merged.split('\n').find((l) => l.startsWith('| 3 ')) || '';
   if (keptFlag.result !== null && /\[2\]/.test(keptRow) && keptRow.split('|')[7].trim() === '✅') {
@@ -13448,7 +13460,7 @@ console.log('\n15. Tracker derived index (sync/query/export round-trip)');
 
 const sqliteAvailable = run(NODE, ['--no-warnings', '-e', "import('node:sqlite').then(()=>process.exit(0),()=>process.exit(1))"]) !== null;
 if (!sqliteAvailable) {
-  warn('node:sqlite unavailable (Node < 22.5) — tracker index tests skipped');
+  warn('node:sqlite unavailable (Node < 22.13) — tracker index tests skipped');
 } else {
   try {
     const idxTmp = mkdtempSync(join(tmpdir(), 'career-ops-index-'));
@@ -16353,6 +16365,70 @@ try {
     fail('tracker.mjs no longer writes the canonical 9-col header — BREAKING for the web reader; coordinate web/ in lockstep');
   }
 
+  // 55.1b tracker URL CELL form (#3516). The header label stays `URL`; what
+  // changed is the cell, which merge-tracker now writes as `[label](href)`.
+  //
+  // This belongs in the freeze section for the reason the section exists: the
+  // cell is read by three surfaces outside merge-tracker — the shared Node row
+  // parser, the Go dashboard (tier 0 of its JobURL chain since #3452), and,
+  // were the web ever to start reading it, the web. A reader that has not
+  // learned the link form does not fail loudly; `normalizeUrl('[l](u)')` is '',
+  // and '' means "no URL", so the row silently loses its exact-match dedup
+  // tier. Freezing the writer AND both readers here makes any future change to
+  // the form edit this assertion.
+  const mergeSrc = readFileSync(join(ROOT, 'merge-tracker.mjs'), 'utf-8');
+  const parseSrc = readFileSync(join(ROOT, 'tracker-parse.mjs'), 'utf-8');
+  const goCareerSrc = readFileSync(join(ROOT, 'dashboard', 'internal', 'data', 'career.go'), 'utf-8');
+  const historySeedsSrc = readFileSync(join(ROOT, 'history-ats-seeds.mjs'), 'utf-8');
+  const urlCellReaders = [
+    ["tracker-parse.mjs exports the shared extractor", /export function extractCellUrl\(/.test(parseSrc)],
+    ["merge-tracker.mjs writes the cell through formatUrlCell", /put\('url', formatUrlCell\(/.test(mergeSrc)],
+    ["merge-tracker.mjs reads the href before keying", /url: COLMAP\.url != null \? extractCellUrl\(/.test(mergeSrc)],
+    ["tracker-parse.mjs returns the href on parsed rows", /url: extractCellUrl\(at\('url'\)\)/.test(parseSrc)],
+    ["the Go dashboard extracts the href", /func extractCellURL\(/.test(goCareerSrc) && /JobURL:\s+extractCellURL\(at\("url"\)\)/.test(goCareerSrc)],
+    // history-ats-seeds reads the cell directly rather than through
+    // parseTrackerRow, so it is listed on its own.
+    ["history-ats-seeds.mjs extracts the href", /extractCellUrl\(cells\[columns\.url\]\)/.test(historySeedsSrc)],
+  ];
+  // The greps above prove the extraction is WRITTEN, not that it WINS. A later
+  // `row.url = at('url')` in parseTrackerRow overwrote the href with the raw
+  // cell after a merge from main, and every grep still passed. So also assert
+  // the behaviour: the shared parser hands back the href for a linked cell.
+  // scan.mjs's same-title requisition dedup (#4267) reads row.url from here.
+  {
+    const { resolveColumns, parseTrackerRow } = await import(pathToFileURL(join(ROOT, 'tracker-parse.mjs')).href);
+    const href = 'https://jobs.ashbyhq.com/acme/8a65908d';
+    const lines = [
+      '| # | Date | Company | Role | Score | Status | PDF | Report | Notes | URL |',
+      '|---|------|---------|------|-------|--------|-----|--------|-------|-----|',
+      `| 1 | 2026-01-01 | Acme | Engineer | 4.0/5 | Applied | ❌ | — | n | [ashby](${href}) |`,
+    ];
+    const got = parseTrackerRow(lines[2], resolveColumns(lines))?.url;
+    urlCellReaders.push([`parseTrackerRow returns the href for a linked cell (got ${JSON.stringify(got)})`, got === href]);
+  }
+  const brokenReaders = urlCellReaders.filter(([, ok]) => !ok).map(([label]) => label);
+  if (brokenReaders.length === 0) {
+    pass('tracker URL cell: written as a markdown link, and every reader extracts the href (#3516)');
+  } else {
+    fail(`tracker URL cell contract broken — ${brokenReaders.join('; ')}. A reader that misses the link form reads the row as having NO url and silently drops it to fuzzy dedup (#3516)`);
+  }
+
+  // 55.1c the boundary that kept the web out of this change: the TSV's `url`
+  // field stays a RAW url, and the web (which WRITES those TSVs) does not read
+  // the tracker's url cell — its field map has no `url` entry. If either half
+  // stops holding, the link form becomes a lockstep core+web change.
+  if (existsSync(join(ROOT, 'web', 'src', 'lib', 'tracker-table.mjs'))) {
+    const webTableSrc = readFileSync(join(ROOT, 'web', 'src', 'lib', 'tracker-table.mjs'), 'utf-8');
+    const webFieldBlock = webTableSrc.match(/const WEB_FIELD = \{[\s\S]*?\};/)?.[0] ?? '';
+    if (webFieldBlock && !/\burl:/.test(webFieldBlock)) {
+      pass('web tracker reader still ignores the URL column — the #3516 link form stays a core-only change');
+    } else {
+      fail('web tracker reader now maps the URL column: the markdown-link cell form (#3516) must be taught to it in lockstep, or the cell must go back to a raw URL');
+    }
+  } else {
+    console.log('   ⏭️  web/ not present (core-only install) — skipping the web URL-column boundary check');
+  }
+
   // 55.2 scan-history.tsv header prefix (lib/scan-history-columns.mjs, the
   // scanner's header and row order → web whats-new + first_seen map)
   const { SCAN_HISTORY_COLUMNS: scanHistoryColumns } = await import(pathToFileURL(join(ROOT, 'lib/scan-history-columns.mjs')).href);
@@ -16372,7 +16448,7 @@ try {
   // 55.3b below reads states.yml dynamically, so it inherits any such loss
   // instead of catching it: with `hired` removed both checks went green while
   // set-status.mjs would reject the terminal-success state as invalid.
-  const CANONICAL_STATE_IDS = ['evaluated', 'applied', 'responded', 'interview', 'offer', 'hired', 'rejected', 'discarded', 'skip'];
+  const CANONICAL_STATE_IDS = ['evaluated', 'applied', 'responded', 'assessment', 'interview', 'offer', 'hired', 'rejected', 'discarded', 'skip'];
   const missingStates = CANONICAL_STATE_IDS.filter((s) => !new RegExp(`^  - id: ${s}$`, 'm').test(statesSrc));
   if (missingStates.length === 0) {
     pass('templates/states.yml keeps every canonical status id (new ids may be appended)');
@@ -16381,7 +16457,7 @@ try {
   }
 
   // 55.3b Every web status list must carry every canonical state. states.yml is
-  // the source of truth; the web keeps SIX hardcoded copies (title-case canonical
+  // the source of truth; the web keeps FOUR hardcoded copies (title-case canonical
   // lists + UPPERCASE tab/stage lists). `Hired` (#2050) had silently drifted out
   // of ALL of them — a landed job was unsettable, uncounted in the funnel, and a
   // gray "unknown" dot (#2249). Cross-check each so a future core state can't
@@ -16393,7 +16469,8 @@ try {
     { file: 'web/src/app/actions/registry.ts', re: /CANON_STATUS\s*=\s*\[([\s\S]*?)\]/, upper: false, exclude: [] },
     { file: 'web/src/app/actions/registry.ts', re: /TAB_VALUES\s*=\s*\[([\s\S]*?)\]/, upper: true, exclude: [] },
     { file: 'web/src/components/pipeline-view.tsx', re: /TABS\s*=\s*\[([\s\S]*?)\]/, upper: true, exclude: [] },
-    { file: 'web/src/app/analytics/page.tsx', re: /STAGES[^=]*=\s*\[([\s\S]*?)\];/, upper: true, exclude: ['SKIP'] },
+    // Analytics now derives its funnel from canonStatus in analytics-metrics;
+    // it no longer owns a hardcoded status-list copy to keep in sync.
     // The states ACL used to be checked here too. It moved to its own block
     // below, because it now has TWO valid shapes and this table only knows one.
   ];
@@ -16734,7 +16811,7 @@ try {
   //
   // In the REQUIRED suite on purpose: web-ci.yml is informative-only, so asserting
   // this only there would gate nothing. Importing is safe — these are
-  // dependency-free ESM modules and the root suite runs on Node >= 18.
+  // dependency-free ESM modules and the root suite runs on Node >= 22.13.
   const webLib = join(ROOT, 'web', 'src', 'lib');
   const runRoutePath = join(ROOT, 'web', 'src', 'app', 'api', 'run', 'route.ts');
   if (!existsSync(webLib)) {
@@ -17457,8 +17534,7 @@ try {
     { url: 'https://x.example/j/1', source: 'lever', title: 'Data Engineer', company: 'Acme', location: 'Remote', description: longJd },
     '2026-07-06',
   ));
-  if (/^[0-9a-f]{16}$/.test(withBody.fingerprint) && withBody.normalized_company === 'acme') {
-    pass('formatScanHistoryRow appends a fingerprint column for described offers');
+  if (/^[0-9a-f]{16}$/.test(withBody.fingerprint) && withBody.normalized_company === 'acme' && withBody.listing_key === '') {    pass('formatScanHistoryRow appends a fingerprint column for described offers');
   } else {
     fail(`formatScanHistoryRow row: fingerprint=${JSON.stringify(withBody.fingerprint)}, normalized_company=${JSON.stringify(withBody.normalized_company)}`);
   }
@@ -17466,8 +17542,7 @@ try {
     { url: 'https://x.example/j/2', source: 'greenhouse', title: 'Data Engineer', company: 'Acme', location: '' },
     '2026-07-06',
   ));
-  if (withoutBody.fingerprint === '' && withoutBody.normalized_company === 'acme') {
-    pass('formatScanHistoryRow leaves the fingerprint empty when no description is available');
+  if (withoutBody.fingerprint === '' && withoutBody.normalized_company === 'acme' && withoutBody.listing_key === '') {    pass('formatScanHistoryRow leaves the fingerprint empty when no description is available');
   } else {
     fail(`formatScanHistoryRow (no body) row: fingerprint=${JSON.stringify(withoutBody.fingerprint)}, normalized_company=${JSON.stringify(withoutBody.normalized_company)}`);
   }
