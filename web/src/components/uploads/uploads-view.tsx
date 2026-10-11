@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Upload, FileText, FolderOpen, Trash2, File } from "lucide-react";
+import { Upload, FileText, FolderOpen, Trash2, File, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -166,9 +166,18 @@ export function UploadsView() {
                 )}
               </div>
 
+              <a
+                href={`/api/uploads?id=${item.id}`}
+                download={item.originalName}
+                className="rounded p-2 text-muted hover:text-brand hover:bg-brand/10 transition-colors"
+                aria-label={`Download ${item.originalName}`}
+              >
+                <Download className="h-4 w-4" />
+              </a>
               <button
                 onClick={() => deleteUpload(item.id)}
                 className="rounded p-2 text-muted hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                aria-label={`Delete ${item.originalName}`}
               >
                 <Trash2 className="h-4 w-4" />
               </button>
@@ -201,7 +210,8 @@ function DropZone({
 
   return (
     <>
-      <div
+      <button
+        type="button"
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
         onDrop={(e) => {
@@ -212,7 +222,7 @@ function DropZone({
         }}
         onClick={() => inputRef.current?.click()}
         className={cn(
-          "cursor-pointer rounded-xl border-2 border-dashed p-8 text-center transition-colors",
+          "w-full cursor-pointer rounded-xl border-2 border-dashed p-8 text-center transition-colors",
           dragOver ? "border-brand bg-brand/5" : "border-border hover:border-brand/50",
         )}
       >
@@ -221,7 +231,7 @@ function DropZone({
           {uploading ? "Uploading..." : title}
         </p>
         <p className="mt-1 text-xs text-muted">{subtitle}</p>
-      </div>
+      </button>
       <input
         ref={inputRef}
         type="file"
@@ -230,6 +240,7 @@ function DropZone({
         onChange={(e) => {
           const file = e.target.files?.[0];
           if (file) onFile(file);
+          e.currentTarget.value = "";
         }}
       />
     </>
