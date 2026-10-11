@@ -4499,7 +4499,7 @@ async function main() {
         };
         newOffers.push(offerForVerification);
         if (verify) verifyDedupKeys.set(offerForVerification, {
-          key, baseKey, requisition, language,
+          key, baseKey, requisition, language, newLanguageVersion,
         });
       }
     } catch (err) {
@@ -4551,7 +4551,9 @@ async function main() {
     const acceptedOffers = [];
     for (const offer of verifiedOffers) {
       const keys = verifyDedupKeys.get(offer);
-      if (keys?.key !== null && keys?.key !== undefined && matchesSeenCompanyRole({
+      // A language version the URL check let through skips the role check
+      // here too, for the same reason as in the scan loop.
+      if (keys?.key !== null && keys?.key !== undefined && !keys.newLanguageVersion && matchesSeenCompanyRole({
         key: keys.key,
         baseKey: keys.baseKey,
         seen: seenCompanyRoles,
