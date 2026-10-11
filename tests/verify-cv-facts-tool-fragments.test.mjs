@@ -344,6 +344,19 @@ try {
   if (doubleEscaped.includes('&lt;Kubernetes&gt;')) pass('a double-escaped entity is decoded once');
   else fail(`a double-escaped entity was decoded twice: ${JSON.stringify(doubleEscaped)}`);
 
+  // A word that is an abbreviation, or a name joined to another by a slash, in
+  // a clause of four or more words.
+  passes('a slash between single letters is not a name',
+    '- Ran experiments using HubSpot.', '- Ran experiments using HubSpot and A/B splits on landing pages.');
+  passes('a dotted abbreviation in a clause is not a name',
+    '- Ran outreach using HubSpot.', '- Ran outreach using HubSpot to weekly regional sales U.S. lists.');
+  blocksOn('a dotted name joined to another by a slash is read as two names',
+    '- Built APIs using Node.js and AWS Lambda.', '- Built the API using Node.js/Express on AWS Lambda.', ['express']);
+  blocksOn('a name that opens with a dot is a name inside a clause',
+    '- Built services using C#.', '- Built services using .NET on Azure App Service.', ['.net', 'azure app service']);
+  passes('a backed dotted name and a backed name joined by a slash pass',
+    '- Built the API using Node.js and Express on AWS Lambda.', '- Built the API using Node.js/Express on AWS Lambda.');
+
   // The piece just after a bracket and the piece opening one are read by
   // their names only.
   passes('a lowercase word after a bracketed gloss is not a tool',

@@ -1936,36 +1936,34 @@ export function relativeImportSpecifiers(source) {
 // fallback files are appended defensively. This generalizes the previously
 // hardcoded checkout list so a future new top-level import can't reintroduce
 // the self-reexec ERR_MODULE_NOT_FOUND crash (issue #1245).
-function resolveReexecCheckout(ref, entry) {
+//
+// The fallback files are WALKED, not just appended: they are loaded by the target
+// updater too, so their own static imports must be on disk before the re-exec.
+// Appending them unwalked crashed the v1.35.0 → v1.36.0 jump, when cv-templates.mjs
+// gained `import … from './lib/template-manifest.mjs'` (#4999).
+//
+// `readAt(file)` returns the file's source in `ref` and throws when it is absent;
+// it is a seam so the closure rule is unit-testable without a repo.
+export function resolveReexecCheckout(ref, entry, readAt = (file) => git('show', `${ref}:${file}`)) {
   const visited = new Set();
-  const present = new Set();
   const order = [];
-  const stack = [entry];
+  // Popped last-in-first-out: the entry's closure first, then each fallback's, in list order.
+  const stack = [...REEXEC_FALLBACK_FILES].reverse();
+  stack.push(entry);
   while (stack.length) {
     const file = stack.pop();
     if (visited.has(file)) continue;
     visited.add(file);
     let source;
     try {
-      source = git('show', `${ref}:${file}`);
+      source = readAt(file);
     } catch {
-      continue; // absent in this ref — leave it to the normal update stage
+      continue; // absent in this ref (e.g. a fallback an older version lacks) — nothing to check out
     }
-    present.add(file);
     order.push(file);
     const dir = pathPosix.dirname(file);
     for (const spec of relativeImportSpecifiers(source)) {
       stack.push(pathPosix.join(dir, spec));
-    }
-  }
-  for (const file of REEXEC_FALLBACK_FILES) {
-    if (present.has(file)) continue;
-    try {
-      git('show', `${ref}:${file}`);
-      order.push(file);
-      present.add(file);
-    } catch {
-      // Not in the target tree (older version) — nothing to check out.
     }
   }
   return order;
