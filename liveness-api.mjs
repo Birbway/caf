@@ -39,8 +39,10 @@ import { atsVendorOf } from './ats-vendor.mjs';
 
 const TIMEOUT_MS = 8_000;
 // Strict path-segment charset. Anything with a slash, dot-dot, or other char is
-// rejected before it can reach the fixed-host API URL template.
-const SAFE_SEGMENT = /^[A-Za-z0-9._-]+$/;
+// rejected before it can reach the fixed-host API URL template. The one escape
+// allowed is %20, because some Ashby org slugs contain a space (#5018). A space
+// cannot end a segment or form a traversal; %2F and every other escape still fail.
+const SAFE_SEGMENT = /^(?:[A-Za-z0-9._-]|%20)+$/;
 
 // Most providers extract single path segments (SAFE_SEGMENT covers those directly).
 // Workday's job path is genuinely multi-segment (a location slug + a title slug,
