@@ -146,6 +146,19 @@ const METRIC_NOUNS = [
   'graduates', 'alumni', 'teachers', 'instructors', 'educators', 'faculty',
   'schools', 'districts', 'campuses', 'classrooms', 'programs', 'programmes',
   'workshops', 'assessments', 'exams',
+  // German (language.output: de / modes/de). Without these a German CV or cover
+  // letter produced no count claim at all and only got the coverage warning,
+  // so "45 Mitarbeiter" against a source saying 20 passed unchecked. Inflected
+  // forms are listed explicitly (no stemming) and folded to the English
+  // canonical noun in NOUN_SYNONYMS, so a German document checks against an
+  // English or German source alike. German TIME nouns (Tage, Jahre, ...) are
+  // deliberately left out: sources state durations as table cells ("Day
+  // Streak | 316") far more often than as "316 Tage", so adding them would fail
+  // truthful documents without catching the inflation class this gate targets.
+  'mitarbeiter', 'mitarbeitende', 'mitarbeitenden', 'kunden', 'projekte',
+  'projekten', 'standorte', 'standorten', 'zertifikate', 'zertifikaten',
+  'blogbeiträge', 'blogbeiträgen', 'beiträge', 'beiträgen', 'posts',
+  'werkzeuge', 'werkzeugen',
 ];
 // How many words may sit between a number and the noun it counts. The same
 // regex parses the generated CV and the sources, so the window is symmetric by
@@ -222,8 +235,14 @@ const COUNT_CLAIM_RE = new RegExp(
   // "ERC-4626 vaults" one of 4626 vaults. Without the lookbehind, a tailored
   // bullet that drops a word the source had inside the modifier window (so
   // the source yields no claim and the bullet does) fails the gate.
-  String.raw`(?<![A-Za-z]-)\b(\d[\d,.]*(?:[kKmMbB]\b|\s+(?:${SPELLED_MAGNITUDE_ALT})\b)?)\s*\+?\s*(?:[A-Za-z][A-Za-z-]*\s+){0,${MODIFIER_WINDOW}}?(${METRIC_NOUNS.join('|')})\b`,
-  'gi'
+  //
+  // Modifiers are any letters (\p{L}), not ASCII only, so German, French and
+  // Spanish modifiers with diacritics ("veröffentlichte") no longer end the
+  // window. `(?:[\p{L}\p{N}]+-)*` lets the counted noun close a hyphenated
+  // compound ("318 TryHackMe-Rooms"): German writes the modifier and the noun
+  // as one hyphenated token, which a whitespace-only window never saw.
+  String.raw`(?<![A-Za-z]-)\b(\d[\d,.]*(?:[kKmMbB]\b|\s+(?:${SPELLED_MAGNITUDE_ALT})\b)?)\s*\+?\s*(?:\p{L}[\p{L}\p{M}-]*\s+){0,${MODIFIER_WINDOW}}?(?:[\p{L}\p{N}]+-)*(${METRIC_NOUNS.join('|')})(?![\p{L}\p{N}])`,
+  'giu'
 );
 const NOUN_SYNONYMS = new Map([
   ['repos', 'repositories'],
@@ -236,6 +255,23 @@ const NOUN_SYNONYMS = new Map([
   // restating a source's "20 staff" is a paraphrase, not a fabrication.
   ['personnel', 'staff'],
   ['labs', 'laboratories'],
+  // German forms fold to the English canonical noun (see METRIC_NOUNS).
+  ['mitarbeiter', 'employees'],
+  ['mitarbeitende', 'employees'],
+  ['mitarbeitenden', 'employees'],
+  ['kunden', 'customers'],
+  ['projekte', 'projects'],
+  ['projekten', 'projects'],
+  ['standorte', 'locations'],
+  ['standorten', 'locations'],
+  ['zertifikate', 'certifications'],
+  ['zertifikaten', 'certifications'],
+  ['blogbeiträge', 'posts'],
+  ['blogbeiträgen', 'posts'],
+  ['beiträge', 'posts'],
+  ['beiträgen', 'posts'],
+  ['werkzeuge', 'tools'],
+  ['werkzeugen', 'tools'],
 ]);
 const SIMPLE_CLAIM_PATTERNS = [
   /\b\d+(?:\.\d+)?\s?%/g,
