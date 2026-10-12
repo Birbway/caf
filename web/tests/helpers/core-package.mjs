@@ -40,21 +40,68 @@ export function findCorePackage(pkg, fromDir) {
 }
 
 /**
- * Make one core dependency importable from `sandboxDir` by linking the installed
- * package into the sandbox's own node_modules.
+ * Copy an installed package into `dest` together with the packages it depends
+ * on, so the copy can load them from where it now sits.
  *
- * One package, not the whole tree: Node resolves the linked package's own
- * imports from its real location, so its dependencies come along without being
- * linked. 'junction' is the link type Windows grants without Developer Mode and
- * is ignored elsewhere; the copy is the last resort.
+ * A linked package needs none of this: Node resolves a module's imports from
+ * its real location, so whatever is installed beside the original stays in
+ * reach. A copy has only its own directory. Copying js-yaml alone leaves it
+ * unable to find argparse.
+ *
+ * Each dependency is resolved the way Node would resolve it for the original
+ * and placed in the copy's own node_modules, the first place Node looks from
+ * there. One installed nowhere is skipped: the original could not load it
+ * either. One already inside the package came along with the copy. `chain`
+ * stops a dependency cycle from recursing forever; the member it skips is an
+ * ancestor directory of the copy, where Node finds it.
+ *
+ * @param {string} source - The installed package directory.
+ * @param {string} dest - Where the copy goes.
+ * @param {Set<string>} [chain] - Real paths of the packages being copied above this one.
+ */
+function copyPackageWithDependencies(source, dest, chain = new Set()) {
+  // The real directory, not a link to it: copying a link would recreate the
+  // very thing this fallback runs because we could not make.
+  const real = fs.realpathSync(source);
+  fs.cpSync(real, dest, { recursive: true });
+  const within = new Set(chain).add(real);
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(path.join(real, "package.json"), "utf-8"));
+  } catch {
+    return;
+  }
+  for (const name of Object.keys({ ...manifest.optionalDependencies, ...manifest.dependencies })) {
+    const installed = findCorePackage(name, real);
+    if (installed === null) continue;
+    const depReal = fs.realpathSync(installed);
+    if (depReal.startsWith(real + path.sep) || within.has(depReal)) continue;
+    copyPackageWithDependencies(depReal, path.join(dest, "node_modules", name), within);
+  }
+}
+
+/**
+ * Make one core dependency importable from `sandboxDir` by putting the installed
+ * package in the sandbox's own node_modules.
+ *
+ * Linked when the platform allows it. One package is then enough: Node resolves
+ * the linked package's own imports from its real location, so its dependencies
+ * come along without being linked. 'junction' is the link type Windows grants
+ * without Developer Mode and is ignored elsewhere.
+ *
+ * Copied, with its dependencies, when no link can be made. A copy resolves from
+ * the sandbox, so the package alone would not load there.
  *
  * @param {string} sandboxDir - Directory the copied core module lives in.
  * @param {string} pkg - Package the copied module imports.
  * @param {string} fromDir - The core checkout the package is resolved for.
+ * @param {{ link?: (target: string, path: string, type: string) => void }} [options] -
+ *   `link` replaces the link primitive; a test passes one that throws to
+ *   exercise the copy.
  * @returns {string} Path to the package inside the sandbox.
  * @throws {Error} When the package is not installed anywhere Node would look.
  */
-export function linkCorePackage(sandboxDir, pkg, fromDir) {
+export function linkCorePackage(sandboxDir, pkg, fromDir, { link = fs.symlinkSync } = {}) {
   const source = findCorePackage(pkg, fromDir);
   if (source === null) {
     throw new Error(`${pkg} is not installed in any node_modules from ${fromDir} upward`);
@@ -62,9 +109,9 @@ export function linkCorePackage(sandboxDir, pkg, fromDir) {
   const dest = path.join(sandboxDir, "node_modules", pkg);
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   try {
-    fs.symlinkSync(source, dest, "junction");
+    link(source, dest, "junction");
   } catch {
-    fs.cpSync(source, dest, { recursive: true });
+    copyPackageWithDependencies(source, dest);
   }
   return dest;
 }

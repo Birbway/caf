@@ -21,10 +21,10 @@ import { findCorePackage, linkCorePackage } from "../helpers/core-package.mjs";
 function tree(t) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "core-package-")));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
-  const install = (dir, pkg, main = "export default 'x';") => {
+  const install = (dir, pkg, main = "export default 'x';", dependencies = {}) => {
     const at = path.join(base, dir, "node_modules", pkg);
     fs.mkdirSync(at, { recursive: true });
-    fs.writeFileSync(path.join(at, "package.json"), JSON.stringify({ name: pkg, type: "module", exports: "./index.js" }));
+    fs.writeFileSync(path.join(at, "package.json"), JSON.stringify({ name: pkg, type: "module", exports: "./index.js", dependencies }));
     fs.writeFileSync(path.join(at, "index.js"), main);
     return at;
   };
@@ -89,6 +89,55 @@ test("linkCorePackage: a module copied out of a worktree can import the package"
 
   const mod = await import(pathToFileURL(path.join(sandbox, "copied.mjs")).href);
   assert.equal(mod.default, "from the dependency");
+});
+
+// The copy path, forced. Where no link can be made the package is copied, and a
+// copy resolves from the sandbox, where the package's own dependency is not. A
+// copy of the package alone therefore failed to load.
+const refuseToLink = () => {
+  throw Object.assign(new Error("EPERM: operation not permitted, symlink"), { code: "EPERM" });
+};
+
+test("linkCorePackage: when linking is refused, the copied package still loads its own dependency", async (t) => {
+  const { install, dir } = tree(t);
+  install("main", "demo-dep", "export default 'from the dependency';");
+  install("main", "demo", "import dep from 'demo-dep'; export default dep;", { "demo-dep": "*" });
+  const worktree = dir("main/.claude/worktrees/wt");
+  const sandbox = dir("elsewhere/sandbox");
+  fs.writeFileSync(path.join(sandbox, "copied.mjs"), "export { default } from 'demo';");
+
+  const dest = linkCorePackage(sandbox, "demo", worktree, { link: refuseToLink });
+
+  const entry = fs.lstatSync(dest);
+  assert.equal(entry.isSymbolicLink(), false, "the copy path must not leave a link");
+  assert.equal(entry.isDirectory(), true);
+  const mod = await import(pathToFileURL(path.join(sandbox, "copied.mjs")).href);
+  assert.equal(mod.default, "from the dependency");
+});
+
+test("linkCorePackage: the copy follows a dependency chain, and a cycle does not hang it", async (t) => {
+  const { install, dir } = tree(t);
+  // a -> b -> c, and c -> a closes the loop.
+  install("main", "c", "export default 'c';", { a: "*" });
+  install("main", "b", "import c from 'c'; export default 'b>' + c;", { c: "*" });
+  install("main", "a", "import b from 'b'; export default 'a>' + b;", { b: "*" });
+  const sandbox = dir("elsewhere/sandbox");
+  fs.writeFileSync(path.join(sandbox, "copied.mjs"), "export { default } from 'a';");
+
+  linkCorePackage(sandbox, "a", dir("main/wt"), { link: refuseToLink });
+
+  const mod = await import(pathToFileURL(path.join(sandbox, "copied.mjs")).href);
+  assert.equal(mod.default, "a>b>c");
+});
+
+test("linkCorePackage: a dependency installed nowhere does not stop the copy", (t) => {
+  const { install, dir } = tree(t);
+  install("main", "demo", "export default 'x';", { "optional-for-another-platform": "*" });
+  const sandbox = dir("elsewhere/sandbox");
+
+  const dest = linkCorePackage(sandbox, "demo", dir("main/wt"), { link: refuseToLink });
+
+  assert.equal(fs.existsSync(path.join(dest, "package.json")), true);
 });
 
 test("linkCorePackage: says so when the package is not installed, and leaves no link", (t) => {

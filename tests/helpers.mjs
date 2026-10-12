@@ -2,9 +2,9 @@
 // Moved verbatim from test-all.mjs (issue #1440); no framework by design:
 // the suite must run on a fresh clone with only Node.
 import { execFileSync } from 'child_process';
-import { accessSync, constants, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync as _rmSync, statSync, symlinkSync, writeFileSync } from 'fs';
+import { accessSync, constants, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync as _rmSync, statSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { basename, join, dirname, resolve } from 'path';
+import { basename, join, dirname, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { isNestedCheckout, trackedFiles } from '../lib/mjs-files.mjs';
 import { localToday } from '../lib/local-today.mjs';
@@ -492,6 +492,78 @@ export function findInstalledPackage(pkgName, fromDir = ROOT) {
 }
 
 /**
+ * Copy an installed package into `dest` together with the packages it depends
+ * on, so the copy can load them from where it now sits.
+ *
+ * A LINKED package needs none of this: Node resolves a module's imports from
+ * its real location, so everything installed beside the original is still in
+ * reach. A COPY has only its own directory. Copying js-yaml alone leaves it
+ * unable to find argparse; the sandbox then dies with ERR_MODULE_NOT_FOUND,
+ * which reads as a failure of whatever the suite was testing.
+ *
+ * Each dependency is resolved the way Node would resolve it for the original
+ * (findInstalledPackage from the package's real path) and placed in the copy's
+ * own `node_modules`, the first place Node looks from there, so two packages
+ * that need different versions of a third cannot collide. One that is installed
+ * nowhere is skipped: the original could not load it either (an optional
+ * dependency for another platform). One already inside the package came along
+ * with the copy. `chain` stops a dependency cycle from recursing forever; the
+ * member it skips is an ancestor directory of the copy, where Node finds it.
+ *
+ * @param {string} source - The installed package directory.
+ * @param {string} dest - Where the copy goes.
+ * @param {Set<string>} [chain] - Real paths of the packages being copied above this one.
+ * @returns {void}
+ */
+function copyPackageWithDependencies(source, dest, chain = new Set()) {
+  // The real directory, not a link to it: a package manager may install a
+  // package as a symlink, and copying that would recreate the link this
+  // fallback exists because we could not make.
+  const real = realpathSync(source);
+  cpSync(real, dest, { recursive: true });
+  const within = new Set(chain).add(real);
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(join(real, 'package.json'), 'utf-8'));
+  } catch {
+    return;
+  }
+  for (const name of Object.keys({ ...manifest.optionalDependencies, ...manifest.dependencies })) {
+    const installed = findInstalledPackage(name, real);
+    if (installed === null) continue;
+    const depReal = realpathSync(installed);
+    if (depReal.startsWith(real + sep) || within.has(depReal)) continue;
+    copyPackageWithDependencies(depReal, join(dest, 'node_modules', name), within);
+  }
+}
+
+/**
+ * Put one installed package at `<nodeModulesDir>/<pkgName>`: a link when the
+ * platform allows one, otherwise a copy that carries its dependencies.
+ *
+ * 'junction' is ignored on POSIX, and on Windows it is the one link type
+ * granted without Developer Mode or elevation -- the privilege whose absence
+ * aborted a whole suite in #2828. The copy is the last resort.
+ *
+ * @param {string} nodeModulesDir - The sandbox's `node_modules` (created if absent).
+ * @param {string} pkgName - Package name, scoped names included.
+ * @param {string} source - The installed package directory.
+ * @param {(target: string, path: string, type: string) => void} [link] - Link
+ *   primitive; a test passes one that throws to exercise the copy.
+ * @returns {string} Path to the package inside the sandbox.
+ */
+function placePackage(nodeModulesDir, pkgName, source, link = symlinkSync) {
+  const dest = join(nodeModulesDir, pkgName);
+  mkdirSync(dirname(dest), { recursive: true });
+  try {
+    link(source, dest, 'junction');
+  } catch {
+    copyPackageWithDependencies(source, dest);
+  }
+  return dest;
+}
+
+/**
  * Make one of the repo's own dependencies resolvable from a sandbox Node cannot
  * reach `ROOT/node_modules` from.
  *
@@ -531,16 +603,7 @@ export function linkRepoPackage(sandboxDir, pkgName) {
   if (source === null) {
     throw new Error(`linkRepoPackage: ${pkgName} is not installed in any node_modules from ${ROOT} upward -- run npm install`);
   }
-  mkdirSync(dirname(dest), { recursive: true });
-  try {
-    // 'junction' is ignored on POSIX, and on Windows it is the one link type
-    // granted without Developer Mode or elevation -- the privilege whose absence
-    // aborted a whole suite in #2828. The copy below is the last resort.
-    symlinkSync(source, dest, 'junction');
-  } catch {
-    cpSync(source, dest, { recursive: true });
-  }
-  return dest;
+  return placePackage(join(sandboxDir, 'node_modules'), pkgName, source);
 }
 
 /**
@@ -726,43 +789,64 @@ export function codeMask(src) {
 export const isCodeRange = (isCode, from, to) => isCode.slice(from, to).every(Boolean);
 
 /**
- * The `node_modules` directory a checkout with none of its own actually runs
- * on, or null when there is none.
+ * Give a sandbox the packages a checkout with no `node_modules` of its own
+ * actually runs on, one link per package.
  *
  * A git worktree (for example one under `.claude/worktrees/<name>`) usually has
- * no `node_modules`: its scripts import fine because Node walks up into the main
- * checkout's tree. This finds that tree the way the scripts do, by resolving the
- * packages `<root>/package.json` declares (findInstalledPackage, nearest
- * first), and returns the nearest directory one of them resolves from.
+ * no `node_modules`: its scripts import fine because Node walks up into the
+ * main checkout's tree. Each package `<root>/package.json` declares is resolved
+ * the way those scripts resolve it (findInstalledPackage, nearest first) and
+ * linked into the sandbox's own `node_modules` from wherever it was found.
  *
- * Keyed on the declared dependencies rather than on the first `node_modules`
- * found on the way up, because an unrelated one is easy to have there (a stray
- * `~/node_modules` above a fresh clone). Linking that would hand the sandbox a
- * tree without the repo's packages, and the copied script would die with
- * ERR_MODULE_NOT_FOUND inside the caller's catch, which is the misattribution
- * linkNodeModules exists to prevent. No package.json, or none of its
- * dependencies installed anywhere above, is therefore "not installed".
+ * Per package, not one link to "the" inherited tree, because there may be more
+ * than one: Node resolves each specifier separately, so js-yaml can come from a
+ * nearer ancestor and undici from a farther one. A single link to the nearer
+ * tree left the sandbox unable to load the second package while the worktree
+ * loaded both, which is the false failure this fallback exists to remove.
  *
+ * Keyed on the declared dependencies rather than on whatever `node_modules`
+ * sits on the way up, because an unrelated one is easy to have there (a stray
+ * `~/node_modules` above a fresh clone). Nothing declared, or none of it
+ * installed anywhere above, is therefore "not installed". A package.json that
+ * is there and cannot be read is a different fault with a different remedy, and
+ * is reported as itself: `npm ci` does not fix a manifest that does not parse.
+ *
+ * @param {string} destDir - Sandbox directory to receive `node_modules/`.
  * @param {string} root - Checkout whose own `node_modules` is absent.
- * @returns {string|null} The inherited `node_modules` directory, or null.
+ * @param {Function} [link] - Link primitive, passed through to placePackage.
+ * @returns {string|null} null once linked; otherwise why it could not be.
  */
-function inheritedDependencyTree(root) {
-  let declared;
+function linkInheritedDependencies(destDir, root, link) {
+  const manifestPath = join(root, 'package.json');
+  let names = [];
+  let text = null;
   try {
-    declared = Object.keys(JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8')).dependencies ?? {});
-  } catch {
-    return null;
+    text = readFileSync(manifestPath, 'utf-8');
+  } catch (err) {
+    // Absent is the ordinary case (a fixture directory, a bare clone of
+    // something else) and means "declares nothing". Anything else is a manifest
+    // that exists and could not be read.
+    if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR') {
+      return `package.json at ${manifestPath} is unreadable (${err.code})`;
+    }
   }
-  let nearest = null;
-  for (const name of declared) {
-    const pkg = findInstalledPackage(name, root);
-    if (pkg === null) continue;
-    // Up past the package's own segments: one for `name`, two for `@scope/name`.
-    const tree = resolve(pkg, ...name.split('/').map(() => '..'));
-    // Every candidate is an ancestor's node_modules, so the longest is the nearest.
-    if (nearest === null || tree.length > nearest.length) nearest = tree;
+  if (text !== null) {
+    try {
+      const declared = JSON.parse(text)?.dependencies;
+      if (declared && typeof declared === 'object' && !Array.isArray(declared)) names = Object.keys(declared);
+    } catch (err) {
+      return `package.json at ${manifestPath} is not valid JSON (${err.message})`;
+    }
   }
-  return nearest;
+  const found = names
+    .map((name) => [name, findInstalledPackage(name, root)])
+    .filter(([, dir]) => dir !== null);
+  if (found.length === 0) {
+    return `node_modules is not installed at ${root} or in a parent directory -- run \`npm ci\` there`;
+  }
+  const nodeModules = join(destDir, 'node_modules');
+  for (const [name, dir] of found) placePackage(nodeModules, name, dir, link);
+  return null;
 }
 
 /**
@@ -784,9 +868,10 @@ function inheritedDependencyTree(root) {
  * script under test resolve their packages through the parent checkout's tree
  * by Node's upward walk. Reporting "not installed" there skipped (or, where the
  * caller throws on the reason, failed) suites whose dependencies were one
- * directory up. So when `root` has no tree of its own, the one it inherits is
- * linked instead (inheritedDependencyTree), the same position linkRepoPackage
- * takes for a single package.
+ * directory up. So when `root` has no tree of its own, the packages it
+ * inherits are linked instead, one by one (linkInheritedDependencies), the
+ * same position linkRepoPackage takes for a single package. The sandbox's
+ * `node_modules` is then a real directory holding those links, not one link.
  *
  * 'junction' on Windows, because a directory symlink needs
  * SeCreateSymbolicLinkPrivilege, which a normal shell lacks unless Developer
@@ -796,24 +881,23 @@ function inheritedDependencyTree(root) {
  *
  * @param {string} destDir - Sandbox directory to receive the node_modules link.
  * @param {string} [root=ROOT] - Repository root whose installed tree is linked:
- *   its own `node_modules`, or the one it inherits from a parent directory.
+ *   its own `node_modules`, or the packages it inherits from parent directories.
+ * @param {{link?: Function}} [options] - `link` replaces the link primitive for
+ *   the inherited packages; a test passes one that throws to exercise the copy.
  * @returns {string|null} null once linked; otherwise why it could not be.
  */
-export function linkNodeModules(destDir, root = ROOT) {
-  let target = join(root, 'node_modules');
+export function linkNodeModules(destDir, root = ROOT, { link } = {}) {
+  const target = join(root, 'node_modules');
   try {
     let stats;
     try {
       stats = statSync(target);
     } catch (err) {
-      // Only an ABSENT own tree falls back to the inherited one. Anything that
-      // is there and cannot be used (a loop, no permission) is still reported
-      // as itself below, never papered over with a parent's tree.
+      // Only an ABSENT own tree falls back to the inherited packages. Anything
+      // that is there and cannot be used (a loop, no permission) is still
+      // reported as itself below, never papered over with a parent's tree.
       if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR') throw err;
-      const inherited = inheritedDependencyTree(root);
-      if (inherited === null) throw err;
-      target = inherited;
-      stats = statSync(target);
+      return linkInheritedDependencies(destDir, root, link);
     }
     // isDirectory, because statSync succeeds on a regular FILE standing where the
     // tree belongs. Without this an executable one links cleanly and the sandbox

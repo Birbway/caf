@@ -106,15 +106,26 @@ try {
     // skip on the reason went quiet, and the one that throws on it failed,
     // while the code under test resolved its packages without trouble.
     {
-      // One parent directory per case, so no case can resolve another's tree.
-      const layout = (name, { installed = [], declared = null, own = null } = {}) => {
-        const parent = join(tmp, name);
+      // One base directory per case, so no case can resolve another's tree.
+      // `installed` goes in the nearer ancestor (the main checkout), `far` in
+      // one above it; an entry is a name, or { name, main, dependencies } for a
+      // package a test actually imports.
+      const install = (dir, entry, from) => {
+        const spec = typeof entry === 'string' ? { name: entry } : entry;
+        const at = join(dir, 'node_modules', spec.name);
+        mkdirSync(at, { recursive: true });
+        writeFileSync(join(at, 'package.json'), JSON.stringify({
+          name: spec.name, from, type: 'module', exports: './index.js', dependencies: spec.dependencies ?? {},
+        }), 'utf-8');
+        writeFileSync(join(at, 'index.js'), spec.main ?? `export default ${JSON.stringify(from)};`, 'utf-8');
+      };
+      const layout = (name, { installed = [], far = [], declared = null, own = null } = {}) => {
+        const base = join(tmp, name);
+        const parent = join(base, 'main');
         const root = join(parent, 'worktrees', 'wt');
         mkdirSync(root, { recursive: true });
-        for (const pkg of installed) {
-          mkdirSync(join(parent, 'node_modules', pkg), { recursive: true });
-          writeFileSync(join(parent, 'node_modules', pkg, 'package.json'), JSON.stringify({ name: pkg }), 'utf-8');
-        }
+        for (const pkg of installed) install(parent, pkg, 'near');
+        for (const pkg of far) install(base, pkg, 'far');
         if (declared) {
           writeFileSync(join(root, 'package.json'), JSON.stringify({ dependencies: Object.fromEntries(declared.map((d) => [d, '*'])) }), 'utf-8');
         }
@@ -126,8 +137,20 @@ try {
       const entryOf = (sandbox) => {
         try { lstatSync(join(sandbox, 'node_modules')); return 'present'; } catch (err) { return err.code; }
       };
+      const manifestOf = (sandbox, pkg) => JSON.parse(readFileSync(join(sandbox, 'node_modules', pkg, 'package.json'), 'utf-8'));
       const through = (sandbox, pkg) => {
-        try { return JSON.parse(readFileSync(join(sandbox, 'node_modules', pkg, 'package.json'), 'utf-8')).name; } catch (err) { return `unreadable: ${err.code}`; }
+        try { return manifestOf(sandbox, pkg).name; } catch (err) { return `unreadable: ${err.code}`; }
+      };
+      const originOf = (sandbox, pkg) => {
+        try { return manifestOf(sandbox, pkg).from; } catch (err) { return `unreadable: ${err.code}`; }
+      };
+      // What a script copied into the sandbox gets when it imports the package.
+      // One probe file per package: a module URL is imported once per process,
+      // so a shared probe would answer the second question with the first result.
+      const importFrom = async (sandbox, pkg) => {
+        const probe = join(sandbox, `probe-${pkg.replace(/[^a-z0-9-]/gi, '_')}.mjs`);
+        writeFileSync(probe, `export { default } from ${JSON.stringify(pkg)};`, 'utf-8');
+        try { return (await import(pathToFileURL(probe).href)).default; } catch (err) { return `import failed: ${err.code ?? err.message}`; }
       };
 
       {
@@ -149,6 +172,107 @@ try {
           pass('a scoped dependency still resolves to the node_modules directory, not to its scope folder');
         } else {
           fail(`scoped worktree layout: reason=${JSON.stringify(reason)}, read through the link: ${JSON.stringify(through(sandbox, '@demo/scoped'))}`);
+        }
+      }
+
+      // Dependencies in TWO ancestor trees. Node resolves each specifier on its
+      // own, so one package can come from the main checkout and another from a
+      // directory above it. One link to the nearer tree made the first loadable
+      // and the second not, while the worktree itself loaded both.
+      {
+        const { root, sandbox } = layout('wt-two-trees', { installed: ['near-pkg'], far: ['far-pkg'], declared: ['near-pkg', 'far-pkg'] });
+        const reason = linkNodeModules(sandbox, root);
+        const got = [await importFrom(sandbox, 'near-pkg'), await importFrom(sandbox, 'far-pkg')];
+        if (reason === null && got[0] === 'near' && got[1] === 'far') {
+          pass('dependencies spread over two ancestor trees are both importable from the sandbox');
+        } else {
+          fail(`two ancestor trees: reason=${JSON.stringify(reason)}, imports=${JSON.stringify(got)}`);
+        }
+      }
+
+      // The same package in both trees: the nearer one is what Node gives the
+      // worktree, so it is what the sandbox must get.
+      {
+        const { root, sandbox } = layout('wt-nearer-wins', { installed: ['demo-pkg'], far: ['demo-pkg'], declared: ['demo-pkg'] });
+        const reason = linkNodeModules(sandbox, root);
+        if (reason === null && originOf(sandbox, 'demo-pkg') === 'near') {
+          pass('a package installed in two ancestor trees is taken from the nearer one');
+        } else {
+          fail(`nearer wins: reason=${JSON.stringify(reason)}, linked from ${JSON.stringify(originOf(sandbox, 'demo-pkg'))}`);
+        }
+      }
+
+      // One declared dependency missing everywhere does not cost the sandbox the
+      // ones that are installed: the worktree's own scripts are in the same state.
+      {
+        const { root, sandbox } = layout('wt-partial', { installed: ['demo-pkg'], declared: ['demo-pkg', 'never-installed-pkg'] });
+        const reason = linkNodeModules(sandbox, root);
+        if (reason === null && through(sandbox, 'demo-pkg') === 'demo-pkg' && through(sandbox, 'never-installed-pkg') === 'unreadable: ENOENT') {
+          pass('the installed dependencies are linked when another declared one is installed nowhere');
+        } else {
+          fail(`partial install: reason=${JSON.stringify(reason)}, demo-pkg=${JSON.stringify(through(sandbox, 'demo-pkg'))}`);
+        }
+      }
+
+      // A linked package keeps loading its OWN dependencies, which the checkout
+      // does not declare and the sandbox does not link: Node resolves them from
+      // the package's real location.
+      const withDependency = {
+        installed: [
+          { name: 'demo-dep', main: "export default 'from the dependency';" },
+          { name: 'demo-pkg', main: "import dep from 'demo-dep'; export default dep;", dependencies: { 'demo-dep': '*' } },
+        ],
+        declared: ['demo-pkg'],
+      };
+      {
+        const { root, sandbox } = layout('wt-transitive-link', withDependency);
+        const reason = linkNodeModules(sandbox, root);
+        const got = await importFrom(sandbox, 'demo-pkg');
+        if (reason === null && got === 'from the dependency' && through(sandbox, 'demo-dep') === 'unreadable: ENOENT') {
+          pass('a linked package resolves its own dependency without that dependency being linked');
+        } else {
+          fail(`transitive (link): reason=${JSON.stringify(reason)}, import=${JSON.stringify(got)}`);
+        }
+      }
+
+      // The copy path, forced. Where no link can be made the package is copied,
+      // and a copy resolves from the sandbox, where its dependency is not. The
+      // dependency has to come with it.
+      {
+        const { root, sandbox } = layout('wt-transitive-copy', withDependency);
+        let attempts = 0;
+        const refuse = () => { attempts++; throw Object.assign(new Error('EPERM: operation not permitted, symlink'), { code: 'EPERM' }); };
+        const reason = linkNodeModules(sandbox, root, { link: refuse });
+        const got = await importFrom(sandbox, 'demo-pkg');
+        const copied = lstatSync(join(sandbox, 'node_modules', 'demo-pkg'));
+        if (reason === null && attempts === 1 && copied.isDirectory() && !copied.isSymbolicLink() && got === 'from the dependency') {
+          pass('when linking is refused, the copied package still loads its own dependency');
+        } else {
+          fail(`transitive (copy): reason=${JSON.stringify(reason)}, link attempts=${attempts}, symlink=${copied.isSymbolicLink()}, import=${JSON.stringify(got)}`);
+        }
+      }
+
+      // A package.json that is there and cannot be used is not "dependencies not
+      // installed": `npm ci` is the wrong advice for a manifest that does not
+      // parse, and following it would change nothing.
+      {
+        const { root, sandbox } = layout('wt-bad-manifest', { installed: ['demo-pkg'] });
+        writeFileSync(join(root, 'package.json'), '{ "dependencies": { "demo-pkg": ', 'utf-8');
+        const reason = linkNodeModules(sandbox, root);
+        if (typeof reason === 'string' && /package\.json/.test(reason) && /not valid JSON/.test(reason) && !/npm ci/.test(reason) && entryOf(sandbox) === 'ENOENT') {
+          pass('an unparseable package.json is reported as that, not as missing dependencies');
+        } else {
+          fail(`unparseable manifest: reason=${JSON.stringify(reason)}, lstat: ${entryOf(sandbox)}`);
+        }
+      }
+      {
+        const { root, sandbox } = layout('wt-manifest-is-dir', { installed: ['demo-pkg'] });
+        mkdirSync(join(root, 'package.json'));
+        const reason = linkNodeModules(sandbox, root);
+        if (typeof reason === 'string' && /package\.json/.test(reason) && /unreadable \(E[A-Z]+\)/.test(reason) && !/npm ci/.test(reason) && entryOf(sandbox) === 'ENOENT') {
+          pass('a package.json that cannot be read is reported with its errno, not as missing dependencies');
+        } else {
+          fail(`unreadable manifest: reason=${JSON.stringify(reason)}, lstat: ${entryOf(sandbox)}`);
         }
       }
 
