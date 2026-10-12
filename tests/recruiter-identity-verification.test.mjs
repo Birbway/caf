@@ -32,7 +32,8 @@ check(
 check(
   'checks without a query budget mark missing evidence Unknown, not Concerning',
   /Checks \(b\), \(c\) and \(e\) spend no queries/.test(signal)
-    && /never Concerning on absence of evidence alone/.test(signal),
+    && /never Concerning on absence of evidence alone/.test(signal)
+    && /Absence from a list that does not claim to be complete is Unknown/.test(signal),
   'Unknown rule for (b), (c), (e) is missing',
 );
 check(
