@@ -16,6 +16,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Under Git Bash / MSYS, pwd gives a POSIX path (/c/...). Node is a native
+# Windows binary and gets it unconverted when MSYS path conversion is off
+# (MSYS_NO_PATHCONV=1), so every `node "$PROJECT_DIR/..."` call failed with
+# MODULE_NOT_FOUND (#4910). cygpath -m yields C:/... which both bash and node
+# resolve, as for jd_file below.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) command -v cygpath >/dev/null 2>&1 && PROJECT_DIR="$(cygpath -m "$PROJECT_DIR")" ;;
+esac
 BATCH_DIR="$SCRIPT_DIR"
 INPUT_FILE="$BATCH_DIR/batch-input.tsv"
 STATE_FILE="$BATCH_DIR/batch-state.tsv"
