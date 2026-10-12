@@ -5,6 +5,7 @@ import * as yaml from "js-yaml";
 import { careerOpsRoot, rootScript } from "@/lib/career-ops";
 import { writeTempPortals, cleanupTempPortals } from "./portals";
 import { profileTargetKeywords } from "@/lib/profile-keywords.mjs";
+import { getProfilePath } from "@/lib/core/profile-path.mjs";
 import { titleFit } from "@/lib/title-fit.mjs";
 import { resolveScanTimeoutMs, scanTimeoutMessage } from "./scan-timeout.mjs";
 import { ATS_LABEL, ATS_SOURCES, type AtsSource, type DiscoveredOffer, type ExploreFilters, type FitBand, type ScanEvent } from "@/lib/explore";
@@ -53,7 +54,7 @@ function firstMatch(title: string, positives: string[]): string | undefined {
  */
 export function loadProfileTargets(): string[] {
   try {
-    const doc = yaml.load(fs.readFileSync(path.join(careerOpsRoot(), "config", "profile.yml"), "utf8"));
+    const doc = yaml.load(fs.readFileSync(getProfilePath(careerOpsRoot()), "utf8"));
     return profileTargetKeywords(doc && typeof doc === "object" ? (doc as Record<string, unknown>) : null);
   } catch {
     return [];
@@ -160,7 +161,7 @@ type ScanJson = {
 // the default (a broken config must not block scanning).
 export function readScanTimeoutMs(): number {
   try {
-    const parsed = yaml.load(fs.readFileSync(path.join(careerOpsRoot(), "config", "profile.yml"), "utf8"));
+    const parsed = yaml.load(fs.readFileSync(getProfilePath(careerOpsRoot()), "utf8"));
     return resolveScanTimeoutMs(parsed);
   } catch {
     return resolveScanTimeoutMs(undefined);
