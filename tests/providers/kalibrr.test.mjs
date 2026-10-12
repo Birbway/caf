@@ -429,19 +429,32 @@ try {
   if (threw) pass('kalibrr.fetch() throws on an unexpected API response shape');
   else fail('kalibrr.fetch() should throw when the jobs array is absent');
 
-  // SSRF allowlist runs before any network call.
-  let guardThrew = false;
-  let called = false;
-  try {
-    await kalibrr.fetch(
-      { name: 'X', provider: 'kalibrr', api: 'https://evil.example.com/kjs/job_board/search' },
-      { fetchJson: async () => { called = true; return { count: 0, jobs: [] }; } },
-    );
-  } catch (e) {
-    guardThrew = /untrusted hostname/.test(e.message);
+  // SSRF allowlist runs before any network call. The cases are chosen to be
+  // mutation-sensitive: a fully-disjoint host (`evil.example.com`) is rejected
+  // by an exact-equality check AND by a weakened suffix check, so on its own it
+  // cannot tell the two apart. `evilwww.kalibrr.com` and `x.www.kalibrr.com`
+  // are both accepted by `.endsWith('www.kalibrr.com')` and rejected only by
+  // exact equality, and the scheme case keeps the HTTPS-only check load-bearing.
+  for (const [label, api] of [
+    ['a fully-disjoint host', 'https://evil.example.com/kjs/job_board/search'],
+    ['a host that merely ends with the trusted name', 'https://evilwww.kalibrr.com/kjs/job_board/search'],
+    ['a subdomain of the trusted name', 'https://x.www.kalibrr.com/kjs/job_board/search'],
+    ['the trusted name as a prefix of another host', 'https://www.kalibrr.com.evil.example.com/kjs/job_board/search'],
+    ['a plain-HTTP trusted host', 'http://www.kalibrr.com/kjs/job_board/search'],
+  ]) {
+    let guardThrew = false;
+    let fetched = false;
+    try {
+      await kalibrr.fetch(
+        { name: 'X', provider: 'kalibrr', api },
+        { fetchJson: async () => { fetched = true; return { count: 0, jobs: [] }; } },
+      );
+    } catch (e) {
+      guardThrew = /untrusted hostname|must use HTTPS/.test(e.message);
+    }
+    if (guardThrew && !fetched) pass(`kalibrr.fetch() rejects ${label} before fetching`);
+    else fail(`kalibrr.fetch() host guard for ${label}: threw=${guardThrew} fetched=${fetched}`);
   }
-  if (guardThrew && !called) pass('kalibrr.fetch() rejects an untrusted api host before fetching');
-  else fail(`kalibrr.fetch() host guard: threw=${guardThrew} fetched=${called}`);
 } catch (e) {
   fail(`kalibrr suite crashed: ${e.message}`);
 }

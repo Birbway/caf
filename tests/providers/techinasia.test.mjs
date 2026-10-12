@@ -485,6 +485,48 @@ try {
   );
   if (overrideText === 0) pass('techinasia.fetch() skips discovery when the entry supplies credentials');
   else fail(`techinasia.fetch() made ${overrideText} discovery request(s) despite an override`);
+
+  // ── Host-derivation guards: the credentials are entry-overridable, so a
+  //    hostile value must be refused BEFORE any request. The override test above
+  //    only positively pins the good host, so without these cases the appId
+  //    charset gate, its length bound and the key check are all free to be
+  //    deleted without reddening anything. `evil_host` is chosen so the fixed
+  //    `-dsn.algolia.net` suffix survives intact and the host would still
+  //    resolve: only the charset gate stops it.
+  for (const [label, override] of [
+    ['an appId carrying path/query/fragment characters', { appId: 'evil.com/x#', apiKey: 'a'.repeat(32) }],
+    ['an appId outside the allowed charset', { appId: 'evil_host', apiKey: 'a'.repeat(32) }],
+    ['an over-long appId', { appId: 'a'.repeat(17), apiKey: 'a'.repeat(32) }],
+    ['a hostile apiKey', { appId: 'ABCDEF123456', apiKey: 'x/../y?z' }],
+  ]) {
+    let guardThrew = false;
+    let requested = false;
+    try {
+      await techinasia.fetch(
+        { name: 'X', provider: 'techinasia', techinasia: override },
+        {
+          fetchText: async () => { requested = true; return ''; },
+          fetchJson: async () => { requested = true; return { results: [{ hits: [], nbPages: 1 }] }; },
+        },
+      );
+    } catch (e) {
+      guardThrew = /app id|key shape|untrusted/i.test(e.message);
+    }
+    if (guardThrew && !requested) pass(`techinasia.fetch() refuses ${label} before any request`);
+    else fail(`techinasia.fetch() ${label}: threw=${guardThrew} requested=${requested}`);
+  }
+
+  // The app bundle path is rebuilt on a fixed host, so an off-host reference in
+  // the served HTML must not be followed: dropping the host from
+  // findAppAssetPath's pattern would otherwise survive.
+  let offHostThrew = false;
+  try {
+    findAppAssetPath('<script src="//evil.example/assets/v5/app.a8ccb8ea.js"></script>');
+  } catch (e) {
+    offHostThrew = /could not find the app bundle/.test(e.message);
+  }
+  if (offHostThrew) pass('findAppAssetPath() ignores an off-host app bundle reference');
+  else fail('findAppAssetPath() should not accept an off-host bundle reference');
 } catch (e) {
   fail(`techinasia suite crashed: ${e.message}`);
 }
