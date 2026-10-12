@@ -126,12 +126,9 @@ try {
   const EXEMPT = new Set(['path-resolver.mjs', 'career-profile.mjs']);
   const PENDING = new Set([
     'browser-extract.mjs',
-    'check-table-freshness.mjs',
     'providers/_profile-keywords.mjs',
-    'salary-gap.mjs',
     'scripts/export-ats-text.mjs',
     'update-system.mjs',
-    'upskill.mjs',
   ]);
   const HAND_BUILT = [
     /process\.env\.CAREER_OPS_PROFILE/,
