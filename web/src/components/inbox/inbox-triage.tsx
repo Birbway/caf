@@ -31,6 +31,7 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
   // Serialize skip/undo per URL so a fast Undo cannot lose the race to Skip.
   const skipChain = useRef(new Map<string, Promise<void>>());
   const undoRunning = useRef(new Set<UndoNotice["fn"]>());
+  const restoreRunning = useRef(false);
 
   // facets
   const [within, setWithin] = useState<number | null>(null);
@@ -46,6 +47,7 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [undo, setUndo] = useState<UndoNotice | null>(null);
   const [writeError, setWriteError] = useState("");
+  const [restoring, setRestoring] = useState(false);
   const [hasCli, setHasCli] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
@@ -185,26 +187,37 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
   const skip = (job: InboxJob) => {
     setWriteError("");
     setHidden((h) => (h.includes(job.url) ? h : [...h, job.url]));
+    let undoRequested = false;
     const notice: UndoNotice = {
       label: `Skipped ${job.company}`,
       fn: async () => {
+        undoRequested = true;
         await persistSkip(job.url, false);
         setHidden((h) => h.filter((u) => u !== job.url));
       },
     };
     setUndo(notice);
     void persistSkip(job.url, true).catch(() => {
+      if (undoRequested) return;
       setHidden((h) => h.filter((u) => u !== job.url));
       setUndo((current) => current?.fn === notice.fn && !current.busy ? null : current);
       setWriteError(`Could not skip ${job.company}. Please try Skip again.`);
     });
   };
-  const restoreHidden = () => {
+  const restoreHidden = async () => {
+    if (restoreRunning.current) return;
+    restoreRunning.current = true;
+    setRestoring(true);
     const urls = hidden;
     setWriteError("");
-    for (const url of urls) void persistSkip(url, false).then(() => {
-      setHidden((h) => h.filter((u) => u !== url));
-    }).catch(() => setWriteError("Some jobs could not be restored. Try restore again."));
+    try {
+      await Promise.all(urls.map((url) => persistSkip(url, false).then(() => {
+        setHidden((h) => h.filter((u) => u !== url));
+      }).catch(() => setWriteError("Some jobs could not be restored. Try restore again."))));
+    } finally {
+      restoreRunning.current = false;
+      setRestoring(false);
+    }
   };
   const toggleSelect = (url: string) =>
     setSelected((s) => {
@@ -264,8 +277,8 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
           {capped ? "Fresh — worth a look" : anyFacet ? `${filtered.length} match${filtered.length === 1 ? "" : "es"}` : "All roles"}
         </p>
         {hiddenCount > 0 && (
-          <button type="button" onClick={restoreHidden} className="text-xs text-faint transition-colors hover:text-foreground">
-            {hiddenCount} hidden · restore
+          <button type="button" onClick={() => void restoreHidden()} disabled={restoring} aria-busy={restoring} className="text-xs text-faint transition-colors hover:text-foreground disabled:opacity-50 max-sm:min-h-[44px]">
+            {hiddenCount} hidden · {restoring ? "restoring…" : "restore"}
           </button>
         )}
       </div>

@@ -27,6 +27,7 @@ test("Inbox Undo remains retryable after failure", { skip: !url || !root, timeou
   const row = (company) => page.locator("li").filter({ hasText: company });
   const undo = () => page.getByRole("button", { name: "Undo", exact: true });
   const retry = () => page.getByRole("button", { name: "Retry undo", exact: true });
+  const writeAlerts = () => page.getByRole("alert").filter({ hasText: /Could not skip|Some jobs could not be restored|Fixture .* busy/ });
   async function until(check) {
     const start = Date.now();
     while (!await check()) {
@@ -82,5 +83,96 @@ test("Inbox Undo remains retryable after failure", { skip: !url || !root, timeou
   assert.equal(await undo().evaluate((el) => el.getBoundingClientRect().height >= 44), true);
   await undo().click();
   await row("Fixture Beta").getByTitle("Skip — hide from the inbox").waitFor();
+
+  async function resetInbox() {
+    for (const company of ["alpha", "beta"]) {
+      const response = await page.request.post(`${origin.origin}/api/inbox/skip`, { data: { url: `https://example.com/fixture-${company}`, done: false } });
+      assert.equal(response.ok(), true);
+    }
+    await page.evaluate(() => localStorage.removeItem("career-ops:hidden"));
+    await page.reload();
+    await row("Fixture Alpha").getByTitle("Skip — hide from the inbox").waitFor();
+  }
+
+  await t.test("a failed Skip cannot replace the feedback for a requested Undo", async () => {
+    await resetInbox();
+    await page.setViewportSize({ width: 1280, height: 900 });
+    let releaseSkip;
+    let releaseUndo;
+    const skipGate = new Promise((resolve) => { releaseSkip = resolve; });
+    const undoGate = new Promise((resolve) => { releaseUndo = resolve; });
+    release = () => { releaseSkip(); releaseUndo(); };
+    let undoRequests = 0;
+    await page.route("**/api/inbox/skip", async (route) => {
+      if (route.request().postDataJSON().done) {
+        await skipGate;
+        return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Fixture skip busy" }) });
+      }
+      undoRequests++;
+      await undoGate;
+      await route.continue();
+    });
+    try {
+      await row("Fixture Alpha").getByTitle("Skip — hide from the inbox").click();
+      await undo().click();
+      releaseSkip();
+      await until(() => undoRequests === 1);
+      await page.waitForTimeout(100); // let the Skip rejection render while Undo is held
+      assert.equal(await writeAlerts().count(), 0);
+      assert.equal(await row("Fixture Alpha").count(), 0);
+      releaseUndo();
+      await row("Fixture Alpha").getByTitle("Skip — hide from the inbox").waitFor();
+      assert.equal(await writeAlerts().count(), 0);
+      assert.equal(await undo().count(), 0);
+      assert.equal(undoRequests, 1);
+    } finally {
+      release();
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
+
+  await t.test("Restore ignores repeated clicks and allows retry after a partial failure", async () => {
+    await resetInbox();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => localStorage.setItem("career-ops:hidden", JSON.stringify([
+      "https://example.com/fixture-alpha", "https://example.com/fixture-beta",
+    ])));
+    await page.reload();
+    const restore = page.getByRole("button", { name: "2 hidden · restore", exact: true });
+    await restore.waitFor();
+    const restoreGate = new Promise((resolve) => { release = resolve; });
+    let requests = 0;
+    await page.route("**/api/inbox/skip", async (route) => {
+      requests++;
+      await restoreGate;
+      if (route.request().postDataJSON().url.endsWith("fixture-beta")) {
+        return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Fixture restore busy" }) });
+      }
+      await route.continue();
+    });
+    try {
+      await restore.evaluate((button) => { button.click(); button.click(); button.click(); });
+      const restoring = page.getByRole("button", { name: /hidden · restoring/ });
+      await restoring.waitFor();
+      assert.equal(await restoring.isDisabled(), true);
+      assert.equal(await restoring.getAttribute("aria-busy"), "true");
+      await until(() => requests === 2);
+      release();
+      const remaining = page.getByRole("button", { name: "1 hidden · restore", exact: true });
+      await remaining.waitFor();
+      assert.equal(await remaining.isEnabled(), true);
+      assert.equal(requests, 2);
+      await page.getByRole("alert").filter({ hasText: "Some jobs could not be restored" }).waitFor();
+      await row("Fixture Alpha").getByTitle("Skip — hide from the inbox").waitFor();
+      assert.equal(await row("Fixture Beta").count(), 0);
+      await page.unrouteAll({ behavior: "wait" });
+      await remaining.click();
+      await row("Fixture Beta").getByTitle("Skip — hide from the inbox").waitFor();
+      assert.equal(await writeAlerts().count(), 0);
+    } finally {
+      release();
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
   assert.deepEqual(errors, []);
 });
