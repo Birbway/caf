@@ -809,6 +809,25 @@ reserve_report_num() {
   run_with_state_lock reserve_report_num_unlocked "$@"
 }
 
+# Succeed if reports/ holds a real report for this number. The reservation
+# sentinel ({num}-RESERVED.md) never counts: reserve-report-num.mjs creates it
+# before the worker runs, so counting it would mark a no-op worker completed.
+#
+# A plain glob loop, not `compgen -G`: compgen exists only when bash is built
+# with programmable completion, and some distro builds (NixOS among them) omit
+# it from non-interactive shells. There, compgen fails, the check sees no
+# report, and every worker is recorded as failed even though its report is on
+# disk. merge-tracker.mjs then refuses those reports as possibly fabricated.
+has_report_file() {
+  local report_num="$1" f
+  for f in "$REPORTS_DIR/${report_num}"-*.md; do
+    [[ -e "$f" ]] || continue
+    [[ "$f" == *-RESERVED.md ]] && continue
+    return 0
+  done
+  return 1
+}
+
 # Retry wrapper — same rationale as update_state_retrying above. A bare
 # `x=$(reserve_report_num ...)` under `set -e` kills the worker subshell
 # silently on a single lock-timeout; this retries and logs instead.
@@ -1287,9 +1306,7 @@ process_offer() {
     # report: it is created before the worker runs, so an unfiltered glob
     # matches it and the guard is defeated every single time (found 2026-09-22:
     # 16 no-op workers recorded as "completed" with score "-").
-    local report_files
-    report_files=$(compgen -G "$REPORTS_DIR/${report_num}-*.md" 2>/dev/null | grep -vE -- '-RESERVED\.md$' || true)
-    if [[ -z "$report_files" ]]; then
+    if ! has_report_file "$report_num"; then
       if (( retries < MAX_RETRIES )); then
         retries=$((retries + 1))
       fi
