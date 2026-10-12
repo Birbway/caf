@@ -276,3 +276,10 @@ test("a file that is not valid UTF-8 is refused, not re-encoded", (t) => {
   assert.throws(() => savePersonalization({ dataRoot, codeRoot, patch: { compTargets: "c" }, write: atomicWriteWithBackup }), UnsureProfileParseError);
   assert.ok(readFileSync(file).equals(bytes));
 });
+
+test("template comparison strips comments until none is left", () => {
+  // One pass over a nested opener leaves a new `<!--` behind (CodeQL js/incomplete-multi-character-sanitization).
+  const tpl = "## Your Comp Targets\n\n<!-- hint -->\n\nbody\n";
+  const user = "## Your Comp Targets\n\n<!<!-- a -->-- b -->\n\nbody\n";
+  assert.equal(sectionState(user, tpl).find((s) => s.id === "compTargets").state, "template");
+});

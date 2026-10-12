@@ -161,7 +161,14 @@ export function scanHeadings(text) {
 
 /** Normalize a body for template comparison: drop HTML comments + whitespace noise. */
 function normBody(body) {
-  return String(body ?? "").replace(/<!--[\s\S]*?-->/g, "").replace(/\s+/g, " ").trim();
+  let s = String(body ?? "");
+  // Until stable: one pass over `<!<!-- a -->-- b -->` leaves a fresh `<!--` behind.
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(/<!--[\s\S]*?-->/g, "");
+  } while (s !== prev);
+  return s.replace(/\s+/g, " ").trim();
 }
 
 /** `## ` sections of a document as [heading, normalized body] pairs. */
