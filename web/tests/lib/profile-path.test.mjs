@@ -48,3 +48,57 @@ test("reads process.env by default", () => {
     else process.env.CAREER_OPS_PROFILE = prev;
   }
 });
+
+// A relative CAREER_OPS_PROFILE resolves against the codebase root (the checkout
+// containing web/), like CAREER_OPS_ROOT, never against the working directory.
+// Mirrors the documented contract of the core's getProfilePath().
+const CODE = path.resolve("/fixture/checkout");
+
+test("relative override resolves against the codebase root", () => {
+  assert.equal(
+    getProfilePath(ROOT, { codeRoot: CODE, env: { CAREER_OPS_PROFILE: "profiles/me.yml" } }),
+    path.join(CODE, "profiles", "me.yml"),
+  );
+});
+
+test("absolute override passes through unchanged whatever the codebase root", () => {
+  assert.equal(getProfilePath(ROOT, { codeRoot: CODE, env: { CAREER_OPS_PROFILE: OVERRIDE } }), OVERRIDE);
+});
+
+test("relative override ignores the working directory (cwd = <checkout>/web, as under next)", async () => {
+  const { fileURLToPath } = await import("node:url");
+  const checkout = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+  const prev = { cwd: process.cwd(), profile: process.env.CAREER_OPS_PROFILE, code: process.env.CAREER_OPS_CODE_ROOT };
+  process.chdir(path.join(checkout, "web"));
+  process.env.CAREER_OPS_PROFILE = "profiles/me.yml";
+  delete process.env.CAREER_OPS_CODE_ROOT;
+  try {
+    assert.equal(getProfilePath(ROOT), path.join(checkout, "profiles", "me.yml"));
+  } finally {
+    process.chdir(prev.cwd);
+    for (const [k, v] of [["CAREER_OPS_PROFILE", prev.profile], ["CAREER_OPS_CODE_ROOT", prev.code]]) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});
+
+test("relative override with an unrelated cwd still hits the configured codebase root", async () => {
+  const os = await import("node:os");
+  const fs = await import("node:fs");
+  const elsewhere = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "profile-path-cwd-")));
+  const prev = { cwd: process.cwd(), profile: process.env.CAREER_OPS_PROFILE, code: process.env.CAREER_OPS_CODE_ROOT };
+  process.chdir(elsewhere);
+  process.env.CAREER_OPS_PROFILE = "profiles/me.yml";
+  process.env.CAREER_OPS_CODE_ROOT = CODE;
+  try {
+    assert.equal(getProfilePath(ROOT), path.join(CODE, "profiles", "me.yml"));
+  } finally {
+    process.chdir(prev.cwd);
+    for (const [k, v] of [["CAREER_OPS_PROFILE", prev.profile], ["CAREER_OPS_CODE_ROOT", prev.code]]) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+  }
+});
