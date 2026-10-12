@@ -142,6 +142,7 @@ const SUBJECTS = [
   // 2. pdf / cv builders
   ['builders', 'generate-pdf.mjs (single document)', cli('generate-pdf.mjs', join(dataRoot, 'input.html'), join(dataRoot, 'output', 'single.pdf'))],
   ['builders', 'generate-pdf.mjs (--batch)', cli('generate-pdf.mjs', `--batch=${join(dataRoot, 'batch.json')}`)],
+  ['builders', 'generate-pdf.mjs (injectPrintPageCss, no format)', inline(`const m = await import(${JSON.stringify(module('generate-pdf.mjs'))}); m.injectPrintPageCss('<html><head></head><body></body></html>');`)],
   ['builders', 'build-cv-html.mjs', cli('build-cv-html.mjs', join(scratch, 'payload.json'), join(scratch, 'out.html'))],
   ['builders', 'theme-style.mjs (default arguments)', inline(`const m = await import(${JSON.stringify(module('theme-style.mjs'))}); m.readStyleTokens(); m.readCvSectionOrder();`)],
   ['builders', 'prepare-application.mjs', cli('prepare-application.mjs', '--url', 'https://jobs.lever.co/acme/abc123', '--pdf', join(dataRoot, 'output', 'applied.pdf'))],
