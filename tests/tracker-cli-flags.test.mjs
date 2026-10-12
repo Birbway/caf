@@ -15,7 +15,7 @@
 // under tmpdir(); nothing reads or writes the developer's own tracker.
 import { pass, fail, ROOT, NODE, rmSync } from './helpers.mjs';
 import { spawnSync } from 'child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -46,6 +46,10 @@ function runTracker(args, sandbox) {
     CAREER_OPS_ROOT: sandbox.dir,
     CAREER_OPS_DATA_DIR: '',
     CAREER_OPS_TRACKER: sandbox.tracker,
+    // An inherited CAREER_OPS_TRACKER_DB outranks the path derived from the
+    // tracker (tracker.mjs dbPath()), so `sync` would rebuild the developer's
+    // own index from this fixture.
+    CAREER_OPS_TRACKER_DB: join(sandbox.dir, 'data', 'applications.db'),
   };
   const r = spawnSync(NODE, [join(ROOT, 'tracker.mjs'), ...args], {
     cwd: ROOT, encoding: 'utf-8', timeout: 30_000, env,
@@ -70,6 +74,20 @@ function cleanup(sandbox) {
   const stillThere = readFileSync(sb.tracker, 'utf-8').includes('Northwind Robotics');
   if (stillThere) pass('the row survives the rejected typo — no silent real deletion');
   else fail('the row survives the rejected typo — it was removed');
+  cleanup(sb);
+}
+
+// ── Test 1b: the other common misspellings of `--dry-run` are refused the
+//    same way, and none of them deletes the row. ──
+for (const typo of ['--dry_run', '--dryRun', '-dry-run', '--dry-run=true']) {
+  const sb = makeSandbox();
+  const r = runTracker(['delete', '--num', '1', typo], sb);
+  const stillThere = readFileSync(sb.tracker, 'utf-8').includes('Northwind Robotics');
+  if (r.status !== 0 && /unrecognized flag/i.test(r.all) && stillThere) {
+    pass(`delete --num 1 ${typo} is rejected and the row survives`);
+  } else {
+    fail(`delete --num 1 ${typo} — expected a rejection with the row intact, got exit ${r.status} (row ${stillThere ? 'kept' : 'REMOVED'}): ${r.all}`);
+  }
   cleanup(sb);
 }
 
@@ -157,4 +175,27 @@ for (const { args, typo } of OTHER_TYPOS) {
   if (e.status === 0) pass('export --out <path> --force still works');
   else fail(`export --out <path> --force — expected exit 0, got ${e.status}: ${e.all}`);
   cleanup(sb);
+}
+
+// ── Test 9: the sandbox holds the SQLite index too — an inherited
+//    CAREER_OPS_TRACKER_DB must not send `sync` to a database outside it. ──
+{
+  const sb = makeSandbox();
+  const outside = mkdtempSync(join(tmpdir(), 'co-tracker-cli-outside-'));
+  const outsideDb = join(outside, 'applications.db');
+  const saved = process.env.CAREER_OPS_TRACKER_DB;
+  process.env.CAREER_OPS_TRACKER_DB = outsideDb;
+  try {
+    const r = runTracker(['sync'], sb);
+    if (r.status === 0 && !existsSync(outsideDb) && existsSync(join(sb.dir, 'data', 'applications.db'))) {
+      pass('sync ignores an inherited CAREER_OPS_TRACKER_DB and indexes inside the sandbox');
+    } else {
+      fail(`sync with an inherited CAREER_OPS_TRACKER_DB — expected the index inside the sandbox only, got exit ${r.status}: ${r.all}`);
+    }
+  } finally {
+    if (saved === undefined) delete process.env.CAREER_OPS_TRACKER_DB;
+    else process.env.CAREER_OPS_TRACKER_DB = saved;
+    rmSync(outside, { recursive: true, force: true });
+    cleanup(sb);
+  }
 }
