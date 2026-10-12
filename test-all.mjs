@@ -12,6 +12,10 @@
  *   node test-all.mjs --only <substring>      # Run ONLY discovered tests/**\/*.test.mjs
  *                                             # files whose path contains <substring>
  *                                             # (e.g. --only providers/themuse).
+ *   node test-all.mjs --jobs <N>              # Run at most N discovered suites at a time,
+ *                                             # one process each. Default: every available
+ *                                             # CPU, or CAREER_OPS_TEST_JOBS when set.
+ *                                             # 1 imports them into this process in turn.
  *
  *   LOUD WARNING: `--only` runs ONLY discovered tests/ files — every inline
  *   core section above (syntax, scripts, dashboard, data contract, personal
