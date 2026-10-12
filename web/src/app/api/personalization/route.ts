@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { careerOpsRoot } from "@/lib/career-ops";
 import { atomicWriteWithBackup } from "@/lib/core/safe-write";
-import { coercePersonalization, mergeSections, renderSection, sectionState, SECTIONS } from "@/lib/personalization.mjs";
+import { coercePersonalization, renderSection, sectionState, SECTIONS } from "@/lib/personalization.mjs";
+import { mergeSections, UnsureProfileParseError } from "@/lib/personalization-file.mjs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -67,7 +68,14 @@ export async function POST(req: Request) {
   }
   const rendered: Record<string, string> = {};
   for (const id of ids) rendered[id] = renderSection(id, patch[id]);
-  const merged = mergeSections(base, rendered);
+  let merged: string;
+  try {
+    merged = mergeSections(base, rendered);
+  } catch (e) {
+    // Not sure where a section begins or ends: say why, write nothing.
+    if (e instanceof UnsureProfileParseError) return Response.json({ error: e.message, code: e.code }, { status: 409 });
+    throw e;
+  }
 
   // dryRun: the panel/assistant can preview the exact bytes before the confirm
   // card is accepted — nothing touches disk.

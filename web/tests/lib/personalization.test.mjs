@@ -7,7 +7,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { coercePersonalization, mergeSections, renderSection, sectionState, SECTIONS } from "../../src/lib/personalization.mjs";
+import { coercePersonalization, renderSection, sectionState, SECTIONS } from "../../src/lib/personalization.mjs";
+import { mergeSections, UnsureProfileParseError } from "../../src/lib/personalization-file.mjs";
 
 // The REAL shipped template, not a synthetic one: if its headings change, this
 // fails here rather than silently leaving a section unaddressable.
@@ -115,4 +116,86 @@ test("coerce of nothing usable is an empty object (→ 'nothing to write')", () 
   assert.deepEqual(coercePersonalization({}), {});
   assert.deepEqual(coercePersonalization(null), {});
   assert.deepEqual(coercePersonalization({ exitNarrative: "" }), {});
+});
+
+// ── byte preservation ───────────────────────────────────────────────────
+// The file is the user's. Everything outside the replaced body must come back
+// as the SAME BYTES, not as an equivalent document.
+
+/** Assert `merged` is `before` with exactly one span swapped for `body`. */
+function assertOnlyBodySwapped(before, merged, body) {
+  const at = merged.indexOf(body);
+  assert.ok(at !== -1, "the new body is in the file");
+  const tail = merged.slice(at + body.length);
+  assert.equal(merged.slice(0, at), before.slice(0, at), "bytes before the body are untouched");
+  assert.ok(before.endsWith(tail), "bytes after the body are untouched");
+}
+
+test("merge keeps CRLF line endings, odd spacing and trailing whitespace byte-for-byte", () => {
+  const before = [
+    "# Mine  ", "", "", "", "intro with trailing spaces   ", "",
+    "## Your Exit Narrative", "", "", "old story", "second line", "", "", "",
+    "## My own section", "- a", "", "", "- b\t", "",
+    "## Your Comp Targets", "old comp", "",
+  ].join("\r\n") + "\r\n\r\n\r\n";
+  const merged = mergeSections(before, { exitNarrative: "new story" });
+  assertOnlyBodySwapped(before, merged, "new story");
+  assert.equal(merged, before.replace("old story\r\nsecond line", "new story"));
+  assert.ok(!/[^\r]\n/.test(merged), "no bare LF was introduced into a CRLF file");
+});
+
+test("merge on the real template changes nothing but the one body", () => {
+  const body = "I am moving from consulting to product.";
+  const merged = mergeSections(TEMPLATE, { exitNarrative: body });
+  assertOnlyBodySwapped(TEMPLATE, merged, body);
+  // The neighbours, guidance comments included, are the template's own bytes.
+  const from = TEMPLATE.indexOf("## Your Cross-cutting Advantage");
+  assert.equal(merged.slice(merged.indexOf("## Your Cross-cutting Advantage")), TEMPLATE.slice(from));
+});
+
+test("a file with no final newline keeps having none", () => {
+  const before = "## Your Location Policy\n\n- old";
+  assert.equal(mergeSections(before, { locationPolicy: "- Remote" }), "## Your Location Policy\n\n- Remote");
+});
+
+test("appending a missing section leaves every existing byte in place", () => {
+  const before = "# Profile\r\n\r\nhand-written   \r\n";
+  const merged = mergeSections(before, { compTargets: "100k" });
+  assert.ok(merged.startsWith(before));
+  assert.equal(merged.slice(before.length), "\r\n## Your Comp Targets\r\n\r\n100k\r\n");
+});
+
+test("a `## ` line inside a code fence is not a section boundary", () => {
+  const before = "## Your Exit Narrative\n\nold\n\n## Mine\n\n```md\n## Your Comp Targets\n```\n\nafter the fence\n";
+  const merged = mergeSections(before, { exitNarrative: "new" });
+  assert.equal(merged, before.replace("old", "new"));
+});
+
+// ── refusing on an unsure parse ─────────────────────────────────────────
+// Each of these throws BEFORE anything is returned to write.
+
+test("merge refuses when a target heading appears twice", () => {
+  const twice = "## Your Comp Targets\n\na\n\n## Your Comp Targets\n\nb\n";
+  assert.throws(() => mergeSections(twice, { compTargets: "c" }), UnsureProfileParseError);
+});
+
+test("merge refuses when a heading sits inside an HTML comment", () => {
+  const commented = "## Your Exit Narrative\n\nstory\n\n<!--\n## Your Comp Targets\n\nparked\n-->\n";
+  assert.throws(() => mergeSections(commented, { exitNarrative: "x" }), UnsureProfileParseError);
+});
+
+test("merge refuses on a comment or a code fence that never closes", () => {
+  assert.throws(() => mergeSections("## Your Exit Narrative\n\nstory <!-- todo\n", { exitNarrative: "x" }), UnsureProfileParseError);
+  assert.throws(() => mergeSections("## Your Exit Narrative\n\n```\ncode\n", { exitNarrative: "x" }), UnsureProfileParseError);
+});
+
+test("merge refuses to replace a section that holds the assistant's notes block", () => {
+  const inside = "## Your Location Policy\n\n- NL\n<!-- co-web-notes:start -->\n- prefers remote\n<!-- co-web-notes:end -->\n";
+  assert.throws(() => mergeSections(inside, { locationPolicy: "- EU" }), UnsureProfileParseError);
+});
+
+test("merge refuses a body that would swallow the sections after it", () => {
+  const before = "## Your Exit Narrative\n\nold\n\n## Your Comp Targets\n\n100k\n";
+  assert.throws(() => mergeSections(before, { exitNarrative: "see <!-- my notes" }), UnsureProfileParseError);
+  assert.throws(() => mergeSections(before, { exitNarrative: "```" }), UnsureProfileParseError);
 });

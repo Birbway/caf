@@ -16,6 +16,10 @@
 // `<!-- co-web-notes -->` block the assistant appends to, anything the CLI
 // intake mode or the user wrote by hand), and appends a section whose heading
 // is missing rather than reordering the file. Plain .mjs so tests import it.
+//
+// This half is also imported by the action registry, which runs in the browser:
+// it must stay free of node:fs. The merge and the file access live in
+// personalization-file.mjs.
 
 /** The eight template sections, in template order. `id` is the API/JSON key. */
 export const SECTIONS = [
@@ -28,8 +32,6 @@ export const SECTIONS = [
   { id: "negotiationScripts", heading: "## Your Negotiation Scripts" },
   { id: "locationPolicy", heading: "## Your Location Policy" },
 ];
-
-const NOTES_START = "<!-- co-web-notes:start -->";
 
 const str = (v, max = 600) => (typeof v === "string" && v.trim() ? v.trim().replace(/\s+/g, " ").slice(0, max) : undefined);
 const strList = (v, max = 8) =>
@@ -98,7 +100,7 @@ export function renderSection(id, value) {
     case "crossCuttingAdvantage":
     case "compTargets":
       // Prose passthrough — but never let a body open with its own `## `: the
-      // merge splits the file on headings, so that would silently start a new
+      // merge finds sections by heading, so that would silently start a new
       // section instead of filling this one.
       return String(value).replace(/^\s*#{1,6}\s+/, "");
     case "portfolio":
@@ -116,66 +118,56 @@ export function renderSection(id, value) {
   }
 }
 
-/** Split markdown into [preamble, {heading, body}[]] on `## ` headings. */
-function splitSections(md) {
-  const lines = String(md ?? "").replace(/\r\n/g, "\n").split("\n");
-  const out = [];
-  let pre = [];
-  let cur = null;
-  for (const line of lines) {
-    if (/^## /.test(line)) {
-      if (cur) out.push(cur);
-      cur = { heading: line.trim(), body: [] };
-    } else if (cur) cur.body.push(line);
-    else pre.push(line);
-  }
-  if (cur) out.push(cur);
-  return { pre, sections: out.map((s) => ({ heading: s.heading, body: s.body.join("\n") })) };
-}
-
-function joinSections(pre, sections) {
-  const parts = [];
-  const preText = pre.join("\n").replace(/\n*$/, "");
-  if (preText.trim()) parts.push(preText);
-  for (const s of sections) parts.push(`${s.heading}\n${s.body.replace(/^\n*/, "\n").replace(/\n*$/, "")}`);
-  return parts.join("\n\n") + "\n";
-}
-
 /**
- * Replace only the bodies of the given sections; keep everything else verbatim
- * in order. A section whose heading is absent is appended — before the
- * assistant's notes block when that lives in its own section, so the notes stay
- * last the way rememberFact() expects.
+ * Locate every `# ` / `## ` heading by SOURCE OFFSET — nothing is normalized,
+ * so a caller can splice the original string and keep every other byte.
+ * A `## ` line inside a code fence is not a heading. `unsure` names the first
+ * thing that makes the boundaries ambiguous (a heading-looking line inside an
+ * HTML comment, a comment or fence that never closes), or is null.
  */
-export function mergeSections(existingMd, rendered) {
-  // Contract: bodies arrive already rendered (renderSection). Fail loudly here
-  // rather than let an array or object stringify into the user's file.
-  for (const [id, body] of Object.entries(rendered ?? {})) {
-    if (typeof body !== "string") throw new TypeError(`mergeSections: rendered["${id}"] must be a string (call renderSection first)`);
-  }
-  const { pre, sections } = splitSections(existingMd);
-  const byHeading = new Map(SECTIONS.map((s) => [s.heading, s.id]));
-  const done = new Set();
-  const next = sections.map((s) => {
-    const id = byHeading.get(s.heading);
-    if (id && rendered[id] !== undefined) {
-      done.add(id);
-      return { heading: s.heading, body: rendered[id] };
+export function scanHeadings(text) {
+  const heads = [];
+  let unsure = null;
+  let fence = null;
+  let inComment = false;
+  for (let pos = 0; pos < text.length; ) {
+    const nl = text.indexOf("\n", pos);
+    const end = nl === -1 ? text.length : nl + 1;
+    const line = text.slice(pos, end).replace(/\r?\n$/, "");
+    const mark = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (fence) {
+      if (mark && mark[1][0] === fence[0] && mark[1].length >= fence.length && !line.slice(mark[0].length).trim()) fence = null;
+    } else {
+      const heading = /^##? /.test(line);
+      if (heading && inComment) unsure ??= `a heading-looking line ("${line.trim().slice(0, 60)}") sits inside an HTML comment`;
+      else if (heading) heads.push({ level: line.startsWith("## ") ? 2 : 1, heading: line.trim(), start: pos, bodyStart: end });
+      else if (mark && !inComment) fence = mark[1];
+      if (!fence) {
+        for (let i = 0; i < line.length; ) {
+          const j = line.indexOf(inComment ? "-->" : "<!--", i);
+          if (j === -1) break;
+          inComment = !inComment;
+          i = j + (inComment ? 4 : 3);
+        }
+      }
     }
-    return s;
-  });
-  const missing = SECTIONS.filter((s) => rendered[s.id] !== undefined && !done.has(s.id));
-  if (missing.length) {
-    const notesIdx = next.findIndex((s) => s.body.includes(NOTES_START));
-    const insertAt = notesIdx === -1 ? next.length : notesIdx;
-    next.splice(insertAt, 0, ...missing.map((s) => ({ heading: s.heading, body: rendered[s.id] })));
+    pos = end;
   }
-  return joinSections(pre, next);
+  if (fence) unsure ??= "a code fence is never closed";
+  if (inComment) unsure ??= "an HTML comment is never closed";
+  heads.forEach((h, i) => { h.end = i + 1 < heads.length ? heads[i + 1].start : text.length; });
+  return { heads, unsure };
 }
 
 /** Normalize a body for template comparison: drop HTML comments + whitespace noise. */
 function normBody(body) {
   return String(body ?? "").replace(/<!--[\s\S]*?-->/g, "").replace(/\s+/g, " ").trim();
+}
+
+/** `## ` sections of a document as [heading, normalized body] pairs. */
+function sectionBodies(md) {
+  const text = String(md ?? "");
+  return scanHeadings(text).heads.filter((h) => h.level === 2).map((h) => [h.heading, normBody(text.slice(h.bodyStart, h.end))]);
 }
 
 /**
@@ -185,8 +177,8 @@ function normBody(body) {
  * assistant's SETUP STATE, so the model asks only about what is still generic.
  */
 export function sectionState(userMd, templateMd) {
-  const user = new Map(splitSections(userMd ?? "").sections.map((s) => [s.heading, normBody(s.body)]));
-  const tpl = new Map(splitSections(templateMd ?? "").sections.map((s) => [s.heading, normBody(s.body)]));
+  const user = new Map(sectionBodies(userMd));
+  const tpl = new Map(sectionBodies(templateMd));
   return SECTIONS.map((s) => {
     if (!user.has(s.heading)) return { id: s.id, heading: s.heading, state: "missing" };
     const same = user.get(s.heading) === (tpl.get(s.heading) ?? "");
