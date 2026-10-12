@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { parsePdfManifestRows } from "./apply/cv-selection.mjs";
+
 export type DocumentKind = "cv" | "cover" | "unknown";
 
 export interface DiscoveredDocument {
@@ -36,28 +38,22 @@ export function discoverDocuments(opts: DiscoverOptions): DiscoveredDocument[] {
   if (manifestPath) {
     try {
       const text = fs.readFileSync(manifestPath, "utf8");
-      for (const line of text.split(/\r?\n/)) {
-        if (!line.trim() || line.startsWith("#")) continue;
-        const cols = line.split("\t");
-        const reportId = cols[0]?.trim() || "";
-        const pdfRel = cols[1]?.trim() || "";
-        const format = cols[3]?.trim() || "";
-        const date = cols[4]?.trim() || "";
-        const rawKind = (cols[5] ?? "").trim().toLowerCase();
-
-        let kind: DocumentKind = "unknown";
-        if (rawKind === "cover") kind = "cover";
-        else if (rawKind === "cv" || rawKind === "") kind = "cv";
-        else kind = "unknown";
-
-        if (pdfRel) {
-          const pdfAbs = path.normalize(path.resolve(workspaceRoot, pdfRel));
+      const parsedRows = parsePdfManifestRows(text);
+      for (const row of parsedRows) {
+        if (row.pdf) {
+          const pdfAbs = path.normalize(path.resolve(workspaceRoot, row.pdf));
           const normOutput = path.resolve(outputDir);
 
           // Reject manifest entries that resolve outside the intended output scope
           // We only discover immediate children of outputDir, so exact dirname match is appropriate.
           if (path.dirname(pdfAbs) === normOutput) {
-            manifestRows.push({ pdfAbs, reportId, date, format, kind });
+            manifestRows.push({
+              pdfAbs,
+              reportId: row.reportId,
+              date: row.date,
+              format: row.format,
+              kind: row.kind as DocumentKind,
+            });
           }
         }
       }
