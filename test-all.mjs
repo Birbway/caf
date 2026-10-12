@@ -13753,6 +13753,9 @@ try {
   }
   writeFileSync(join(tmp, 'merge-tracker.mjs'), 'console.log("merge fixture");\n');
   writeFileSync(join(tmp, 'verify-pipeline.mjs'), 'console.log("verify fixture");\n');
+  // The runner stops an offer whose report-number reservation returns nothing,
+  // so the fixture has to hand out a number for the worker to be launched.
+  writeFileSync(join(tmp, 'reserve-report-num.mjs'), 'console.log("001");\n');
   writeFileSync(join(batchDir, 'batch-prompt.md'), 'URL={{URL}}\nJD={{JD_FILE}}\nREPORT={{REPORT_NUM}}\n');
   writeFileSync(join(batchDir, 'batch-input.tsv'), [
     'id\turl\tsource\tnotes',
@@ -14008,6 +14011,9 @@ function makeTierFixture(profileYml) {
   }
   writeFileSync(join(tmp, 'merge-tracker.mjs'), 'console.log("merge fixture");\n');
   writeFileSync(join(tmp, 'verify-pipeline.mjs'), 'console.log("verify fixture");\n');
+  // The runner stops an offer whose report-number reservation returns nothing,
+  // so the fixture has to hand out a number for the worker to be launched.
+  writeFileSync(join(tmp, 'reserve-report-num.mjs'), 'console.log("001");\n');
   writeFileSync(join(batchDir, 'batch-prompt.md'), 'URL={{URL}}\nJD={{JD_FILE}}\nREPORT={{REPORT_NUM}}\n');
   writeFileSync(join(batchDir, 'batch-input.tsv'), [
     'id\turl\tsource\tnotes',
@@ -16459,7 +16465,7 @@ try {
   }
 
   // 55.3b Every web status list must carry every canonical state. states.yml is
-  // the source of truth; the web keeps SIX hardcoded copies (title-case canonical
+  // the source of truth; the web keeps FOUR hardcoded copies (title-case canonical
   // lists + UPPERCASE tab/stage lists). `Hired` (#2050) had silently drifted out
   // of ALL of them — a landed job was unsettable, uncounted in the funnel, and a
   // gray "unknown" dot (#2249). Cross-check each so a future core state can't
@@ -16471,7 +16477,8 @@ try {
     { file: 'web/src/app/actions/registry.ts', re: /CANON_STATUS\s*=\s*\[([\s\S]*?)\]/, upper: false, exclude: [] },
     { file: 'web/src/app/actions/registry.ts', re: /TAB_VALUES\s*=\s*\[([\s\S]*?)\]/, upper: true, exclude: [] },
     { file: 'web/src/components/pipeline-view.tsx', re: /TABS\s*=\s*\[([\s\S]*?)\]/, upper: true, exclude: [] },
-    { file: 'web/src/app/analytics/page.tsx', re: /STAGES[^=]*=\s*\[([\s\S]*?)\];/, upper: true, exclude: ['SKIP'] },
+    // Analytics now derives its funnel from canonStatus in analytics-metrics;
+    // it no longer owns a hardcoded status-list copy to keep in sync.
     // The states ACL used to be checked here too. It moved to its own block
     // below, because it now has TWO valid shapes and this table only knows one.
   ];

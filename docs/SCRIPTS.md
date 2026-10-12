@@ -285,6 +285,8 @@ npm run pdf -- input.html output.pdf --allow-nonchronological   # keep a deliber
 
 Generation fails when the Work Experience entries are not newest-first, and the error quotes the dates of the role that starts later than the one above it. Put the roles back in reverse-chronological order and rerun: tailor a CV through the summary, competencies, and bullet selection, not by moving roles. If the candidate wants a different order, pass `--allow-nonchronological` to turn the failure into a warning. With `--batch`, only the out-of-order CV fails and the rest still render.
 
+Generation also fails when the CV states a metric or fact that `cv.md` and `article-digest.md` do not back (the same gate as `verify-cv-facts.mjs`); it runs whenever the workspace has a `cv.md`. Pass `--skip-fact-check` to render anyway. With `--batch`, every manifest entry goes through the gate: a blocked entry is recorded as failed in `<manifest>.results.json` and the rest still render.
+
 **Exit codes:** `0` PDF generated, `1` missing arguments or generation failure.
 
 ---
@@ -922,11 +924,15 @@ node tracker.mjs history --id 42          # status transitions observed across s
 node tracker.mjs export                   # inverse: index → markdown table on stdout
 node tracker.mjs export --out repaired.md # write to a file (existing file backed up to .bak first)
 node tracker.mjs export --out repaired.md --force  # write even when columns would be dropped
+node tracker.mjs delete --num 42 --dry-run # preview: which row would go, and the report it would orphan
+node tracker.mjs delete --num 42          # remove row 42 from applications.md (backed up to .bak first) + reindex
 ```
 
 `query` and `history` auto-resync when the markdown changed since the last sync, so the index can never serve stale reads.
 
 `sync` detects and reports the corruption classes markdown accumulates — mojibake placeholder cells, scores stranded in the status column, non-canonical statuses (resolved via `templates/states.yml` aliases), missing/malformed/duplicate ids, stray pipes — and normalizes them **in the index only**; the markdown is never modified. Fix at the source with `normalize-statuses.mjs` / `dedup-tracker.mjs`, then re-sync. Status changes between syncs accumulate in a `status_events` table, which gives `analyze-patterns.mjs` a real funnel instead of only the current snapshot.
+
+`delete` removes the row numbered `--num` from `applications.md` under the same lock as `merge-tracker.mjs`, after copying the tracker to `applications.md.bak`, and then rebuilds the index. `--dry-run` previews and writes nothing, the backup included. The row's report file is left on disk and named in the output.
 
 `export` is the inverse of `sync`. It writes to stdout by default and never touches `applications.md` unless you explicitly pass it as `--out`. Phase 2 of #918 (DB becomes source of truth, markdown becomes a rendered view) is a separate, explicit per-user opt-in — not part of this script yet.
 

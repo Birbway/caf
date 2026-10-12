@@ -1691,6 +1691,20 @@ search_queries:
 #   # precision, same recall-first approach VDAB/Job Bank Canada use.
 #   enabled: true
 #
+# - name: Platsbanken — Software         # Sweden's national job board (Arbetsförmedlingen)
+#   provider: platsbanken
+#   platsbanken:
+#     # keywords optional: falls back to config/profile.yml's target_roles
+#     # (primary[] + archetypes[].name) when omitted.
+#     keywords: ["software engineer", "systemutvecklare"]  # explicit override
+#   max_pages: 5          # optional page cap (100 ads/page, default 5, max 21)
+#   # Keywords scope the source rather than decorate it: the JobTech Dev API
+#   # stops serving at offset 2000, so the unfiltered board (39,433 ads,
+#   # measured 2026-10-12) cannot be walked past 2,100 rows — each keyword gets
+#   # its own window. No location option either — use location_filter (above)
+#   # for precision, same recall-first approach VDAB/Job Bank Canada use.
+#   enabled: true
+#
 # - name: Glints — Indonesia             # SE-Asia aggregator (SG/ID/MY/VN)
 #   provider: glints
 #   searchKeywords: "AI Engineer"
@@ -1854,18 +1868,6 @@ search_queries:
 # - name: Agentic Engineering Jobs        # AI-agent engineering roles (SSR HTML, one fetch)
 #   provider: agentic-jobs
 #   enabled: true
-#
-# - name: Torre                           # pan-LatAm talent marketplace (torre.ai)
-#   provider: torre
-#   search: engineering manager           # optional but strongly recommended — an
-#                                         # unfiltered query returns the whole ~300k board
-#   experience: 1-plus-year               # required companion to search; one of
-#                                         # potential-to-develop / 1-plus-year / 2-plus-years /
-#                                         # 3-plus-years / 5-plus-years
-#   remote_only: true                     # optional
-#   enabled: true
-#   # Capped at 20 results/query, no paging — use several entries with
-#   # different search terms for breadth.
 #
 # - name: Yourator                        # Taiwanese startup/digital-roles board
 #   provider: yourator

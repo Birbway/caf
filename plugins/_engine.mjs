@@ -29,7 +29,7 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 import { resolveAndValidate } from './_net.mjs';
 import { normalizeUrl } from '../url-key.mjs';
-import { readLock, writeLockEntry, diffPlugin, hashPluginTree, consentSurface } from './_lock.mjs';
+import { readLock, writeLockEntry, diffPlugin, describeDrift, hashPluginTree, consentSurface } from './_lock.mjs';
 import { loadRegistry } from './_registry.mjs';
 
 /** The complete, closed set of hook kinds. Anything else (apply/submit/…) is rejected. */
@@ -625,7 +625,7 @@ export function lockGate(manifest, root) {
     case 'legit-update': repin(); return { load: true };        // version bumped → honest update, re-pin quietly
     case 'drift-nobump':
       if (source === 'bundled') { repin(); return { load: true }; } // reviewed-by-construction (branch-protected checkout) → re-pin
-      warnSkip(manifest.id, `files changed since you trusted it without a version bump — possible tampering (${d.changedFiles.slice(0, 5).join(', ')}). Review, then \`node plugins.mjs trust ${manifest.id}\``);
+      warnSkip(manifest.id, `files changed since you trusted it without a version bump — possible tampering (${describeDrift(d)}). Review, then \`node plugins.mjs trust ${manifest.id}\``);
       return { load: false };
     case 'surface-widened':
       warnSkip(manifest.id, `capability surface expanded since you consented (${[...d.addedHosts, ...d.addedEnv].join(', ')}${manifest.allowsLocalhost ? ', localhost' : ''}) — re-consent: \`node plugins.mjs enable ${manifest.id}\``);
