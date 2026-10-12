@@ -3,7 +3,9 @@ package data
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,7 +75,16 @@ func TestUpdateApplicationStatusWaitsForSharedLock(t *testing.T) {
 		lock.release()
 		t.Fatalf("simulate concurrent tracker update: %v", err)
 	}
-	lock.release()
+	// CHECKED, not discarded. release() can return an error without removing
+	// the directory and without marking itself released — os.RemoveAll on a
+	// lock dir whose owner.json still has an open handle fails on Windows where
+	// it succeeds on POSIX. Ignoring it left the lock in place, so the waiter
+	// below blocked for its whole timeout and the test reported "did not resume
+	// after lock release": the message blamed the resume, and the actual cause
+	// had been thrown away.
+	if err := lock.release(); err != nil {
+		t.Fatalf("release first lock: %v", err)
+	}
 
 	select {
 	case err := <-done:
@@ -81,7 +92,11 @@ func TestUpdateApplicationStatusWaitsForSharedLock(t *testing.T) {
 			t.Fatalf("update after lock release: %v", err)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("dashboard update did not resume after lock release")
+		// 10s against a 75ms production retry interval is a 133x margin, so
+		// exhausting it means the waiter never re-acquired — i.e. the lock is
+		// still there. Say whether it is, because that is the difference between
+		// "slow" and "stuck" and the log could not tell them apart.
+		t.Fatalf("dashboard update did not resume after lock release; %s", describeTrackerLock(lock.dir))
 	}
 
 	content, err := os.ReadFile(trackerPath)
@@ -761,4 +776,28 @@ func TestExtractCellURLMatchesNodeReader(t *testing.T) {
 			t.Errorf("%s: extractCellURL(%q) = %q, Node reader gives %q", tc.Name, tc.Cell, got, tc.Href)
 		}
 	}
+}
+
+// describeTrackerLock reports whether a lock directory is still present, and
+// who owns it if so.
+//
+// Exists because "did not resume after lock release" is the same message
+// whether the lock was released and the waiter is merely slow, or the release
+// failed and the waiter is stuck forever. Those need different fixes, and on a
+// runner nobody can attach to, the test output is the only place that
+// distinction can live.
+func describeTrackerLock(dir string) string {
+	info, err := os.Stat(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Sprintf("lock dir %s is gone, so the release worked and the waiter did not re-acquire within the budget", dir)
+	}
+	if err != nil {
+		return fmt.Sprintf("lock dir %s could not be examined: %v", dir, err)
+	}
+	owner, ownerErr := readTrackerLockOwner(dir)
+	if ownerErr != nil {
+		return fmt.Sprintf("lock dir %s STILL EXISTS (mode %v); owner unreadable: %v", dir, info.Mode(), ownerErr)
+	}
+	return fmt.Sprintf("lock dir %s STILL EXISTS, held by pid %d token %s since %s — the release did not remove it",
+		dir, owner.PID, owner.Token, owner.StartedAt)
 }

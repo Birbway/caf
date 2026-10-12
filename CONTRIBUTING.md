@@ -33,13 +33,13 @@ The review process you'll experience here is documented end-to-end in [Agentic m
 
 ## Quick Start
 
-1. Open an issue to discuss your idea
+1. For a new feature, a new mode or command, or an architecture change, open an issue to discuss your idea (see [Before Submitting a PR](#before-submitting-a-pr))
 2. Fork the repo
 3. Create a branch (`git checkout -b feature/my-feature`)
 4. Make your changes
 5. Test with a fresh clone (see [docs/SETUP.md](docs/SETUP.md))
 6. Commit and push
-7. Open a Pull Request referencing the issue
+7. Open a Pull Request, referencing the issue if you opened one
 
 ## What to Contribute
 

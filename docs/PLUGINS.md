@@ -33,6 +33,16 @@ keys must be in your `.env`. `node doctor.mjs` shows what's missing.
 
 If a plugin's files change without a version bump, career-ops **blocks it** and
 asks you to review + `node plugins.mjs trust <id>` to re-pin (tamper detection).
+The warning counts the modified, removed and added files. It names changed files
+at the plugin root and groups the rest by top-level directory, naming the file
+when a directory has only one. You can tell an edit to your code from new files
+beside it.
+
+The files under a plugin's directory count toward its hash, except inside
+directories named `node_modules` or `.git`, which are skipped. That includes git
+worktrees and tool logs kept there. If you link a plugin checkout into
+`plugins.local/`, keep worktrees and logs outside the plugin's own directory, for
+example `git worktree add ../my-plugin-worktrees/fix-1`.
 
 ## Writing a plugin
 
