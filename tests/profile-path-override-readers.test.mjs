@@ -259,6 +259,19 @@ try {
   namingDataRoot === 'A4'
     ? pass('builders: generate-pdf honors an override that names the data-root profile itself')
     : failOnce(`builders: generate-pdf ignored CAREER_OPS_PROFILE naming the data-root profile: sheet ${namingDataRoot}, expected A4`);
+
+  // 4b. apply() is not exported, so, as updater-apply-target-verification.test.mjs
+  // does for the properties that only exist in its body, the wiring is asserted on
+  // its source: apply() must take the profile in force from getProfilePath() and
+  // hand it to the snapshot. Without it the updater protects the template variants
+  // the DATA-ROOT profile chooses while the override selects others.
+  const updaterSource = readFileSync(join(ROOT, 'update-system.mjs'), 'utf-8').split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
+  const takesProfile = /profilePath = getProfilePath\(\);/.test(updaterSource);
+  const callAt = updaterSource.indexOf('await snapshotConfiguredTemplateVariants({');
+  const snapshotCall = callAt === -1 ? null : [updaterSource.slice(callAt, updaterSource.indexOf('readRemoteContent', callAt))];
+  takesProfile && snapshotCall && /\bprofilePath,/.test(snapshotCall[0])
+    ? pass('updater: apply() hands the profile CAREER_OPS_PROFILE selects to the template-variant snapshot (source check)')
+    : failOnce(`updater: apply() does not pass getProfilePath() into snapshotConfiguredTemplateVariants (takesProfile=${takesProfile}, call=${snapshotCall ? 'found' : 'missing'})`);
 } catch (e) {
   failOnce(`profile-path readers suite crashed: ${e.stack || e.message}`);
 } finally {
