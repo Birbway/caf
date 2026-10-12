@@ -14,9 +14,14 @@ import { readSavedCliId } from "@/lib/saved-cli";
 type Doctor = { available: boolean; onboardingNeeded: boolean; missing: string[] };
 type Section = { id: string; heading: string; state: "filled" | "template" | "missing" };
 
-const PREREQS: { key: string; label: string; ask: string }[] = [
+// The same four keys /api/doctor reports in `missing`, so the panel cannot
+// count itself done while doctor still says onboarding is incomplete.
+// modes/_profile.md has no `ask` of its own: when it is absent its eight
+// sections are all "missing", and the personalization line below asks for them.
+const PREREQS: { key: string; label: string; ask?: string }[] = [
   { key: "cv.md", label: "Your CV", ask: "my CV" },
   { key: "config/profile.yml", label: "Profile — target roles, comp, location", ask: "my profile (target roles, comp, location)" },
+  { key: "modes/_profile.md", label: "Personalization file" },
   { key: "portals.yml", label: "Companies and roles to scan", ask: "the roles and companies to scan" },
 ];
 
@@ -61,7 +66,7 @@ export function OnboardingProgress({ compact = false }: { compact?: boolean }) {
   if (done === total) return null; // fully personalized: the panel has done its job
 
   const asks = [
-    ...PREREQS.filter((p) => missing.has(p.key)).map((p) => p.ask),
+    ...PREREQS.filter((p) => missing.has(p.key)).flatMap((p) => (p.ask ? [p.ask] : [])),
     ...(generic.length ? [`my personalization (${generic.map((s) => s.heading.replace(/^## Your /, "").toLowerCase()).join(", ")})`] : []),
   ];
   const kickoff = `Let's finish setting me up. Still to do: ${asks.join("; ")}. Walk me through it like a recruiter building my brief — one or two things at a time, propose what you infer from my CV, and let me confirm each piece. Don't ask for anything already on file.`;

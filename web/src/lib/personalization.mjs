@@ -162,12 +162,23 @@ export function scanHeadings(text) {
 /** Normalize a body for template comparison: drop HTML comments + whitespace noise. */
 function normBody(body) {
   let s = String(body ?? "");
-  // Until stable: one pass over `<!<!-- a -->-- b -->` leaves a fresh `<!--` behind.
-  let prev;
-  do {
-    prev = s;
-    s = s.replace(/<!--[\s\S]*?-->/g, "");
-  } while (s !== prev);
+  // Scanned by index, until stable: one pass over `<!<!-- a -->-- b -->` leaves
+  // a fresh `<!--` behind. An opener that is never closed hides everything
+  // after it when rendered, so it is dropped with the rest of the body.
+  for (;;) {
+    let out = "";
+    let from = 0;
+    for (;;) {
+      const start = s.indexOf("<!--", from);
+      if (start === -1) { out += s.slice(from); break; }
+      out += s.slice(from, start);
+      const end = s.indexOf("-->", start + 4);
+      if (end === -1) break;
+      from = end + 3;
+    }
+    if (out === s) break;
+    s = out;
+  }
   return s.replace(/\s+/g, " ").trim();
 }
 

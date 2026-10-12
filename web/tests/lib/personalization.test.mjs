@@ -283,3 +283,10 @@ test("template comparison strips comments until none is left", () => {
   const user = "## Your Comp Targets\n\n<!<!-- a -->-- b -->\n\nbody\n";
   assert.equal(sectionState(user, tpl).find((s) => s.id === "compTargets").state, "template");
 });
+
+test("template comparison drops a comment that is never closed", () => {
+  // The opener hides the rest of the section when rendered, so it is not content the user wrote.
+  const tpl = "## Your Comp Targets\n\n<!-- hint -->\n\nbody\n";
+  const user = "## Your Comp Targets\n\nbody\n\n<!-- half a note\n";
+  assert.equal(sectionState(user, tpl).find((s) => s.id === "compTargets").state, "template");
+});
