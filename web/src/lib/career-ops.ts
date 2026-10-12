@@ -294,7 +294,10 @@ export function doctorState(snapshot?: Pick<PipelineSummary, "applications" | "i
 } {
   const has = (rel: string) => {
     try {
-      return fs.existsSync(path.join(careerOpsRoot(), rel));
+      // The profile is where getProfilePath() says, not always <root>/config/profile.yml,
+      // so this agrees with core's `node doctor.mjs --json` under CAREER_OPS_PROFILE.
+      const file = rel === "config/profile.yml" ? getProfilePath(careerOpsRoot()) : path.join(careerOpsRoot(), rel);
+      return fs.existsSync(file);
     } catch {
       return false;
     }
