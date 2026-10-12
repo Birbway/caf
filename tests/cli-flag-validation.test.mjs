@@ -51,6 +51,8 @@ const SCRIPTS = [
   ['scan-interamt.mjs', '--dryrun'],
   ['validate-portals.mjs', '--fiel'],
   ['validate-portals.mjs', '--self-tst'],
+  ['verify-portals.mjs', '--stict'],
+  ['verify-portals.mjs', '--flie'],
 ];
 
 for (const [script, typo] of SCRIPTS) {
