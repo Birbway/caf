@@ -23,7 +23,7 @@ function setupTestEnv() {
 function mockIsRegularContainedFile(absPath, outputDir) {
   if (!fs.existsSync(absPath)) return false;
   const rel = path.relative(outputDir, absPath);
-  return !rel.startsWith("..") && !path.isAbsolute(rel);
+  return rel !== ".." && !rel.startsWith(".." + path.sep) && !path.isAbsolute(rel);
 }
 
 test("API: List available generated PDF documents", async () => {
@@ -184,7 +184,9 @@ test("API: Sibling directory containment regression (output-evil)", async () => 
 test("API: Returns 500 when discovery encounters an unexpected filesystem error", async () => {
   const { root, outputDir, manifestPath, cleanup } = setupTestEnv();
   const origReaddirSync = fs.readdirSync;
+  const origConsoleError = console.error;
   try {
+    console.error = () => {};
     fs.readdirSync = (dir, opts) => {
       if (dir === outputDir) {
         const err = new Error("EACCES: permission denied");
@@ -200,6 +202,7 @@ test("API: Returns 500 when discovery encounters an unexpected filesystem error"
     const text = await res.text();
     assert.equal(text, "failed to discover documents");
   } finally {
+    console.error = origConsoleError;
     fs.readdirSync = origReaddirSync;
     cleanup();
   }

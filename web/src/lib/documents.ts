@@ -67,7 +67,7 @@ export function discoverDocuments(opts: DiscoverOptions): DiscoveredDocument[] {
       }
     } catch (err: any) {
       if (err.code !== "ENOENT") {
-        throw new Error("Failed to read manifest");
+        throw new Error("Failed to read manifest", { cause: err });
       }
     }
   }
@@ -180,6 +180,7 @@ export async function handleDocumentsRequest(
       isRegularContainedFile,
     });
   } catch (err) {
+    console.error("[documents] Failed to discover documents:", err);
     return new Response("failed to discover documents", { status: 500 });
   }
 

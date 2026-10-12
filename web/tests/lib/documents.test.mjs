@@ -450,3 +450,42 @@ test("Manifest row with no kind defaults to cv matching cv-selection behavior", 
     cleanup();
   }
 });
+
+test("Manifest read error wraps original error in cause when not ENOENT", () => {
+  const { root, outputDir, manifestPath, isRegularContainedFile, cleanup } = setupTestEnv();
+  const origReadFileSync = fs.readFileSync;
+  try {
+    fs.writeFileSync(path.join(outputDir, "cv-sample.pdf"), "fake pdf");
+
+    // Simulate an unexpected EACCES on readFileSync for manifestPath
+    fs.readFileSync = (filepath, encoding) => {
+      if (filepath === manifestPath) {
+        const err = new Error("Permission denied");
+        err.code = "EACCES";
+        throw err;
+      }
+      return origReadFileSync(filepath, encoding);
+    };
+
+    assert.throws(
+      () => {
+        discoverDocuments({
+          outputDir,
+          manifestPath,
+          workspaceRoot: root,
+          isRegularContainedFile,
+        });
+      },
+      (err) => {
+        return (
+          err.message === "Failed to read manifest" &&
+          err.cause &&
+          err.cause.code === "EACCES"
+        );
+      },
+    );
+  } finally {
+    fs.readFileSync = origReadFileSync;
+    cleanup();
+  }
+});
