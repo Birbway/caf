@@ -128,7 +128,6 @@ try {
     'browser-extract.mjs',
     'providers/_profile-keywords.mjs',
     'scripts/export-ats-text.mjs',
-    'update-system.mjs',
   ]);
   const HAND_BUILT = [
     /process\.env\.CAREER_OPS_PROFILE/,

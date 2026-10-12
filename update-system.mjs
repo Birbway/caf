@@ -1962,19 +1962,32 @@ export function configuredTemplateVariantPathsToPreserve(
  * The callback keeps Git access in apply() while making the data-root read
  * directly testable without mutating the real repository.
  *
- * @param {{dataRoot?: string, remoteFiles?: string[], readRemoteContent?: (path: string) => string,
+ * `profilePath` names the profile outright (apply() passes the one
+ * CAREER_OPS_PROFILE selects); without it the profile is the one under `dataRoot`.
+ *
+ * @param {{dataRoot?: string, profilePath?: string, remoteFiles?: string[], readRemoteContent?: (path: string) => string,
  *   readLocalContent?: (path: string) => string, localPathExists?: (path: string) => boolean}} options
  * @returns {Promise<{configuredVariants: object, localFiles: string[], localContents: object, remoteContents: object, preservedPaths: string[]}>}
  */
 export async function snapshotConfiguredTemplateVariants({
   dataRoot = ROOT,
+  profilePath,
   remoteFiles = [],
   readRemoteContent = () => null,
   readLocalContent = (path) => readFileSync(path, 'utf8'),
   localPathExists = existsSync,
 } = {}) {
+  let resolvedProfilePath = profilePath;
+  if (!resolvedProfilePath) {
+    try {
+      resolvedProfilePath = (await import('./path-resolver.mjs')).getProfilePath(dataRoot);
+    } catch {
+      // Same compatibility case as apply(): without path-resolver.mjs the
+      // profile falls through to cv-templates.mjs's own default.
+    }
+  }
   const configuredVariants = await loadConfiguredTemplateVariants({
-    profilePath: join(dataRoot, 'config', 'profile.yml'),
+    profilePath: resolvedProfilePath,
   });
   const configuredVariantPaths = [];
   for (const [kind, name] of Object.entries(configuredVariants)) {
@@ -4132,9 +4145,11 @@ async function apply() {
     // generic locallyModifiedSystemFiles() baseline check may no longer flag
     // it, but checkout would still overwrite the user's local content.
     let dataRoot = ROOT;
+    let profilePath;
     try {
-      const { getCareerOpsRoot } = await import('./path-resolver.mjs');
+      const { getCareerOpsRoot, getProfilePath } = await import('./path-resolver.mjs');
       dataRoot = getCareerOpsRoot();
+      profilePath = getProfilePath();
     } catch {
       // Very old targets may not have path-resolver.mjs yet; ROOT is the
       // historical data root and remains the safe compatibility fallback.
@@ -4149,6 +4164,7 @@ async function apply() {
     }
     const configuredSnapshot = await snapshotConfiguredTemplateVariants({
       dataRoot,
+      profilePath,
       remoteFiles: configuredVariantRemoteFiles,
       readRemoteContent: (file) => gitShowRaw(`${targetCommit}:${file}`),
     });
