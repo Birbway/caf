@@ -147,7 +147,7 @@ try {
   const HAND_BUILT = [
     /process\.env\.CAREER_OPS_PROFILE/,
     /\b(?:join|resolve)\([^\n]*['"](?:config\/)?profile\.yml['"]/,
-    /=\s*['"]config\/profile\.yml['"]/,
+    /(?<![=!])=\s*['"]config\/profile\.yml['"]/,
     /readFile\(['"]config\/profile\.yml/,
   ];
   const isComment = (line) => /^\s*(\/\/|\*|\/\*)/.test(line);
