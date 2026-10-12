@@ -17,7 +17,7 @@
 // Recording the set, rather than stopping at the first hit, is what catches a
 // module that reads the right file at one site and the wrong one at another.
 import { pass, fail, rmSync, ROOT, NODE } from './helpers.mjs';
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { createServer } from 'http';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync } from 'fs';
 import { join } from 'path';
@@ -210,6 +210,23 @@ try {
   named.paths.length === 1 && named.paths[0] === profileB
     ? pass('updater: snapshotConfiguredTemplateVariants({profilePath}) reads the profile it is given')
     : failOnce(`updater: snapshot with a profilePath touched ${JSON.stringify(named.paths.map((p) => p.replace(scratch, '<scratch>')))}; expected only <scratch>/named-profile-B.yml (exit ${named.code})`);
+
+  // 5b. export-ats-text takes its profile and its CV from the same place. Run from
+  // a directory that is not the data root, the profile used to fail closed (cwd
+  // relative) while moving only the profile to the data root left the CV on the
+  // cwd, which exits 0 with the experience section silently empty.
+  const cvRoot = join(scratch, 'cv-root');
+  mkdirSync(join(cvRoot, 'config'), { recursive: true });
+  writeFileSync(join(cvRoot, 'config', 'profile.yml'), profileBody('Delta'), 'utf-8');
+  writeFileSync(join(cvRoot, 'cv.md'),
+    '# CV -- Delta Person\n\n## Work Experience\n\n### Acme Widgets -- Austin, TX\n\n**Staff Engineer**\n2020-2024\n\n- Built the widget pipeline\n', 'utf-8');
+  const ats = spawnSync(NODE, [join(ROOT, 'scripts', 'export-ats-text.mjs'), '--section', 'experience'], {
+    cwd: decoyCwd, encoding: 'utf-8', timeout: 60_000,
+    env: { ...process.env, CAREER_OPS_ROOT: cvRoot, CAREER_OPS_DATA_DIR: '', CAREER_OPS_PROFILE: '', CAREER_OPS_CV: '' },
+  });
+  ats.status === 0 && /Acme Widgets/.test(ats.stdout)
+    ? pass('fallbacks: scripts/export-ats-text.mjs reads cv.md from the data root along with the profile, from any cwd')
+    : failOnce(`fallbacks: scripts/export-ats-text.mjs run outside the data root exited ${ats.status} and printed ${JSON.stringify(ats.stdout.slice(0, 120))} without the CV's experience (stderr: ${JSON.stringify(ats.stderr.slice(0, 120))})`);
 } catch (e) {
   failOnce(`profile-path readers suite crashed: ${e.stack || e.message}`);
 } finally {
