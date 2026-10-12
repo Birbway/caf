@@ -299,6 +299,98 @@ test("buildPrompt: the default configuration adds no market note", () => {
   assert.doesNotMatch(prompt, /this market's vocabulary/);
 });
 
+// ── language.modes_dir as a list (#3793) ──────────────────────────────────
+//
+// A candidate can be running parallel campaigns in more than one market at
+// once (e.g. an immigrant applying in both Canada and China simultaneously).
+// language.modes_dir may declare multiple candidate markets as an array;
+// readLanguageConfig() (web/src/lib/career-ops.ts) normalizes both the single
+// string and the array shape into `modesDirs`, primary market first.
+
+const DE_ZH = {
+  output: "de",
+  modesDir: "modes/de",
+  modesDirs: ["modes/de", "modes/zh"],
+  evalModeFile: "modes/de/angebot.md",
+};
+
+test("buildPrompt: two declared markets both get a _shared.md pointer", () => {
+  const prompt = buildPrompt({ kind: "evaluate", ...ARGS, lang: DE_ZH });
+  assert.match(prompt, /modes\/de\/_shared\.md/);
+  assert.match(prompt, /modes\/zh\/_shared\.md/);
+});
+
+test("buildPrompt: modes counts in a multi-market declaration without a redundant shared pointer", () => {
+  const prompt = buildPrompt({
+    kind: "evaluate",
+    ...ARGS,
+    lang: {
+      ...DE_ZH,
+      modesDir: "modes",
+      modesDirs: ["modes", "modes/zh"],
+      evalModeFile: "modes/oferta.md",
+    },
+  });
+  assert.doesNotMatch(prompt, /read modes\/_shared\.md/i);
+  assert.match(prompt, /modes\/zh\/_shared\.md/);
+  assert.match(prompt, /MARKET signals/);
+  assert.match(prompt, /first\/primary market \(modes\)/);
+});
+
+test("buildPrompt: unattended multi-market evaluation falls back to primary and records ambiguity", () => {
+  const prompt = buildPrompt({ kind: "evaluate", ...ARGS, lang: DE_ZH });
+  assert.match(prompt, /MARKET signals/);
+  assert.match(prompt, /Never infer the market from the JD's language alone/);
+  assert.match(prompt, /ambiguous/i);
+  assert.match(prompt, /unattended run/i);
+  assert.match(prompt, /do not stop or ask the candidate/i);
+  assert.match(prompt, /first\/primary market \(modes\/de\)/);
+  assert.match(prompt, /report header or Block G/i);
+  assert.ok(
+    prompt.indexOf("If those signals remain genuinely ambiguous")
+      < prompt.indexOf("2. Persist the result CANONICALLY"),
+    "ambiguity resolution must precede report and tracker persistence",
+  );
+  assert.ok(
+    prompt.indexOf("MARKET signals") < prompt.indexOf("2. Persist the result CANONICALLY")
+      && prompt.indexOf("modes/de/_shared.md") < prompt.indexOf("2. Persist the result CANONICALLY")
+      && prompt.indexOf("modes/zh/_shared.md") < prompt.indexOf("2. Persist the result CANONICALLY"),
+    "market selection and every declared shared context must precede persistence",
+  );
+});
+
+test("buildPrompt: research gets shared market context without evaluation stop rules", () => {
+  const prompt = buildPrompt({ kind: "research", ...ARGS, lang: DE_ZH });
+  assert.match(prompt, /modes\/de\/_shared\.md/);
+  assert.match(prompt, /modes\/zh\/_shared\.md/);
+  assert.doesNotMatch(prompt, /primary-market fallback/i);
+  assert.doesNotMatch(prompt, /do not stop or ask the candidate/i);
+});
+
+test("buildPrompt: the primary declared market still drives the evaluation-mode file with multiple markets configured", () => {
+  const prompt = buildPrompt({ kind: "evaluate", ...ARGS, lang: DE_ZH });
+  assert.match(prompt, /Read modes\/de\/angebot\.md and follow it EXACTLY/);
+});
+
+test("buildPrompt: a one-element modesDirs array behaves exactly like a plain string modesDir", () => {
+  const singleArray = { output: "de", modesDir: "modes/de", modesDirs: ["modes/de"], evalModeFile: "modes/de/angebot.md" };
+  const promptFromArray = buildPrompt({ kind: "evaluate", ...ARGS, lang: singleArray });
+  const promptFromString = buildPrompt({ kind: "evaluate", ...ARGS, lang: DE });
+  assert.equal(promptFromArray, promptFromString);
+  // Single-market disambiguation language must not appear when only one
+  // market is declared — it would be noise for the ~90% single-market case.
+  assert.doesNotMatch(promptFromArray, /MARKET signals/);
+  assert.doesNotMatch(promptFromArray, /Market ambiguity/i);
+});
+
+test("buildPrompt: missing modes_dir (no lang.modesDirs, no lang.modesDir) keeps the unconfigured default behavior", () => {
+  const prompt = buildPrompt({ kind: "evaluate", ...ARGS });
+  assert.match(prompt, /Read modes\/oferta\.md and follow it EXACTLY/);
+  assert.doesNotMatch(prompt, /this market's vocabulary/);
+  assert.doesNotMatch(prompt, /these markets' vocabulary/);
+  assert.doesNotMatch(prompt, /MARKET signals/);
+});
+
 test("buildPrompt: the language directive is not limited to the evaluate prompt", () => {
   // language.output governs human-facing prose generally, not only the report.
   //
@@ -356,6 +448,17 @@ test("buildPrompt: evaluate does not enumerate the report's sections", () => {
   const prompt = buildPrompt({ kind: "evaluate", input: "https://example.com/jobs/9", memory: "", today: "2026-09-04" });
   assert.ok(!/blocks?\s+A[–-]F/i.test(prompt), "the prompt must not name a subset of the mode file's sections");
   assert.ok(/EVERY section its report template specifies/i.test(prompt), "it must defer to the mode file for the section set");
+});
+
+test("PDF tailoring reads the resolved report even when the application number differs", () => {
+  const prompt = buildPrompt({
+    kind: "pdf", ...ARGS, input: "309",
+    reportFile: "reports/18-example-2026-09-10.md",
+  });
+  assert.match(prompt, /application #309/);
+  assert.ok(prompt.includes('"reports/18-example-2026-09-10.md"'));
+  assert.ok(!prompt.includes("reports/309-"));
+  assert.ok(!prompt.includes("reports/018-"), "the exact unpadded filename must be retained");
 });
 
 test("buildPrompt: the pdf prompt fills the template the caller resolved", () => {

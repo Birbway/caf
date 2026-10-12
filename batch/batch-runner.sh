@@ -16,6 +16,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Under Git Bash / MSYS, pwd gives a POSIX path (/c/...). Node is a native
+# Windows binary and gets it unconverted when MSYS path conversion is off
+# (MSYS_NO_PATHCONV=1), so every `node "$PROJECT_DIR/..."` call failed with
+# MODULE_NOT_FOUND (#4910). cygpath -m yields C:/... which both bash and node
+# resolve, as for jd_file below.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) command -v cygpath >/dev/null 2>&1 && PROJECT_DIR="$(cygpath -m "$PROJECT_DIR")" ;;
+esac
 BATCH_DIR="$SCRIPT_DIR"
 INPUT_FILE="$BATCH_DIR/batch-input.tsv"
 STATE_FILE="$BATCH_DIR/batch-state.tsv"
@@ -441,8 +449,8 @@ read_spend_tier() {
 spend_tier_to_model() {
   case "$1" in
     economy) echo "claude-haiku-4-5" ;;
-    premium) echo "claude-opus-5" ;;
-    standard|*) echo "claude-sonnet-5" ;;
+    premium) echo "claude-opus-5-5" ;;
+    standard|*) echo "claude-sonnet-5-5" ;;
   esac
 }
 
@@ -724,7 +732,10 @@ rate_limit_delay() {
   fi
   base=30
   (( base <= RATE_LIMIT_SLEEP )) || base=$RATE_LIMIT_SLEEP
-  hint=$(LC_ALL=C awk -v cap="$RATE_LIMIT_SLEEP" '
+  # A log that exists and is empty has no header to find, and awk would print
+  # nothing for it: skip the two processes. A missing log still reaches awk.
+  hint=""
+  [[ -e "$log_file" && ! -s "$log_file" ]] || hint=$(LC_ALL=C awk -v cap="$RATE_LIMIT_SLEEP" '
     tolower($0) ~ /^[[:space:]]*retry-after:[[:space:]]*[0-9]+[[:space:]]*$/ {
       value=$0
       sub(/^[^:]*:[[:space:]]*/, "", value)
@@ -785,10 +796,17 @@ reserve_report_num_unlocked() {
   # 049, report 051) in one batch run for exactly this reason -- routing every
   # caller through the same node script means they all share one real lock.
   local report_num=""
-  report_num=$(node "$PROJECT_DIR/reserve-report-num.mjs" 2>/dev/null | tr -d '[:space:]')
-  if [[ -n "$report_num" ]]; then
-    update_state_unlocked "$id" "$url" "processing" "$started" "-" "$report_num" "-" "-" "$retries"
+  report_num=$(node "$PROJECT_DIR/reserve-report-num.mjs" 2>/dev/null | tr -d '[:space:]') || report_num=""
+  # No number means the allocator failed (lock timeout, unwritable reports/,
+  # exhausted retries). Returning success with an empty number let the caller
+  # launch a paid worker with a blank "Report number:" and write an empty
+  # report_num cell into batch-state.tsv; the retry wrapper below is what
+  # handles a failed reservation, so fail here and let it.
+  if [[ ! "$report_num" =~ ^[0-9]+$ ]]; then
+    echo "    ❌ reserve-report-num.mjs returned no report number for offer id=$id" >&2
+    return 1
   fi
+  update_state_unlocked "$id" "$url" "processing" "$started" "-" "$report_num" "-" "-" "$retries"
 
   printf '%s\n' "$report_num"
 }
@@ -804,6 +822,25 @@ release_report_num() {
 
 reserve_report_num() {
   run_with_state_lock reserve_report_num_unlocked "$@"
+}
+
+# Succeed if reports/ holds a real report for this number. The reservation
+# sentinel ({num}-RESERVED.md) never counts: reserve-report-num.mjs creates it
+# before the worker runs, so counting it would mark a no-op worker completed.
+#
+# A plain glob loop, not `compgen -G`: compgen exists only when bash is built
+# with programmable completion, and some distro builds (NixOS among them) omit
+# it from non-interactive shells. There, compgen fails, the check sees no
+# report, and every worker is recorded as failed even though its report is on
+# disk. merge-tracker.mjs then refuses those reports as possibly fabricated.
+has_report_file() {
+  local report_num="$1" f
+  for f in "$REPORTS_DIR/${report_num}"-*.md; do
+    [[ -e "$f" ]] || continue
+    [[ "$f" == *-RESERVED.md ]] && continue
+    return 0
+  done
+  return 1
 }
 
 # Retry wrapper — same rationale as update_state_retrying above. A bare
@@ -1228,7 +1265,12 @@ process_offer() {
       local -a report_artifacts=()
       if [[ -n "$report_num" && "$report_num" != "-" ]]; then
         shopt -s nullglob
-        report_artifacts=("$REPORTS_DIR/$report_num-"*.md)
+        local candidate
+        # The reservation sentinel ({num}-RESERVED.md) is the parent's own file,
+        # not a worker artifact (same exclusion as the report-file check below).
+        for candidate in "$REPORTS_DIR/$report_num-"*.md; do
+          [[ "$candidate" == *-RESERVED.md ]] || report_artifacts+=("$candidate")
+        done
         shopt -u nullglob
       fi
       if [[ -f "$tracker_artifact" || ${#report_artifacts[@]} -gt 0 ]]; then
@@ -1279,9 +1321,7 @@ process_offer() {
     # report: it is created before the worker runs, so an unfiltered glob
     # matches it and the guard is defeated every single time (found 2026-09-22:
     # 16 no-op workers recorded as "completed" with score "-").
-    local report_files
-    report_files=$(compgen -G "$REPORTS_DIR/${report_num}-*.md" 2>/dev/null | grep -vE -- '-RESERVED\.md$' || true)
-    if [[ -z "$report_files" ]]; then
+    if ! has_report_file "$report_num"; then
       if (( retries < MAX_RETRIES )); then
         retries=$((retries + 1))
       fi
