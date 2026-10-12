@@ -65,6 +65,12 @@ const DETERMINER_LEAD_RE = /^(?:the|that|this|these|those|our|your|their|its|his
 // the determiners above it does not mark the clause as prose, because "using
 // React and an ASP.NET backend" is a list whose second item opens with one.
 const ARTICLE_LEAD_RE = /^an?\s+/i;
+// The ending a name takes from the phrase around it, not from itself: a
+// possessive ("Elasticsearch's index") and a lowercase hyphenated suffix
+// ("Kubernetes-based"). A version after the hyphen ("GPT-4") is part of the
+// name, and so is a hyphen after a single letter ("E-commerce").
+const POSSESSIVE_SUFFIX_RE = /['\u2019]s$/i;
+const HYPHEN_SUFFIX_RE = /(?<=[\p{L}\p{N}+#]{2})(?:-\p{Ll}+)+$/u;
 const DECLARED_TOOL_TRIGGER_RE = /^(?:technologies?|tech stack)\s*:/i;
 // What separates the names in a tool list. Beside the comma (Arabic and
 // ideographic ones too) and the three connector words: a double quote, a
@@ -675,6 +681,30 @@ function toolNameBeforeConnector(value) {
 }
 
 /**
+ * The values one tool fragment claims, and whether `isLikelyTool` accepted the
+ * fragment whole: the claim is then the whole fragment. When it did not, the
+ * claims are the names `dottedNamesBeforeConnector` and, with `useConnector`,
+ * `toolNameBeforeConnector` recover from it.
+ */
+function toolFragmentClaims(fragment, sourceNormalized, useConnector) {
+  const value = normalizeFact(fragment);
+  if (!value) return { whole: false, values: [] };
+  if (isLikelyTool(fragment, sourceNormalized)) return { whole: true, values: [value] };
+  const names = dottedNamesBeforeConnector(fragment);
+  if (useConnector) names.push(toolNameBeforeConnector(fragment));
+  return { whole: false, values: names.filter(Boolean).map(normalizeFact) };
+}
+
+/**
+ * A name run read out of a phrase, without the ending the phrase gave it: the
+ * quotes around it, a possessive and a lowercase hyphenated suffix. The suffix
+ * is cut only after two or more characters, so "E-commerce" stays whole.
+ */
+function tidyToolName(name) {
+  return trimToolFragment(name.replace(POSSESSIVE_SUFFIX_RE, '').replace(HYPHEN_SUFFIX_RE, ''));
+}
+
+/**
  * Extract explicitly asserted employer, title, and tool claims from text.
  *
  * `sourceNormalized` (from `normalizeFact(stripMarkup(sourceText))`, as
@@ -763,26 +793,28 @@ export function factClaims(text, sourceNormalized = null) {
         const afterTrigger = kind === 'tool' ? raw.replace(INNER_TOOL_TRIGGER_RE, '') : raw;
         const innerTrigger = afterTrigger !== raw && !DETERMINER_LEAD_RE.test(afterTrigger.trim());
         const fragment = innerTrigger ? afterTrigger : raw;
-        const value = normalizeFact(fragment);
-        if (!value) continue;
-        // After a leading "a" or "an" only the names are claims. The prose-word
-        // check below would drop the fragment for holding the article, and
-        // reading it whole would check "kubernetes cluster" where the source
-        // says "Kubernetes". A lowercase word behind the article is the noun
-        // or ordinary prose ("a small team"), so it is not read as a name.
-        const article = kind === 'tool' ? ARTICLE_LEAD_RE.exec(fragment.trim()) : null;
-        if (article) {
-          for (const name of toolNameRuns(fragment.trim().slice(article[0].length), { skipLoneLetter: true })) {
-            claims.push({ kind, value: normalizeFact(name) });
-          }
+        if (kind !== 'tool') {
+          const value = normalizeFact(fragment);
+          if (value) claims.push({ kind, value });
           continue;
         }
-        if (kind !== 'tool' || isLikelyTool(fragment, sourceNormalized)) claims.push({ kind, value });
-        else {
-          const names = dottedNamesBeforeConnector(fragment);
-          if (connectorRule || innerTrigger) names.push(toolNameBeforeConnector(fragment));
-          for (const name of names) if (name) claims.push({ kind, value: normalizeFact(name) });
-        }
+        // A leading "a" or "an" changes nothing about whether the fragment is
+        // a tool claim. It is stripped and the rest goes through the decision a
+        // fragment with no article gets. Only when that decision claims the
+        // whole fragment does the article matter: the names in it are claimed
+        // instead, each alone, so "a Kubernetes cluster" checks "kubernetes"
+        // where the source says "Kubernetes". The names are the ones
+        // `toolNameRuns` reads: capitalised words, words with a digit or an
+        // inner capital, and dotted names such as "node.js". A fragment with
+        // none of them ("a small team", "a 2024 roadmap") then claims nothing.
+        const trimmed = fragment.trim();
+        const article = ARTICLE_LEAD_RE.exec(trimmed);
+        const subject = article ? trimToolFragment(trimmed.slice(article[0].length)) : fragment;
+        const decision = toolFragmentClaims(subject, sourceNormalized, connectorRule || innerTrigger);
+        const values = article && decision.whole
+          ? toolNameRuns(subject).map(tidyToolName).filter(Boolean).map(normalizeFact)
+          : decision.values;
+        for (const value of values) claims.push({ kind, value });
       }
     }
   }
