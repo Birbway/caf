@@ -173,10 +173,17 @@ try {
   // generate-pdf's renderHtmlToPdf: a caller that names its own workspace has said
   // which profile it means, so the override does not redirect it; a caller that
   // names none renders in the default workspace, where the override applies.
+  // The profile is read before the page opens, so the browser here only has to get
+  // that far: it stops at newPage(), which keeps the check independent of whether a
+  // Chromium is installed (CI's test job has none).
   const render = (workspaceRootArg) => inline(`
     const { renderHtmlToPdf } = await import(${JSON.stringify(module('generate-pdf.mjs'))});
+    const launchBrowser = async () => ({
+      newPage: async () => { throw new Error('probe: stopped at newPage()'); },
+      close: async () => {},
+    });
     await renderHtmlToPdf('<html><body><h1>Probe</h1></body></html>', ${JSON.stringify(join(workspaceRootArg ?? dataRoot, 'output', 'render-probe.pdf'))},
-      ${workspaceRootArg ? `{ workspaceRoot: ${JSON.stringify(workspaceRootArg)} }` : '{}'});
+      { launchBrowser${workspaceRootArg ? `, workspaceRoot: ${JSON.stringify(workspaceRootArg)}` : ''} });
   `);
   const explicit = await touched(render(explicitRoot), { override: true });
   explicit.paths.length === 1 && explicit.paths[0] === profileE
