@@ -24,6 +24,18 @@ check(
   'recruiter-only gate is missing',
 );
 check(
+  'recruiter outreach that links a posting is still recruiter-sourced',
+  /including outreach that links a public posting/.test(signal)
+    && /a posting the candidate found on their own/.test(signal),
+  'gate keys on URL presence instead of how the role arrived',
+);
+check(
+  'checks without a query budget mark missing evidence Unknown, not Concerning',
+  /Checks \(b\), \(c\) and \(e\) spend no queries/.test(signal)
+    && /never Concerning on absence of evidence alone/.test(signal),
+  'Unknown rule for (b), (c), (e) is missing',
+);
+check(
   'signal carries all five checks',
   ['(a) Official board', '(b) Name pairing', '(c) Recruiter-to-company link', '(d) Public scam reports', '(e) Process requests']
     .every((label) => signal.includes(label)),
@@ -72,6 +84,9 @@ check(
   'batch prompt mirrors Signal 18 with the hard stop and lets it set the tier',
   /18\. \*\*Recruiter Identity Verification\*\*/.test(batch)
     && /Never clone, install, open, or execute anything the recruiter supplied/.test(batch)
-    && /Signals 1-5, 7-9 and 18 set the tier/.test(batch),
-  'batch parity, hard stop, or tier wording is missing',
+    && /Signals 1-5, 7-9 and 18 set the tier/.test(batch)
+    && /including outreach that links a public posting/.test(batch)
+    && !/a posting URL → `not evaluated`/.test(batch)
+    && /never Concerning\./.test(batch),
+  'batch parity, gate, Unknown rule, hard stop, or tier wording is missing',
 );
