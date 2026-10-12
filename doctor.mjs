@@ -14,7 +14,7 @@ import * as yaml from 'js-yaml';
 import dotenv from 'dotenv';
 import { findTitleFilterConflicts } from './lib/title-filter-conflicts.mjs';
 import { discoverPlugins, pluginRoots, pluginStatus } from './plugins/_engine.mjs';
-import { getCareerOpsRoot } from './path-resolver.mjs';
+import { getCareerOpsRoot, getProfilePath } from './path-resolver.mjs';
 import { validateProfile, EXAMPLE_PATH } from './validate-profile.mjs';
 import { resolveExtractorMode } from './browser-extract.mjs';
 import { parseConfigByExtension } from './jsonc-parse.mjs';
@@ -62,6 +62,9 @@ validateFlags(argv, KNOWN_FLAGS, USAGE, { valueFlags: VALUE_FLAGS, requireOperan
 const targetIdx = argv.indexOf('--target');
 const explicitTarget = targetIdx !== -1 && argv[targetIdx + 1] ? argv[targetIdx + 1] : null;
 const projectRoot = explicitTarget || getCareerOpsRoot();
+// --target diagnoses a whole other checkout, so that checkout's profile is the
+// one that counts; otherwise CAREER_OPS_PROFILE applies as it does everywhere.
+const profilePathFor = (root) => (explicitTarget ? getProfilePath(root) : getProfilePath());
 // node_modules and .git belong to the CODE checkout, not the resolved data
 // root — under a split checkout (CAREER_OPS_ROOT/CAREER_OPS_DATA_DIR or the
 // .career-ops-data marker) those are two different directories, and neither
@@ -573,7 +576,7 @@ function checkPlaywrightMcp(root, activeCli) {
 // is selected but the helper is missing, the modes fall back to MCP — surface
 // that as a warning, never a failure.
 function checkScanExtractor(root) {
-  const mode = resolveExtractorMode(join(root, 'config', 'profile.yml'));
+  const mode = resolveExtractorMode(profilePathFor(root));
   if (mode === 'cli') {
     if (existsSync(join(__dirname, 'browser-extract.mjs'))) {
       return { pass: true, label: 'Scan extractor: cli (browser-extract.mjs)' };
@@ -623,6 +626,7 @@ const USER_LAYER_PREREQS = [
 ];
 
 function prereqPresent(root, path) {
+  if (path === 'config/profile.yml') return existsSync(profilePathFor(root));
   return existsSync(join(root, ...path.split('/')));
 }
 
@@ -845,7 +849,7 @@ function checkCvShape(root) {
 }
 
 function checkProfileShape(root) {
-  const profilePath = process.env.CAREER_OPS_PROFILE || join(root, 'config', 'profile.yml');
+  const profilePath = profilePathFor(root);
   if (!existsSync(profilePath)) return null;   // the prereq check owns "absent"
   let findings;
   try {
