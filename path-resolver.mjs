@@ -31,6 +31,25 @@ export function getCareerOpsRoot() {
 }
 
 /**
+ * Returns the path to the user's config/profile.yml.
+ * Priority: rootDir argument > process.env.CAREER_OPS_PROFILE > data root.
+ *
+ * Every reader of the profile resolves it here. The override used to be
+ * copied by hand into a handful of modules while the rest built the data-root
+ * path themselves, so one install could read two different profiles (#5026).
+ * A caller that passes its own rootDir has already said which workspace it
+ * means, so the environment does not redirect it.
+ *
+ * @param {string} [rootDir] Explicit workspace root, when the caller has one
+ * @returns {string} Absolute path to the profile file
+ */
+export function getProfilePath(rootDir) {
+  if (rootDir) return join(rootDir, 'config', 'profile.yml');
+  const override = process.env.CAREER_OPS_PROFILE?.trim();
+  return override ? resolve(override) : join(getCareerOpsRoot(), 'config', 'profile.yml');
+}
+
+/**
  * Canonicalize a tracker path: absolute + realpath (macOS's symlinked tmpdir
  * among others). This must be applied by EVERY resolver of the same tracker:
  * two implementations briefly coexisted, the un-canonicalized one derived
