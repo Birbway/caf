@@ -1105,6 +1105,16 @@ export async function runTracker(command, args = [], options = {}) {
 
 if (isMainModule(import.meta.url)) {
   const [command, ...args] = process.argv.slice(2);
+  // #4602: flags are validated here, at the CLI boundary, before runTracker
+  // sees them. validateFlags() prints and calls process.exit(), which is right
+  // for a command line and wrong inside runTracker, whose contract is to
+  // return the exit status and write only to the streams it was given.
+  if (Object.hasOwn(SUBCOMMAND_FLAGS, command)) {
+    const { known, valueFlags, usage } = SUBCOMMAND_FLAGS[command];
+    // requireOperand: `query --company --json` must be a usage error, not an
+    // unfiltered listing — no subcommand has a richer check of its own.
+    validateFlags(args, known, usage, { valueFlags, requireOperand: true });
+  }
   runTracker(command, args, {
     mdPath: resolveTrackerPath(getCareerOpsRoot()),
     dbPath: process.env.CAREER_OPS_TRACKER_DB,
