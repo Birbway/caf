@@ -1,9 +1,8 @@
-import fs from "node:fs";
-import path from "node:path";
 import { careerOpsRoot } from "@/lib/career-ops";
+import { resolveCodeRoot } from "@/lib/core/code-root.mjs";
 import { atomicWriteWithBackup } from "@/lib/core/safe-write";
-import { coercePersonalization, renderSection, sectionState, SECTIONS } from "@/lib/personalization.mjs";
-import { mergeSections, UnsureProfileParseError } from "@/lib/personalization-file.mjs";
+import { coercePersonalization, SECTIONS } from "@/lib/personalization.mjs";
+import { readPersonalizationState, savePersonalization, UnsureProfileParseError } from "@/lib/personalization-file.mjs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,34 +17,24 @@ export const dynamic = "force-dynamic";
 // GET reports which sections are still the shipped template — the panel and the
 // assistant's SETUP STATE both read that, so neither re-asks for filled ones.
 
-// Reads are spelled inline with literal path segments (the same shape
-// /api/profile uses) rather than through a helper taking a path parameter:
-// Turbopack statically traces fs calls, and a non-literal argument makes it
-// trace the whole project and warn at build time.
-// null (not "") when the file is there but unreadable — merging onto "" would
-// drop every hand-edited section the user already has.
-function readUserProfile(): string | null {
-  try {
-    return fs.readFileSync(path.join(careerOpsRoot(), "modes", "_profile.md"), "utf8");
-  } catch {
-    return null;
-  }
-}
-function readTemplate(): string {
-  try {
-    return fs.readFileSync(path.join(careerOpsRoot(), "modes", "_profile.template.md"), "utf8");
-  } catch {
-    return "";
-  }
-}
-function userProfileExists(): boolean {
-  return fs.existsSync(path.join(careerOpsRoot(), "modes", "_profile.md"));
+// The template is a SYSTEM file and comes from the engine checkout
+// (resolveCodeRoot), not from careerOpsRoot(): with the data in another folder
+// there is no template there, and every section would compare as "filled".
+// A file that cannot be read, or cannot be spliced with certainty, is an error
+// here — never an empty string to merge onto.
+const codeRoot = () => resolveCodeRoot(process.cwd(), process.env);
+
+function failure(e: unknown): Response {
+  if (e instanceof UnsureProfileParseError) return Response.json({ error: e.message, code: e.code }, { status: 409 });
+  return Response.json({ error: e instanceof Error ? e.message : "personalization unavailable" }, { status: 500 });
 }
 
 export async function GET() {
-  const exists = userProfileExists();
-  const sections = sectionState((exists ? readUserProfile() : "") ?? "", readTemplate());
-  return Response.json({ exists, sections });
+  try {
+    return Response.json(readPersonalizationState(careerOpsRoot(), codeRoot()));
+  } catch (e) {
+    return failure(e);
+  }
 }
 
 export async function POST(req: Request) {
@@ -56,37 +45,19 @@ export async function POST(req: Request) {
     return Response.json({ error: "bad json" }, { status: 400 });
   }
   const patch = coercePersonalization(body) as Record<string, unknown>;
-  const ids = Object.keys(patch);
-  if (ids.length === 0) return Response.json({ error: "nothing to write" }, { status: 400 });
-
-  const file = path.join(careerOpsRoot(), "modes", "_profile.md");
-  // DATA-LOSS GUARD (same class as /api/profile, #649/#704/#920/#958): a missing
-  // file is seeded from the template; an existing one is merged, never replaced.
-  const base = userProfileExists() ? readUserProfile() : readTemplate();
-  if (base === null) {
-    return Response.json({ error: "modes/_profile.md exists but could not be read — refusing to overwrite it" }, { status: 500 });
-  }
-  const rendered: Record<string, string> = {};
-  for (const id of ids) rendered[id] = renderSection(id, patch[id]);
-  let merged: string;
-  try {
-    merged = mergeSections(base, rendered);
-  } catch (e) {
-    // Not sure where a section begins or ends: say why, write nothing.
-    if (e instanceof UnsureProfileParseError) return Response.json({ error: e.message, code: e.code }, { status: 409 });
-    throw e;
-  }
+  if (Object.keys(patch).length === 0) return Response.json({ error: "nothing to write" }, { status: 400 });
 
   // dryRun: the panel/assistant can preview the exact bytes before the confirm
   // card is accepted — nothing touches disk.
   const dryRun = new URL(req.url).searchParams.get("dryRun") === "1" || body.dryRun === true;
-  if (dryRun) return Response.json({ ok: true, dryRun: true, sections: ids, preview: merged });
-
+  // DATA-LOSS GUARD (same class as /api/profile, #649/#704/#920/#958): a missing
+  // file is seeded from the template; an existing one is merged, never replaced.
   try {
-    atomicWriteWithBackup(file, merged);
+    const { ids, merged } = savePersonalization({ dataRoot: careerOpsRoot(), codeRoot: codeRoot(), patch, dryRun, write: atomicWriteWithBackup });
+    if (dryRun) return Response.json({ ok: true, dryRun: true, sections: ids, preview: merged });
+    const labels = SECTIONS.filter((s) => ids.includes(s.id)).map((s) => s.heading.replace(/^## Your /, ""));
+    return Response.json({ ok: true, sections: ids, labels });
   } catch (e) {
-    return Response.json({ error: e instanceof Error ? e.message : "write failed" }, { status: 500 });
+    return failure(e);
   }
-  const labels = SECTIONS.filter((s) => ids.includes(s.id)).map((s) => s.heading.replace(/^## Your /, ""));
-  return Response.json({ ok: true, sections: ids, labels });
 }

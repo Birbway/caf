@@ -1,9 +1,12 @@
-// The one merge that is allowed to change the user's modes/_profile.md.
-// Server-only — personalization.mjs is the half the browser can import (see
-// its header), and the notes markers come from profile-memory.mjs, which reads
-// files.
-import { NOTES_START, NOTES_END } from "./profile-memory.mjs";
-import { scanHeadings, SECTIONS } from "./personalization.mjs";
+// The file half of personalization: reading modes/_profile.md and its template,
+// and the one merge that is allowed to change the user's file. Server-only —
+// personalization.mjs is the half the browser can import (see its header).
+// Roots and the writer are parameters, as in profile-memory.mjs, so web/tests
+// can run this against a temp directory under bare `node --test`.
+import fs from "node:fs";
+import path from "node:path";
+import { NOTES_START, NOTES_END, profilePath } from "./profile-memory.mjs";
+import { renderSection, scanHeadings, sectionState, SECTIONS } from "./personalization.mjs";
 
 /**
  * Thrown when a write cannot be proven safe: the file's section boundaries are
@@ -89,4 +92,70 @@ export function mergeSections(existingMd, rendered) {
     throw new UnsureProfileParseError("the new text would change where the file's sections begin and end");
   }
   return out;
+}
+
+/**
+ * The shipped template. A SYSTEM file: it lives in the engine checkout, never
+ * in the data root — under the split layout (CAREER_OPS_ROOT pointing at a
+ * data-only directory) the data root has no template at all.
+ */
+export function templatePath(codeRoot) {
+  return path.join(/* turbopackIgnore: true */ codeRoot, "modes", "_profile.template.md");
+}
+
+// null only for ENOENT. Anything else — and bytes that are not valid UTF-8,
+// which a decode + encode round trip would silently rewrite — is an error the
+// caller must see: "" here would read as "nothing on file".
+function readExact(file) {
+  let buf;
+  try {
+    buf = fs.readFileSync(file);
+  } catch (err) {
+    if (err?.code === "ENOENT") return null;
+    throw err;
+  }
+  const text = buf.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(buf)) throw new UnsureProfileParseError(`${path.basename(file)} is not valid UTF-8`);
+  return text;
+}
+
+function readTemplate(codeRoot) {
+  const tpl = readExact(templatePath(codeRoot));
+  if (tpl === null || !tpl.trim()) throw new Error("modes/_profile.template.md is missing from the career-ops checkout");
+  return tpl;
+}
+
+/**
+ * Section state of the user's file against the shipped template. Throws when
+ * either cannot be read: with no template every section compares as "filled",
+ * and an unreadable profile compares as "missing".
+ *
+ * @param {string} dataRoot career-ops home, i.e. careerOpsRoot()
+ * @param {string} codeRoot engine checkout, i.e. resolveCodeRoot()
+ */
+export function readPersonalizationState(dataRoot, codeRoot) {
+  const user = readExact(profilePath(dataRoot));
+  return { exists: user !== null, sections: sectionState(user ?? "", readTemplate(codeRoot)) };
+}
+
+/**
+ * Read, merge and write in ONE synchronous pass — no await between the read and
+ * the rename, so two requests in this process cannot interleave and drop each
+ * other's sections. A missing file is seeded from the template; an existing one
+ * is merged, never replaced. Throws before writing on anything it cannot read
+ * or is not sure how to splice.
+ *
+ * @param {{ dataRoot: string, codeRoot: string, patch: Record<string, unknown>, dryRun?: boolean, write: (file: string, content: string) => unknown }} opts
+ *   `patch` is already coerced (coercePersonalization); `write` is atomicWriteWithBackup.
+ * @returns {{ ids: string[], merged: string }}
+ */
+export function savePersonalization({ dataRoot, codeRoot, patch, dryRun = false, write }) {
+  const ids = Object.keys(patch);
+  const file = profilePath(dataRoot);
+  const base = readExact(file) ?? readTemplate(codeRoot);
+  const rendered = {};
+  for (const id of ids) rendered[id] = renderSection(id, patch[id]);
+  const merged = mergeSections(base, rendered);
+  if (!dryRun) write(file, merged);
+  return { ids, merged };
 }

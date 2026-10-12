@@ -6,9 +6,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { atomicWriteWithBackup } from "../../src/lib/core/safe-write.ts";
 import { coercePersonalization, renderSection, sectionState, SECTIONS } from "../../src/lib/personalization.mjs";
-import { mergeSections, UnsureProfileParseError } from "../../src/lib/personalization-file.mjs";
+import { mergeSections, readPersonalizationState, savePersonalization, templatePath, UnsureProfileParseError } from "../../src/lib/personalization-file.mjs";
 
 // The REAL shipped template, not a synthetic one: if its headings change, this
 // fails here rather than silently leaving a section unaddressable.
@@ -198,4 +201,78 @@ test("merge refuses a body that would swallow the sections after it", () => {
   const before = "## Your Exit Narrative\n\nold\n\n## Your Comp Targets\n\n100k\n";
   assert.throws(() => mergeSections(before, { exitNarrative: "see <!-- my notes" }), UnsureProfileParseError);
   assert.throws(() => mergeSections(before, { exitNarrative: "```" }), UnsureProfileParseError);
+});
+
+// ── the file: template lookup, atomic write ─────────────────────────────
+
+/** A split install: the engine checkout and the user's data in two directories. */
+function splitInstall(t, { template = TEMPLATE, profile } = {}) {
+  const base = mkdtempSync(join(tmpdir(), "co-personalization-"));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const codeRoot = join(base, "checkout");
+  const dataRoot = join(base, "data");
+  mkdirSync(join(codeRoot, "modes"), { recursive: true });
+  mkdirSync(join(dataRoot, "modes"), { recursive: true });
+  if (template !== null) writeFileSync(join(codeRoot, "modes", "_profile.template.md"), template);
+  if (profile !== undefined) writeFileSync(join(dataRoot, "modes", "_profile.md"), profile);
+  return { codeRoot, dataRoot, file: join(dataRoot, "modes", "_profile.md") };
+}
+
+test("the template is read from the checkout, not from the data root", (t) => {
+  const { codeRoot, dataRoot } = splitInstall(t, { profile: TEMPLATE });
+  assert.equal(templatePath(codeRoot), join(codeRoot, "modes", "_profile.template.md"));
+  // The data root has no template. Read from there, every section would
+  // compare against "" and report "filled" on an untouched copy.
+  const { exists, sections } = readPersonalizationState(dataRoot, codeRoot);
+  assert.equal(exists, true);
+  for (const s of sections) assert.equal(s.state, "template", s.heading);
+});
+
+test("a template sitting in the data root is ignored", (t) => {
+  const { codeRoot, dataRoot } = splitInstall(t, { profile: TEMPLATE });
+  writeFileSync(join(dataRoot, "modes", "_profile.template.md"), "## Your Exit Narrative\n\nstale copy\n");
+  for (const s of readPersonalizationState(dataRoot, codeRoot).sections) assert.equal(s.state, "template", s.heading);
+});
+
+test("a first save seeds the user's file from the checkout's template", (t) => {
+  const { codeRoot, dataRoot, file } = splitInstall(t);
+  savePersonalization({ dataRoot, codeRoot, patch: { compTargets: "100k base" }, write: atomicWriteWithBackup });
+  const written = readFileSync(file, "utf8");
+  assertOnlyBodySwapped(TEMPLATE, written, "100k base");
+});
+
+test("a missing template is an error: no state is reported and no sparse file is created", (t) => {
+  const { codeRoot, dataRoot, file } = splitInstall(t, { template: null });
+  assert.throws(() => readPersonalizationState(dataRoot, codeRoot), /template/);
+  assert.throws(() => savePersonalization({ dataRoot, codeRoot, patch: { compTargets: "100k" }, write: atomicWriteWithBackup }), /template/);
+  assert.throws(() => readFileSync(file), { code: "ENOENT" });
+});
+
+test("a save goes through a temp file + rename, backs up the old bytes and leaves no temp behind", (t) => {
+  const before = "# Mine\r\n\r\n## Your Comp Targets\r\n\r\nold\r\n\r\n## Keep\r\n\r\n- me\r\n";
+  const { codeRoot, dataRoot, file } = splitInstall(t, { profile: before });
+  savePersonalization({ dataRoot, codeRoot, patch: { compTargets: "new" }, write: atomicWriteWithBackup });
+  assert.equal(readFileSync(file, "utf8"), before.replace("old", "new"));
+  const left = readdirSync(join(dataRoot, "modes")).filter((f) => f !== "_profile.md");
+  assert.equal(left.length, 1, `only the backup remains next to the file: ${left}`);
+  assert.match(left[0], /^_profile\.md\.bak-/);
+  assert.equal(readFileSync(join(dataRoot, "modes", left[0]), "utf8"), before);
+});
+
+test("a refused save and a dry run never call the writer; the file keeps its bytes", (t) => {
+  const before = "## Your Comp Targets\n\na\n\n## Your Comp Targets\n\nb\n";
+  const { codeRoot, dataRoot, file } = splitInstall(t, { profile: before });
+  const write = () => assert.fail("the writer must not be reached");
+  assert.throws(() => savePersonalization({ dataRoot, codeRoot, patch: { compTargets: "c" }, write }), UnsureProfileParseError);
+  savePersonalization({ dataRoot, codeRoot, patch: { exitNarrative: "x" }, dryRun: true, write });
+  assert.equal(readFileSync(file, "utf8"), before);
+  assert.deepEqual(readdirSync(join(dataRoot, "modes")), ["_profile.md"]);
+});
+
+test("a file that is not valid UTF-8 is refused, not re-encoded", (t) => {
+  const { codeRoot, dataRoot, file } = splitInstall(t);
+  const bytes = Buffer.concat([Buffer.from("## Your Comp Targets\n\ncaf"), Buffer.from([0xe9]), Buffer.from("\n")]);
+  writeFileSync(file, bytes);
+  assert.throws(() => savePersonalization({ dataRoot, codeRoot, patch: { compTargets: "c" }, write: atomicWriteWithBackup }), UnsureProfileParseError);
+  assert.ok(readFileSync(file).equals(bytes));
 });
