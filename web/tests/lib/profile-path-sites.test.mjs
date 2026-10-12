@@ -1,5 +1,9 @@
-// Every place the web reads or writes config/profile.yml must follow
-// CAREER_OPS_PROFILE, the way the core's ten honoring modules do (#5026).
+// The web sites listed below read or write config/profile.yml through
+// getProfilePath(), so they must follow CAREER_OPS_PROFILE the way the core's
+// honoring modules do (#5026). This file covers those sites only; it does not
+// prove every reader is covered (the root suite's scan guard is the lexical
+// backstop), and batch/batch-runner.sh and the prompts under modes/ and batch/
+// are outside this change.
 //
 // Each case runs the REAL code against a data root holding profile A at the
 // default location and profile B elsewhere, with CAREER_OPS_PROFILE naming B.
@@ -16,7 +20,7 @@ import path from "node:path";
 import * as yaml from "js-yaml";
 import "../helpers/web-ts-alias-loader.mjs";
 
-const { readLanguageConfig } = await import("../../src/lib/career-ops.ts");
+const { readLanguageConfig, doctorState } = await import("../../src/lib/career-ops.ts");
 const { seedExploreFilters } = await import("../../src/lib/core/portals.ts");
 const { loadProfileTargets, readScanTimeoutMs } = await import("../../src/lib/core/scan.ts");
 const { POST: updateProfile } = await import("../../src/app/api/profile/route.ts");
@@ -170,4 +174,31 @@ test("POST /api/followups/cadence refuses to overwrite a malformed override prof
     assert.equal(readFileSync(b, "utf8"), "- not\n- a mapping\n");
     assert.equal(readFileSync(a, "utf8"), PROFILE_A);
   });
+});
+
+test("doctorState does not report the profile missing when CAREER_OPS_PROFILE names an existing file", async () => {
+  await withProfiles(({ root, a }) => {
+    writeFileSync(path.join(root, "cv.md"), "# CV\n");
+    mkdirSync(path.join(root, "modes"));
+    writeFileSync(path.join(root, "modes", "_profile.md"), "# profile\n");
+    writeFileSync(path.join(root, "portals.yml"), "companies: []\n");
+    rmSync(a);
+    const state = doctorState({ applications: [], inbox: [] });
+    assert.deepEqual(state.missing, []);
+    assert.equal(state.onboardingNeeded, false);
+  });
+});
+
+test("doctorState still reports the profile missing when the override file does not exist", async () => {
+  await withProfiles(
+    ({ root, a }) => {
+      writeFileSync(path.join(root, "cv.md"), "# CV\n");
+      mkdirSync(path.join(root, "modes"));
+      writeFileSync(path.join(root, "modes", "_profile.md"), "# profile\n");
+      writeFileSync(path.join(root, "portals.yml"), "companies: []\n");
+      rmSync(a);
+      assert.deepEqual(doctorState({ applications: [], inbox: [] }).missing, ["config/profile.yml"]);
+    },
+    { writeB: false },
+  );
 });
