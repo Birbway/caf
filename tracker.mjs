@@ -1033,7 +1033,9 @@ async function main() {
     process.exit(command ? 1 : 0);
   }
   const { known, valueFlags, usage } = SUBCOMMAND_FLAGS[command];
-  validateFlags(args, known, usage, { valueFlags });
+  // requireOperand: `query --company --json` must be a usage error, not an
+  // unfiltered listing — no subcommand has a richer check of its own.
+  validateFlags(args, known, usage, { valueFlags, requireOperand: true });
   await fn(args);
 }
 

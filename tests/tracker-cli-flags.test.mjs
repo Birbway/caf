@@ -177,6 +177,28 @@ for (const { args, typo } of OTHER_TYPOS) {
   cleanup(sb);
 }
 
+// ── Test 8: a value-taking flag with its operand missing is a usage error
+//    before dispatch, not a silent fall back to the unfiltered default. ──
+const MISSING_OPERANDS = [
+  { args: ['query', '--company', '--json'], flag: '--company' },
+  { args: ['query', '--status'], flag: '--status' },
+  { args: ['history', '--id'], flag: '--id' },
+  { args: ['export', '--out', '--force'], flag: '--out' },
+  { args: ['delete', '--num', '--dry-run'], flag: '--num' },
+];
+for (const { args, flag } of MISSING_OPERANDS) {
+  const sb = makeSandbox();
+  runTracker(['sync'], sb);
+  const r = runTracker(args, sb);
+  const stillThere = readFileSync(sb.tracker, 'utf-8').includes('Northwind Robotics');
+  if (r.status !== 0 && r.all.includes(`${flag} requires a value`) && stillThere) {
+    pass(`${args.join(' ')} is rejected: ${flag} requires a value`);
+  } else {
+    fail(`${args.join(' ')} — expected "${flag} requires a value", got exit ${r.status}: ${r.all}`);
+  }
+  cleanup(sb);
+}
+
 // ── Test 9: the sandbox holds the SQLite index too — an inherited
 //    CAREER_OPS_TRACKER_DB must not send `sync` to a database outside it. ──
 {
