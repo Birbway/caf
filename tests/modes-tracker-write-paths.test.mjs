@@ -39,6 +39,7 @@ ok('the Tools table is found in the English _shared.md and its localized copies'
   // A recognizer that silently stops matching would pass everything below.
   assert.ok(withTable.length >= 18, `only ${withTable.length} Tools tables recognized: ${withTable.join(', ')}`);
   for (const f of withTable) assert.ok(toolRow(read(f), 'Edit') !== null, `${f}: Write row found but no Edit row`);
+  for (const f of withTable) assert.ok(toolRow(read(f), 'Bash') !== null, `${f}: Write row found but no Bash row`);
 });
 
 for (const file of withTable) {
@@ -50,6 +51,14 @@ for (const file of withTable) {
     const row = toolRow(read(file), 'Edit');
     assert.ok(row.includes('set-status.mjs'), `Edit row: "${row}"`);
     assert.ok(row.includes('merge-tracker.mjs'), `Edit row: "${row}"`);
+  });
+  // The Write and Edit rows send the agent to two scripts. A Bash row that
+  // lists generate-pdf.mjs alone reads as if those two were not allowed.
+  ok(`${file}: Bash lists the two tracker writers next to generate-pdf.mjs`, () => {
+    const row = toolRow(read(file), 'Bash');
+    for (const script of ['generate-pdf.mjs', 'merge-tracker.mjs', 'set-status.mjs']) {
+      assert.ok(row.includes(`node ${script}`), `Bash row: "${row}"`);
+    }
   });
 }
 
