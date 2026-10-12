@@ -163,7 +163,7 @@ Job posting を分析し、real, active opening かどうかを示す signals �
 - **Niche/executive roles:** Staff+、VP、Director、highly specialized roles は months open でも legitimate。Age thresholds を調整。
 - **Startup / pre-revenue:** Early-stage companies は role が genuinely undefined で JD が vague なことがある。Description vagueness の重みを下げる。
 - **No date available:** Posting age が判断できず、他に concerning signals がない場合、limited data の note 付きで default to "Proceed with Caution"。Evidence なしで "Suspicious" にしない。
-- **Recruiter-sourced (no public posting):** Freshness signals unavailable。Active recruiter contact 自体を positive legitimacy signal として note。
+- **Recruiter-sourced (no public posting):** Freshness signals unavailable。Recruiter contact だけでは positive legitimacy signal にならない（Neutral）。tier を決める前に `modes/oferta.md` の Signal 18（Recruiter Identity Verification）を実行する。
 
 ---
 
