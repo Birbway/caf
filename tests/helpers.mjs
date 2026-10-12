@@ -2,7 +2,7 @@
 // Moved verbatim from test-all.mjs (issue #1440); no framework by design:
 // the suite must run on a fresh clone with only Node.
 import { execFileSync } from 'child_process';
-import { accessSync, constants, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync as _rmSync, statSync, symlinkSync, writeFileSync } from 'fs';
+import { accessSync, constants, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync as _rmSync, statSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
@@ -726,6 +726,46 @@ export function codeMask(src) {
 export const isCodeRange = (isCode, from, to) => isCode.slice(from, to).every(Boolean);
 
 /**
+ * The `node_modules` directory a checkout with none of its own actually runs
+ * on, or null when there is none.
+ *
+ * A git worktree (for example one under `.claude/worktrees/<name>`) usually has
+ * no `node_modules`: its scripts import fine because Node walks up into the main
+ * checkout's tree. This finds that tree the way the scripts do, by resolving the
+ * packages `<root>/package.json` declares (findInstalledPackage, nearest
+ * first), and returns the nearest directory one of them resolves from.
+ *
+ * Keyed on the declared dependencies rather than on the first `node_modules`
+ * found on the way up, because an unrelated one is easy to have there (a stray
+ * `~/node_modules` above a fresh clone). Linking that would hand the sandbox a
+ * tree without the repo's packages, and the copied script would die with
+ * ERR_MODULE_NOT_FOUND inside the caller's catch, which is the misattribution
+ * linkNodeModules exists to prevent. No package.json, or none of its
+ * dependencies installed anywhere above, is therefore "not installed".
+ *
+ * @param {string} root - Checkout whose own `node_modules` is absent.
+ * @returns {string|null} The inherited `node_modules` directory, or null.
+ */
+function inheritedDependencyTree(root) {
+  let declared;
+  try {
+    declared = Object.keys(JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8')).dependencies ?? {});
+  } catch {
+    return null;
+  }
+  let nearest = null;
+  for (const name of declared) {
+    const pkg = findInstalledPackage(name, root);
+    if (pkg === null) continue;
+    // Up past the package's own segments: one for `name`, two for `@scope/name`.
+    const tree = resolve(pkg, ...name.split('/').map(() => '..'));
+    // Every candidate is an ancestor's node_modules, so the longest is the nearest.
+    if (nearest === null || tree.length > nearest.length) nearest = tree;
+  }
+  return nearest;
+}
+
+/**
  * Link the repository's whole installed dependency tree into a sandbox
  * directory, so a script copied out of the repo can still resolve its package
  * imports.
@@ -734,13 +774,19 @@ export const isCodeRange = (isCode, from, to) => isCode.slice(from, to).every(Bo
  * against a target that does not exist, so a separate check is one a call site
  * can forget. The link is then created dangling, the sandboxed script dies with
  * ERR_MODULE_NOT_FOUND, and the section's own catch reports that as a crash of
- * whatever it was testing. A git worktree is the ordinary way to land in that
- * state: test-all.mjs itself still resolves js-yaml through the parent
- * checkout's `node_modules` by Node's upward walk, while `join(ROOT,
- * 'node_modules')` inside the worktree does not exist. The suite is designed to
- * run on a fresh clone with only Node (see the file header), where an absent
- * tree is the expected state, so the caller is handed a reason to report and
- * skip on instead of a broken sandbox.
+ * whatever it was testing. The suite is designed to run on a fresh clone with
+ * only Node (see the file header), where an absent tree is the expected state,
+ * so the caller is handed a reason to report and skip on instead of a broken
+ * sandbox.
+ *
+ * A git worktree is not that state, though it looks like it: `join(root,
+ * 'node_modules')` does not exist there either, while test-all.mjs and every
+ * script under test resolve their packages through the parent checkout's tree
+ * by Node's upward walk. Reporting "not installed" there skipped (or, where the
+ * caller throws on the reason, failed) suites whose dependencies were one
+ * directory up. So when `root` has no tree of its own, the one it inherits is
+ * linked instead (inheritedDependencyTree), the same position linkRepoPackage
+ * takes for a single package.
  *
  * 'junction' on Windows, because a directory symlink needs
  * SeCreateSymbolicLinkPrivilege, which a normal shell lacks unless Developer
@@ -749,17 +795,31 @@ export const isCodeRange = (isCode, from, to) => isCode.slice(from, to).every(Bo
  * type argument is ignored off Windows.
  *
  * @param {string} destDir - Sandbox directory to receive the node_modules link.
- * @param {string} [root=ROOT] - Repository root holding the installed tree.
+ * @param {string} [root=ROOT] - Repository root whose installed tree is linked:
+ *   its own `node_modules`, or the one it inherits from a parent directory.
  * @returns {string|null} null once linked; otherwise why it could not be.
  */
 export function linkNodeModules(destDir, root = ROOT) {
-  const target = join(root, 'node_modules');
+  let target = join(root, 'node_modules');
   try {
+    let stats;
+    try {
+      stats = statSync(target);
+    } catch (err) {
+      // Only an ABSENT own tree falls back to the inherited one. Anything that
+      // is there and cannot be used (a loop, no permission) is still reported
+      // as itself below, never papered over with a parent's tree.
+      if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR') throw err;
+      const inherited = inheritedDependencyTree(root);
+      if (inherited === null) throw err;
+      target = inherited;
+      stats = statSync(target);
+    }
     // isDirectory, because statSync succeeds on a regular FILE standing where the
     // tree belongs. Without this an executable one links cleanly and the sandbox
     // gets a symlink to a file, which is the broken sandbox this function exists
     // to refuse. The message says what it is rather than calling it unreadable.
-    if (!statSync(target).isDirectory()) {
+    if (!stats.isDirectory()) {
       return `node_modules at ${target} is not a directory`;
     }
     // Traverse permission, not read permission, is what resolution needs, and
@@ -786,7 +846,7 @@ export function linkNodeModules(destDir, root = ROOT) {
     // lands in the call site's catch, which is where the misattribution this
     // function exists to prevent came from.
     if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
-      return `node_modules is not installed at ${root} -- run \`npm ci\` there`;
+      return `node_modules is not installed at ${root} or in a parent directory -- run \`npm ci\` there`;
     }
     return `node_modules at ${target} is unreadable (${err.code})`;
   }

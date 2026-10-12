@@ -99,6 +99,130 @@ try {
       }
     }
 
+    // Worktree layout: the checkout has no node_modules of its own and runs on
+    // the one in a parent directory, which is how Node resolves every import
+    // made from it. A git worktree under `.claude/worktrees/<name>` is exactly
+    // this, and "not installed" was the wrong answer there: the suites that
+    // skip on the reason went quiet, and the one that throws on it failed,
+    // while the code under test resolved its packages without trouble.
+    {
+      // One parent directory per case, so no case can resolve another's tree.
+      const layout = (name, { installed = [], declared = null, own = null } = {}) => {
+        const parent = join(tmp, name);
+        const root = join(parent, 'worktrees', 'wt');
+        mkdirSync(root, { recursive: true });
+        for (const pkg of installed) {
+          mkdirSync(join(parent, 'node_modules', pkg), { recursive: true });
+          writeFileSync(join(parent, 'node_modules', pkg, 'package.json'), JSON.stringify({ name: pkg }), 'utf-8');
+        }
+        if (declared) {
+          writeFileSync(join(root, 'package.json'), JSON.stringify({ dependencies: Object.fromEntries(declared.map((d) => [d, '*'])) }), 'utf-8');
+        }
+        if (own) own(root);
+        const sandbox = join(tmp, `sandbox-${name}`);
+        mkdirSync(sandbox, { recursive: true });
+        return { parent, root, sandbox };
+      };
+      const entryOf = (sandbox) => {
+        try { lstatSync(join(sandbox, 'node_modules')); return 'present'; } catch (err) { return err.code; }
+      };
+      const through = (sandbox, pkg) => {
+        try { return JSON.parse(readFileSync(join(sandbox, 'node_modules', pkg, 'package.json'), 'utf-8')).name; } catch (err) { return `unreadable: ${err.code}`; }
+      };
+
+      {
+        const { root, sandbox } = layout('wt-inherits', { installed: ['demo-pkg'], declared: ['demo-pkg'] });
+        const reason = linkNodeModules(sandbox, root);
+        if (reason === null && through(sandbox, 'demo-pkg') === 'demo-pkg') {
+          pass('a checkout with no node_modules of its own links the tree it inherits from a parent directory');
+        } else {
+          fail(`worktree layout: reason=${JSON.stringify(reason)}, read through the link: ${JSON.stringify(through(sandbox, 'demo-pkg'))}`);
+        }
+      }
+
+      // The link must be the node_modules directory, not the scope directory a
+      // scoped package sits one level further down in.
+      {
+        const { root, sandbox } = layout('wt-scoped', { installed: ['@demo/scoped'], declared: ['@demo/scoped'] });
+        const reason = linkNodeModules(sandbox, root);
+        if (reason === null && through(sandbox, '@demo/scoped') === '@demo/scoped') {
+          pass('a scoped dependency still resolves to the node_modules directory, not to its scope folder');
+        } else {
+          fail(`scoped worktree layout: reason=${JSON.stringify(reason)}, read through the link: ${JSON.stringify(through(sandbox, '@demo/scoped'))}`);
+        }
+      }
+
+      // A node_modules above the checkout that holds none of its dependencies is
+      // somebody else's (a stray ~/node_modules above a fresh clone). Linking it
+      // would trade an honest skip for ERR_MODULE_NOT_FOUND inside the sandbox.
+      {
+        const { root, sandbox } = layout('wt-stray', { installed: ['unrelated'], declared: ['demo-pkg'] });
+        const reason = linkNodeModules(sandbox, root);
+        if (typeof reason === 'string' && /npm ci/.test(reason) && reason.includes(root) && entryOf(sandbox) === 'ENOENT') {
+          pass('an ancestor node_modules holding none of the declared dependencies is not linked');
+        } else {
+          fail(`stray ancestor tree: reason=${JSON.stringify(reason)}, lstat: ${entryOf(sandbox)}`);
+        }
+      }
+
+      // With nothing declared there is nothing to recognize a tree by, so a root
+      // that is not a checkout (a fixture directory) cannot claim one.
+      {
+        const { root, sandbox } = layout('wt-undeclared', { installed: ['demo-pkg'] });
+        const reason = linkNodeModules(sandbox, root);
+        if (typeof reason === 'string' && entryOf(sandbox) === 'ENOENT') {
+          pass('a root with no package.json does not inherit a tree from a parent directory');
+        } else {
+          fail(`undeclared root: reason=${JSON.stringify(reason)}, lstat: ${entryOf(sandbox)}`);
+        }
+      }
+
+      // The checkout's own tree wins, as it does for Node.
+      {
+        const { root, sandbox } = layout('wt-own-first', {
+          installed: ['demo-pkg'],
+          declared: ['demo-pkg'],
+          own: (r) => {
+            mkdirSync(join(r, 'node_modules', 'demo-pkg'), { recursive: true });
+            writeFileSync(join(r, 'node_modules', 'demo-pkg', 'package.json'), JSON.stringify({ name: 'own-copy' }), 'utf-8');
+          },
+        });
+        const reason = linkNodeModules(sandbox, root);
+        if (reason === null && through(sandbox, 'demo-pkg') === 'own-copy') {
+          pass('a checkout with its own node_modules links that one, not a parent directory\'s');
+        } else {
+          fail(`own tree first: reason=${JSON.stringify(reason)}, read through the link: ${JSON.stringify(through(sandbox, 'demo-pkg'))}`);
+        }
+      }
+
+      // An own tree that is there and unusable is reported as itself. Falling
+      // back to the parent's would hide a broken checkout behind a working one.
+      {
+        const { root, sandbox } = layout('wt-own-broken', {
+          installed: ['demo-pkg'],
+          declared: ['demo-pkg'],
+          // Windows without the symlink privilege cannot make the loop; the row
+          // below notices the missing entry and says it was skipped.
+          own: (r) => {
+            const loop = join(r, 'node_modules');
+            try { symlinkSync(loop, loop); } catch { /* reported below */ }
+          },
+        });
+        let made = true;
+        try { lstatSync(join(root, 'node_modules')); } catch { made = false; }
+        if (!made) {
+          warn('skipped the broken-own-tree row: a self-referential symlink could not be created here');
+        } else {
+          const reason = linkNodeModules(sandbox, root);
+          if (typeof reason === 'string' && /unreadable \(ELOOP\)/.test(reason) && entryOf(sandbox) === 'ENOENT') {
+            pass('an unusable own node_modules is reported, not replaced by a parent directory\'s tree');
+          } else {
+            fail(`broken own tree: reason=${JSON.stringify(reason)}, lstat: ${entryOf(sandbox)}`);
+          }
+        }
+      }
+    }
+
     // Unreadable tree: a different reason, and still a skip. `npm ci` is the
     // wrong advice for a node_modules that is there and cannot be stat'd, and
     // throwing would land in the call site's catch, which is the
