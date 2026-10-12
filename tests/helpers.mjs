@@ -105,6 +105,23 @@ export function warn(msg) { console.log(`  ⚠️  ${msg}`); warnings++; }
 export function results() { return { passed, failed, warnings }; }
 
 /**
+ * Add another process's counters to this one's.
+ *
+ * `test-all.mjs --jobs N` runs each discovered suite in a child process. The
+ * child counts its own pass()/fail()/warn() calls and has already printed their
+ * lines; the parent only needs the totals, so the summary line and the exit
+ * code cover every suite exactly as they do when suites run in-process.
+ *
+ * @param {{passed?: number, failed?: number, warnings?: number}} counts - A results() snapshot from a child.
+ * @returns {void}
+ */
+export function absorbResults({ passed: p = 0, failed: f = 0, warnings: w = 0 } = {}) {
+  passed += p;
+  failed += f;
+  warnings += w;
+}
+
+/**
  * Print the summary line and exit with the suite's exit code.
  * Moved verbatim from the tail of test-all.mjs — output must stay byte-identical.
  */

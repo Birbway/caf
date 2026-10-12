@@ -37,7 +37,7 @@
 
 
 import { execSync, execFile, execFileSync, spawn, spawnSync } from 'child_process';
-import { readFileSync, existsSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync as _rmSync, statSync, unlinkSync, realpathSync, symlinkSync, copyFileSync } from 'fs';
+import { readFileSync, existsSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync as _rmSync, statSync, unlinkSync, realpathSync, symlinkSync, copyFileSync, openSync, closeSync } from 'fs';
 
 // Windows keeps a handle open on a just-exited child process's working files
 // for a short window (antivirus and Search Indexer widen it), so removing a
@@ -53,11 +53,11 @@ import { readFileSync, existsSync, readdirSync, mkdtempSync, mkdirSync, writeFil
 // rather than at ~95 individual call sites. An explicit option still wins.
 const rmSync = (target, opts = {}) => _rmSync(target, { maxRetries: 10, retryDelay: 100, ...opts });
 import { join, dirname, basename, relative, delimiter } from 'path';
-import { tmpdir } from 'os';
+import { tmpdir, availableParallelism } from 'os';
 import { promisify } from 'util';
 import { fileURLToPath, pathToFileURL } from 'url';
 import * as yaml from 'js-yaml';
-import { pass, fail, warn, run, runAcrossUtcDay, runAcrossLocalDay, lastRunFailure, formatRunFailure, fileExists, finish, results, linkNodeModules, ROOT, QUICK, NODE, DEFAULT_SCRIPT_TIMEOUT_MS, getBash, toBashPath, hermeticGitEnv } from './tests/helpers.mjs';
+import { pass, fail, warn, run, runAcrossUtcDay, runAcrossLocalDay, lastRunFailure, formatRunFailure, fileExists, finish, results, absorbResults, linkNodeModules, ROOT, QUICK, NODE, DEFAULT_SCRIPT_TIMEOUT_MS, getBash, toBashPath, hermeticGitEnv } from './tests/helpers.mjs';
 import { flagValue, hasFlag } from './lib/cli-flags.mjs';
 import { collectMjsFiles } from './lib/mjs-files.mjs';
 import { walkTree, listTree } from './lib/walk-tree.mjs';
@@ -192,6 +192,13 @@ async function runDiscovered(filter = null) {
     console.log(`  ❌ no test files matched${filter ? ` --only "${filter}"` : ''} under tests/`);
     process.exit(1);
   }
+  // One file gains nothing from a child process, and --jobs 1 is the original
+  // in-process loop below, untouched: the fallback when a parallel run looks
+  // wrong, and the reference a parallel run is compared against.
+  if (JOBS > 1 && files.length > 1) {
+    await runDiscoveredParallel(files, Math.min(JOBS, files.length));
+    return;
+  }
   for (const f of files) {
     const rel = f.slice(ROOT.length + 1);
     const src = readFileSync(f, 'utf-8');
@@ -299,6 +306,188 @@ async function runDiscovered(filter = null) {
   }
 }
 
+// ── Discovered suites, several at a time (--jobs N) ──────────────────────
+//
+// The loop above runs ~600 files one after another in this process, which is
+// most of a full run's wall time on a machine with idle cores. Here each suite
+// gets a process of its own and N run at once.
+//
+// What stays the same as the serial loop, on purpose:
+//   - the order of the output. Each suite's output is buffered and printed when
+//     its turn in discovery order comes, so two runs of the same tree print the
+//     same log whatever finished first;
+//   - the source guards (process.exit, finish()) and their messages;
+//   - node:test suites run under `node --test` and report one line each;
+//   - the totals. A pass/fail-style suite counts in its own process and hands
+//     results() back (tests/run-discovered-child.mjs); absorbResults() adds
+//     them here, so finish() prints the same numbers and exit code.
+//
+// What differs: suites no longer share a process. One that relied on state an
+// earlier suite left behind (an env var, a module-level cache) finds it gone,
+// and one that keeps the event loop open is cut off after a grace period
+// instead of riding along until finish(). Both are reported, not hidden.
+
+// A node:test suite gets the same 30s budget run() gives it, times this, when
+// it shares the machine with N-1 others. Measured on 8 cores: a file takes
+// about 1.7x as long at 8 jobs as it does alone, and the slowest is 16s alone.
+const PARALLEL_NODE_TEST_BUDGET_FACTOR = 4;
+// The serial loop has no limit for an imported suite at all; a child that never
+// exits must not hang the whole run, so this one is only a backstop.
+const PARALLEL_SUITE_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * Spawn node on one suite and collect what it printed.
+ *
+ * @param {string[]} args - Arguments after the node binary.
+ * @param {number} timeoutMs - Kill the child after this long.
+ * @returns {Promise<{status: number|null, signal: string|null, timedOut: boolean, stdout: string, stderr: string, merged: string, ms: number}>}
+ *   `merged` is both streams in arrival order, which is what a terminal shows.
+ */
+function spawnSuite(args, timeoutMs, captureFile = null) {
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const out = [];
+    const err = [];
+    let timedOut = false;
+    // With a capture file, both of the child's streams are the SAME descriptor,
+    // exactly as `> file 2>&1` makes them. Two pipes cannot do this: each is
+    // read when its data happens to arrive, so a line a suite wrote to stderr
+    // could land before or after the stdout lines around it, and the log would
+    // differ from a serial run's (and from the previous parallel run's).
+    const fd = captureFile ? openSync(captureFile, 'w') : null;
+    // Nested test-all runs (some suites start one) must not fan out again
+    // inside a worker slot: JOBS is pinned to 1 in the environment below.
+    const child = spawn(NODE, args, { cwd: ROOT, env: process.env, stdio: ['ignore', fd ?? 'pipe', fd ?? 'pipe'] });
+    const killer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeoutMs);
+    child.stdout?.on('data', (d) => out.push(d));
+    child.stderr?.on('data', (d) => err.push(d));
+    const done = (status, signal) => {
+      clearTimeout(killer);
+      if (fd !== null) closeSync(fd);
+      let merged = '';
+      if (captureFile) {
+        try { merged = readFileSync(captureFile, 'utf-8'); } catch { /* reported by the caller as a dead suite */ }
+      }
+      resolve({
+        status, signal, timedOut, merged,
+        stdout: Buffer.concat(out).toString('utf-8'),
+        stderr: Buffer.concat(err).toString('utf-8'),
+        ms: Date.now() - startedAt,
+      });
+    };
+    child.on('error', (e) => { err.push(Buffer.from(String(e?.message ?? e))); done(null, null); });
+    child.on('close', done);
+  });
+}
+
+/**
+ * Run one discovered suite in a child and return a function that reports it.
+ *
+ * Reporting is deferred so the caller can apply results in discovery order:
+ * nothing here touches the counters or stdout.
+ *
+ * @param {string} f - Absolute path of the suite.
+ * @param {string} scratch - Directory for this run's result files.
+ * @param {number} index - Position in discovery order (names the result file).
+ * @returns {Promise<{report: () => void, ms: number, lingered: boolean}>}
+ */
+async function runSuiteInChild(f, scratch, index) {
+  const rel = f.slice(ROOT.length + 1);
+  const src = readFileSync(f, 'utf-8');
+  if (/\bprocess\.exit\s*\(/.test(stripCommentLines(src))) {
+    return { ms: 0, lingered: false, report: () => fail(`${rel} calls process.exit() — discovered suites must use pass/fail from tests/helpers.mjs and never exit`) };
+  }
+  if (/from ['"]node:test['"]/.test(src)) {
+    const r = await spawnSuite(['--test', f], DEFAULT_SCRIPT_TIMEOUT_MS * PARALLEL_NODE_TEST_BUDGET_FACTOR);
+    return {
+      ms: r.ms,
+      lingered: false,
+      report: () => {
+        if (r.status === 0) {
+          const count = (r.stdout.match(/^(?:#|ℹ) pass (\d+)/m) ?? [])[1];
+          pass(`${rel} — node:test suite passed${count ? ` (${count} tests)` : ''}`);
+          return;
+        }
+        fail(`${rel} — node:test suite failed (${r.timedOut ? `killed after ${Math.round(r.ms / 1000)}s` : `exit ${r.status ?? '?'}`})`);
+        for (const line of childFailureExcerpt(r)) console.log(`      ${line}`);
+      },
+    };
+  }
+  if (/\bfinish\s*\(\s*\)/.test(stripCommentLines(src))) {
+    return { ms: 0, lingered: false, report: () => fail(`${rel} calls finish() — only test-all.mjs may print the global summary; discovered suites use pass/fail and return`) };
+  }
+  const resultFile = join(scratch, `${index}.json`);
+  const args = [join(TESTS_DIR, 'run-discovered-child.mjs'), f, resultFile];
+  if (QUICK) args.push('--quick');
+  const r = await spawnSuite(args, PARALLEL_SUITE_TIMEOUT_MS, join(scratch, `${index}.out`));
+  let counts = null;
+  try { counts = JSON.parse(readFileSync(resultFile, 'utf-8')); } catch { /* reported below */ }
+  return {
+    ms: r.ms,
+    lingered: counts?.lingered === true,
+    report: () => {
+      if (r.merged) process.stdout.write(r.merged.endsWith('\n') ? r.merged : `${r.merged}\n`);
+      if (counts) absorbResults(counts);
+      if (r.timedOut) {
+        fail(`${rel} — suite was killed after ${Math.round(r.ms / 1000)}s without finishing`);
+      } else if (!counts) {
+        // No result file: the process died before its exit handler ran, so
+        // however many assertions printed above, none of them were counted.
+        fail(`${rel} — suite process died without reporting (exit ${r.status ?? '?'}${r.signal ? `, ${r.signal}` : ''}); its assertions above are not in the totals`);
+      } else if (r.status !== 0) {
+        // The suite reported, then the process ended badly anyway: an error
+        // thrown from async work after the import resolved. In the serial loop
+        // that same error takes the whole run down with it.
+        fail(`${rel} — suite process exited ${r.status ?? r.signal ?? '?'} after reporting (an error outside its awaited work)`);
+        // Nothing to excerpt: the error is already in the suite's output above.
+      }
+    },
+  };
+}
+
+/**
+ * Run the discovered suites `jobs` at a time and report them in discovery order.
+ *
+ * @param {string[]} files - Suites, already in discovery order.
+ * @param {number} jobs - How many children to keep running.
+ * @returns {Promise<void>}
+ */
+async function runDiscoveredParallel(files, jobs) {
+  const scratch = mkdtempSync(join(tmpdir(), 'career-ops-test-jobs-'));
+  const startedAt = Date.now();
+  const finished = new Array(files.length).fill(null);
+  let next = 0;
+  let reported = 0;
+  const flush = () => {
+    while (reported < files.length && finished[reported]) {
+      finished[reported].report();
+      reported++;
+    }
+  };
+  const worker = async () => {
+    while (next < files.length) {
+      const index = next++;
+      finished[index] = await runSuiteInChild(files[index], scratch, index);
+      flush();
+    }
+  };
+  try {
+    await Promise.all(Array.from({ length: jobs }, worker));
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+  const wall = (Date.now() - startedAt) / 1000;
+  const summed = finished.reduce((n, r) => n + (r?.ms ?? 0), 0) / 1000;
+  console.log(`\n  ⏱  ${files.length} discovered suites in ${wall.toFixed(0)}s, ${jobs} at a time (${summed.toFixed(0)}s of suite time; --jobs N or CAREER_OPS_TEST_JOBS to change, 1 runs them in-process)`);
+  const lingering = files.filter((_, i) => finished[i]?.lingered).map((f) => f.slice(ROOT.length + 1));
+  if (lingering.length) {
+    // Not a failure: the serial loop never notices these. Named because each
+    // one holds a worker for the whole grace period, and because a handle left
+    // open is usually a server or timer the suite meant to close.
+    console.log(`  ⏱  ${lingering.length} suite(s) kept their process alive after finishing and were cut off: ${lingering.join(', ')}`);
+  }
+}
+
 // A scratch copy left by a killed run used to poison every walker that follows:
 // `.gitignore` hides it and the copy carries no `.git`, so neither `git status`
 // nor `isNestedCheckout()` could see it, and the layout guards read a second
@@ -339,6 +528,30 @@ async function runDiscovered(filter = null) {
 // to "no filter": that would run everything and read as a pass of the subset
 // that was asked for — the same silent substitution this file's flag reading
 // was fixed for.
+// How many discovered suites run at once. In order of precedence:
+//   --jobs N                 this run
+//   CAREER_OPS_TEST_JOBS=N   this machine (a shell profile, a CI job)
+//   every available CPU      the default
+// 1 keeps the original loop: every suite imported into this process, in order.
+// A value that is not a positive integer is a usage error either way, for the
+// reason --only's is below: a typo that silently falls back to the default
+// reads as the run that was asked for.
+const JOBS = (() => {
+  const fromFlag = hasFlag(process.argv, '--jobs');
+  const raw = fromFlag ? (flagValue(process.argv, '--jobs') ?? '') : (process.env.CAREER_OPS_TEST_JOBS ?? '').trim();
+  if (!fromFlag && raw === '') return availableParallelism();
+  if (!/^[1-9]\d*$/.test(raw)) {
+    console.log(`  ❌ ${fromFlag ? '--jobs' : 'CAREER_OPS_TEST_JOBS'} must be a positive integer, e.g. ${fromFlag ? '--jobs 4' : 'CAREER_OPS_TEST_JOBS=4'} (got "${raw}")`);
+    process.exit(1);
+  }
+  return Number(raw);
+})();
+// Everything this run starts inherits a serial default. Some suites launch a
+// test-all of their own; one that fanned out again inside a worker slot would
+// put N x N processes on N cores, and its output would stop being comparable
+// with the serial runs those suites were written against.
+process.env.CAREER_OPS_TEST_JOBS = '1';
+
 const ONLY = hasFlag(process.argv, '--only') ? (flagValue(process.argv, '--only') ?? '') : null;
 if (ONLY !== null) {
   if (ONLY === '' || ONLY.startsWith('--')) {
