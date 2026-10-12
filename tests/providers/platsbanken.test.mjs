@@ -507,6 +507,14 @@ try {
     } else {
       fail(`entry-cap truncation was not announced: ${JSON.stringify(entryCapText)}`);
     }
+    // Both numbers answer "how much did the scan actually collect", so they must
+    // be the keyword's running totals (2 pages x 100 rows), never the last
+    // page's own count — a warning that under-reports is worse than none.
+    if (/200 rows for "x"/.test(entryCapText)) {
+      pass("the entry-cap warning reports the keyword's collected rows (200), not the last page's (100)");
+    } else {
+      fail(`entry-cap warning reported the wrong row count: ${JSON.stringify(entryCapText)}`);
+    }
 
     // At the source's own ceiling the advice has to change: raising max_pages
     // cannot buy a page Platsbanken does not serve.
@@ -518,6 +526,11 @@ try {
       pass('platsbanken.fetch() names the source ceiling instead of advising raise max_pages when the source is the limit');
     } else {
       fail(`source-ceiling truncation message wrong: ${JSON.stringify(sourceCapText)}`);
+    }
+    if (/2100 rows \(21 pages\)/.test(sourceCapText)) {
+      pass("the source-ceiling warning reports the keyword's collected rows (2100 over 21 pages), not the last page's (100)");
+    } else {
+      fail(`source-ceiling warning reported the wrong row count: ${JSON.stringify(sourceCapText)}`);
     }
 
     const probeText = await captureStderr(() => platsbanken.fetch(

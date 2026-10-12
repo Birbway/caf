@@ -292,6 +292,10 @@ export default {
 
     for (const keyword of keywords) {
       let keywordFailed = false;
+      // Rows this keyword has yielded so far. The truncation warning reports how
+      // much of the results the scan actually collected, so it needs this
+      // running total — the last page's own count answers a different question.
+      let keywordRows = 0;
       for (let page = 1; page <= maxPages; page++) {
         if (page > 1) await sleep(INTER_PAGE_DELAY_MS, ctx);
 
@@ -321,6 +325,7 @@ export default {
         for (const job of pageJobs) {
           if (!byUrl.has(job.url)) byUrl.set(job.url, job);
         }
+        keywordRows += pageJobs.length;
 
         if (rawCount < PAGE_SIZE) break; // short page — this keyword's own end
 
@@ -332,7 +337,7 @@ export default {
           warnTruncated(
             keyword,
             maxPages,
-            pageJobs.length,
+            keywordRows,
             maxPages >= MAX_PAGES_CAP ? 'source' : 'entry',
             entryName,
           );
