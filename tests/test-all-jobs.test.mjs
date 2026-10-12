@@ -73,7 +73,12 @@ function runner(args, env = {}) {
     timeout: 120_000,
     env: { ...process.env, CAREER_OPS_TEST_JOBS: '', ...env },
   });
-  const stdout = r.stdout ?? '';
+  // The runner names a suite by its path relative to the repo, in the platform's
+  // own spelling: `tests\order\a.test.mjs` on Windows. The expectations below
+  // are written once, with forward slashes, so the captured output is brought
+  // to that spelling here. (The first Windows run of this suite failed seven
+  // checks on exactly this, with the runner itself behaving correctly.)
+  const stdout = (r.stdout ?? '').replaceAll('\\', '/');
   return {
     status: r.status,
     stdout,
