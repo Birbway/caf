@@ -126,15 +126,10 @@ try {
   const EXEMPT = new Set(['path-resolver.mjs', 'career-profile.mjs']);
   const PENDING = new Set([
     'browser-extract.mjs',
-    'build-cv-html.mjs',
     'check-table-freshness.mjs',
-    'cv-sync-check.mjs',
-    'generate-pdf.mjs',
-    'prepare-application.mjs',
     'providers/_profile-keywords.mjs',
     'salary-gap.mjs',
     'scripts/export-ats-text.mjs',
-    'theme-style.mjs',
     'update-system.mjs',
     'upskill.mjs',
   ]);
