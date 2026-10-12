@@ -77,9 +77,9 @@ export function PageFormatSettings() {
 
   return (
     <div>
-      <label className="mt-8 mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-muted">
+      <span id="page-format-label" className="mt-8 mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-muted">
         Page format
-      </label>
+      </span>
       <div className="rounded-xl border border-border bg-surface/50 p-4">
         <p className="text-xs leading-relaxed text-faint">
           Paper size for your CV and cover-letter PDFs. Saved to{" "}
@@ -107,12 +107,15 @@ export function PageFormatSettings() {
           </div>
         ) : (
           <>
-            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+            <div role="group" aria-labelledby="page-format-label" className="mt-3 grid gap-2 sm:grid-cols-3">
               {options.map((o) => (
                 <button
                   key={o.value ?? "unset"}
                   type="button"
-                  onClick={() => setChoice(o.value)}
+                  onClick={() => {
+                    setChoice(o.value);
+                    setError(null);
+                  }}
                   aria-pressed={choice === o.value}
                   className={cn(
                     "rounded-xl border px-4 py-2.5 text-left transition-colors max-sm:min-h-[44px]",
@@ -126,7 +129,7 @@ export function PageFormatSettings() {
                 </button>
               ))}
             </div>
-            {error && <p className="mt-3 text-xs text-red-500">{error}</p>}
+            {error && <p role="alert" className="mt-3 text-xs text-red-500">{error}</p>}
             <button
               type="button"
               onClick={save}

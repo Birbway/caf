@@ -142,3 +142,11 @@ test("the Config page renders the Page format control", () => {
   assert.match(form, /import\s*{\s*PageFormatSettings\s*}\s*from\s*"@\/components\/page-format-settings"/);
   assert.match(form, /<PageFormatSettings\s*\/>/);
 });
+
+test("the control names its option group, announces save errors and clears a stale one", () => {
+  const src = readFileSync(new URL("../../src/components/page-format-settings.tsx", import.meta.url), "utf8");
+  assert.match(src, /<span id="page-format-label"/);
+  assert.match(src, /role="group"\s+aria-labelledby="page-format-label"/);
+  assert.match(src, /role="alert"[^>]*>\{error\}/);
+  assert.match(src, /onClick=\{\(\) => \{\s*setChoice\(o\.value\);\s*setError\(null\);\s*\}\}/);
+});
