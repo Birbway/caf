@@ -38,7 +38,7 @@ function touch(filepath, timeMs) {
   fs.utimesSync(filepath, d, d);
 }
 
-test("Missing output directory", () => {
+test("Missing output directory returns empty array when ENOENT", () => {
   const { root, manifestPath, isRegularContainedFile, cleanup } = setupTestEnv();
   try {
     const fakeOutputDir = path.join(root, "non-existent-output");
@@ -46,13 +46,50 @@ test("Missing output directory", () => {
       outputDir: fakeOutputDir,
       manifestPath,
       workspaceRoot: root,
-      isRegularContainedFile
+      isRegularContainedFile,
     });
     assert.deepEqual(results, []);
   } finally {
     cleanup();
   }
 });
+
+test("Output directory read error propagates unexpected filesystem errors like EACCES", () => {
+  const { root, manifestPath, isRegularContainedFile, cleanup } = setupTestEnv();
+  const origReaddirSync = fs.readdirSync;
+  try {
+    const outputDir = path.join(root, "unreadable-output");
+    fs.mkdirSync(outputDir, { recursive: true });
+
+    // Simulate an unexpected EACCES error on readdirSync
+    fs.readdirSync = (dir, opts) => {
+      if (dir === outputDir) {
+        const err = new Error("Permission denied");
+        err.code = "EACCES";
+        throw err;
+      }
+      return origReaddirSync(dir, opts);
+    };
+
+    assert.throws(
+      () => {
+        discoverDocuments({
+          outputDir,
+          manifestPath,
+          workspaceRoot: root,
+          isRegularContainedFile,
+        });
+      },
+      (err) => {
+        return err.code === "EACCES";
+      },
+    );
+  } finally {
+    fs.readdirSync = origReaddirSync;
+    cleanup();
+  }
+});
+
 
 test("Missing manifest still discovers PDFs with fallback classification", () => {
   const { root, outputDir, manifestPath, isRegularContainedFile, cleanup } = setupTestEnv();

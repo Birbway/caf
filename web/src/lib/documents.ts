@@ -25,7 +25,15 @@ export function discoverDocuments(opts: DiscoverOptions): DiscoveredDocument[] {
   const { outputDir, manifestPath, workspaceRoot, isRegularContainedFile } =
     opts;
 
-  if (!fs.existsSync(outputDir)) return [];
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(outputDir);
+  } catch (err: any) {
+    if (err?.code === "ENOENT") {
+      return [];
+    }
+    throw err;
+  }
 
   const manifestRows: {
     pdfAbs: string;
@@ -65,14 +73,8 @@ export function discoverDocuments(opts: DiscoverOptions): DiscoveredDocument[] {
   }
 
   const results: DiscoveredDocument[] = [];
-  let entries: string[];
-  try {
-    entries = fs.readdirSync(outputDir);
-  } catch {
-    return [];
-  }
-
   const normOutput = path.resolve(outputDir);
+
 
   for (const filename of entries) {
     if (!filename.toLowerCase().endsWith(".pdf")) continue;

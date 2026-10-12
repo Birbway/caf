@@ -180,3 +180,27 @@ test("API: Sibling directory containment regression (output-evil)", async () => 
     fs.rmSync(evilDir, { recursive: true, force: true });
   }
 });
+
+test("API: Returns 500 when discovery encounters an unexpected filesystem error", async () => {
+  const { root, outputDir, manifestPath, cleanup } = setupTestEnv();
+  const origReaddirSync = fs.readdirSync;
+  try {
+    fs.readdirSync = (dir, opts) => {
+      if (dir === outputDir) {
+        const err = new Error("EACCES: permission denied");
+        err.code = "EACCES";
+        throw err;
+      }
+      return origReaddirSync(dir, opts);
+    };
+
+    const req = new Request("http://localhost:3000/api/documents");
+    const res = await handleDocumentsRequest(req, root, manifestPath, mockIsRegularContainedFile);
+    assert.equal(res.status, 500);
+    const text = await res.text();
+    assert.equal(text, "failed to discover documents");
+  } finally {
+    fs.readdirSync = origReaddirSync;
+    cleanup();
+  }
+});
