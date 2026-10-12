@@ -22,8 +22,7 @@
 // node:test suites do not come through here; the parent runs those with
 // `node --test`, as the serial path does.
 import { writeFileSync } from 'fs';
-import { pathToFileURL } from 'url';
-import { fail, results, ROOT } from './helpers.mjs';
+import { importSuiteContained, results, ROOT } from './helpers.mjs';
 
 // How long a suite may keep the process alive after its import has resolved.
 // In a serial run a suite that leaves a handle open (a server it never closed,
@@ -47,21 +46,8 @@ if (!suite || !resultFile) {
     }
   });
 
-  // Same containment as the in-process loop in test-all.mjs (runDiscovered):
-  // a suite that throws is one failure, with how far it got and where it died.
-  // Kept as a copy while this is a prototype; the two belong in one function.
-  const rel = suite.startsWith(ROOT) ? suite.slice(ROOT.length + 1) : suite;
-  const before = results();
-  try {
-    await import(pathToFileURL(suite).href);
-  } catch (err) {
-    const ran = (results().passed - before.passed) + (results().failed - before.failed);
-    fail(`${rel} — suite threw and was contained (${err?.code ?? err?.name ?? 'Error'}): ${err?.message ?? err}`);
-    console.log(`      ${ran} assertion${ran === 1 ? '' : 's'} ran before the throw; everything after it in this file did not run`);
-    for (const line of String(err?.stack ?? '').split('\n').slice(1, 4)) {
-      if (line.trim()) console.log(`      ${line.trim()}`);
-    }
-  }
+  // The same import the in-process loop makes, throw containment included.
+  await importSuiteContained(suite, suite.startsWith(ROOT) ? suite.slice(ROOT.length + 1) : suite);
 
   setTimeout(() => {
     lingered = true;

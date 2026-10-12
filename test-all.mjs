@@ -57,7 +57,7 @@ import { tmpdir, availableParallelism } from 'os';
 import { promisify } from 'util';
 import { fileURLToPath, pathToFileURL } from 'url';
 import * as yaml from 'js-yaml';
-import { pass, fail, warn, run, runAcrossUtcDay, runAcrossLocalDay, lastRunFailure, formatRunFailure, fileExists, finish, results, absorbResults, linkNodeModules, ROOT, QUICK, NODE, DEFAULT_SCRIPT_TIMEOUT_MS, getBash, toBashPath, hermeticGitEnv } from './tests/helpers.mjs';
+import { pass, fail, warn, run, runAcrossUtcDay, runAcrossLocalDay, lastRunFailure, formatRunFailure, fileExists, finish, results, absorbResults, importSuiteContained, linkNodeModules, ROOT, QUICK, NODE, DEFAULT_SCRIPT_TIMEOUT_MS, getBash, toBashPath, hermeticGitEnv } from './tests/helpers.mjs';
 import { flagValue, hasFlag } from './lib/cli-flags.mjs';
 import { collectMjsFiles } from './lib/mjs-files.mjs';
 import { walkTree, listTree } from './lib/walk-tree.mjs';
@@ -181,6 +181,81 @@ function stripCommentLines(src) {
   return kept.join('\n');
 }
 
+// What the runner may do with a discovered suite, read off its source. Shared
+// by the in-process loop and the --jobs runner, so both refuse and route the
+// same files for the same reasons.
+//
+//   'calls-exit'    Discovered suites share the runner's counters (in-process)
+//                   or report to it (in a child). A process.exit() inside one
+//                   would terminate test-all mid-run with a forged exit code —
+//                   every later section (and finish()) would silently never
+//                   run. Refuse to import such a suite and fail loudly instead
+//                   (#1916 regression).
+//   'node-test'     A node:test suite reports through node's OWN runner, which
+//                   touches none of the counters, and it runs its tests
+//                   asynchronously AFTER the import resolves — so finish()'s
+//                   process.exit() killed them mid-flight and discarded the
+//                   result. A deliberately failing suite dropped into tests/
+//                   printed "2049 passed, 0 failed / All tests passed" and
+//                   exited 0 (verified 2026-08-03). That silently covered all
+//                   16 node:test suites here, including every provider test:
+//                   they only ever reported under a direct `node --test`. They
+//                   run in a child process and the real exit code is folded
+//                   into the counters. Importing them is what loses the
+//                   result, so this cannot be fixed in finish(); it has to
+//                   happen where the suite is invoked.
+//   'calls-finish'  finish() prints the global summary and exits — inside a
+//                   discovered suite it forges the verdict line and
+//                   decapitates every suite sorting after it, sailing past the
+//                   process.exit() check (the exit lives in helpers).
+//   'pass-fail'     Everything else: imported, with a throw contained
+//                   (importSuiteContained in tests/helpers.mjs).
+//
+// stripCommentLines() first for both forbidden calls: a suite that only
+// MENTIONS one in a comment (e.g. documenting why it doesn't make it) must not
+// be flagged. The order is the order the checks have always run in.
+function discoveredSuiteKind(src) {
+  if (/\bprocess\.exit\s*\(/.test(stripCommentLines(src))) return 'calls-exit';
+  if (/from ['"]node:test['"]/.test(src)) return 'node-test';
+  if (/\bfinish\s*\(\s*\)/.test(stripCommentLines(src))) return 'calls-finish';
+  return 'pass-fail';
+}
+
+const SUITE_REFUSALS = {
+  'calls-exit': (rel) => `${rel} calls process.exit() — discovered suites must use pass/fail from tests/helpers.mjs and never exit`,
+  'calls-finish': (rel) => `${rel} calls finish() — only test-all.mjs may print the global summary; discovered suites use pass/fail and return`,
+};
+
+/**
+ * Report one finished node:test suite: a single pass line, or a fail line with
+ * an excerpt of what the child printed.
+ *
+ * @param {string} rel - Repo-relative path of the suite.
+ * @param {boolean} ok - Whether the child exited 0.
+ * @param {string} stdout - The child's stdout (read for the pass count).
+ * @param {{stdout?: string, stderr?: string}|null} detail - Streams of a failed run.
+ * @param {string} how - How it ended, for the fail line (`exit 1`, `killed after 120s`).
+ * @returns {void}
+ */
+function reportNodeTestSuite(rel, ok, stdout, detail, how) {
+  if (ok) {
+    // Both reporters: TAP prints "# pass N", the default spec reporter
+    // prints "ℹ pass N". Cosmetic — the pass/fail verdict is the exit code.
+    const count = (stdout.match(/^(?:#|ℹ) pass (\d+)/m) ?? [])[1];
+    pass(`${rel} — node:test suite passed${count ? ` (${count} tests)` : ''}`);
+    return;
+  }
+  fail(`${rel} — node:test suite failed (${how})`);
+  // Surface the runner's own summary; a bare "failed" is not actionable.
+  // The trailing window alone is not actionable either: node prints the
+  // error message above the frames, so a twelve-line tail kept
+  // `actual: false, expected: true` and dropped the interpolated value
+  // that says WHICH assertion and by how much (#4017).
+  for (const line of childFailureExcerpt(detail)) {
+    console.log(`      ${line}`);
+  }
+}
+
 async function runDiscovered(filter = null) {
   let files = discoverTests(TESTS_DIR);
   if (filter) {
@@ -193,116 +268,25 @@ async function runDiscovered(filter = null) {
     process.exit(1);
   }
   // One file gains nothing from a child process, and --jobs 1 is the original
-  // in-process loop below, untouched: the fallback when a parallel run looks
-  // wrong, and the reference a parallel run is compared against.
+  // in-process loop below: the fallback when a parallel run looks wrong, and
+  // the reference a parallel run is compared against.
   if (JOBS > 1 && files.length > 1) {
     await runDiscoveredParallel(files, Math.min(JOBS, files.length));
     return;
   }
   for (const f of files) {
     const rel = f.slice(ROOT.length + 1);
-    const src = readFileSync(f, 'utf-8');
-    // Discovered suites run IN-PROCESS and share this suite's counters. A
-    // process.exit() inside one would terminate test-all mid-run with a forged
-    // exit code — every later section (and finish()) would silently never run.
-    // Refuse to import such a suite and fail loudly instead (#1916 regression).
-    // stripCommentLines() first: a suite that only MENTIONS process.exit() in
-    // a comment (e.g. documenting why it doesn't call it) must not be flagged.
-    if (/\bprocess\.exit\s*\(/.test(stripCommentLines(src))) {
-      fail(`${rel} calls process.exit() — discovered suites must use pass/fail from tests/helpers.mjs and never exit`);
+    const kind = discoveredSuiteKind(readFileSync(f, 'utf-8'));
+    if (SUITE_REFUSALS[kind]) {
+      fail(SUITE_REFUSALS[kind](rel));
       continue;
     }
-    // A node:test suite reports through node's OWN runner, which touches none
-    // of the counters above, and it runs its tests asynchronously AFTER the
-    // import resolves — so finish()'s process.exit() killed them mid-flight and
-    // discarded the result. A deliberately failing suite dropped into tests/
-    // printed "2049 passed, 0 failed / All tests passed" and exited 0
-    // (verified 2026-08-03). That silently covered all 16 node:test suites
-    // here, including every provider test: they only ever reported under a
-    // direct `node --test`.
-    //
-    // Run those in a child process and fold the real exit code into the
-    // counters. Importing them is what loses the result, so this cannot be
-    // fixed in finish(); it has to happen where the suite is invoked.
-    if (/from ['"]node:test['"]/.test(src)) {
+    if (kind === 'node-test') {
       const out = run(NODE, ['--test', f]);
-      if (out === null) {
-        const detail = lastRunFailure();
-        fail(`${rel} — node:test suite failed (exit ${detail?.status ?? '?'})`);
-        // Surface the runner's own summary; a bare "failed" is not actionable.
-        // The trailing window alone is not actionable either: node prints the
-        // error message above the frames, so a twelve-line tail kept
-        // `actual: false, expected: true` and dropped the interpolated value
-        // that says WHICH assertion and by how much (#4017).
-        for (const line of childFailureExcerpt(detail)) {
-          console.log(`      ${line}`);
-        }
-      } else {
-        // Both reporters: TAP prints "# pass N", the default spec reporter
-        // prints "ℹ pass N". Cosmetic — the pass/fail verdict is the exit code.
-        const count = (out.match(/^(?:#|ℹ) pass (\d+)/m) ?? [])[1];
-        pass(`${rel} — node:test suite passed${count ? ` (${count} tests)` : ''}`);
-      }
+      reportNodeTestSuite(rel, out !== null, out ?? '', lastRunFailure(), `exit ${lastRunFailure()?.status ?? '?'}`);
       continue;
     }
-    // finish() prints the global summary and exits — inside a discovered suite
-    // it forges the verdict line and decapitates every suite sorting after it,
-    // sailing past the process.exit() check above (the exit lives in helpers).
-    // Same stripCommentLines() treatment as the process.exit() guard above: a
-    // suite that only MENTIONS finish() in a comment (e.g. documenting why it
-    // doesn't call it) must not be flagged.
-    if (/\bfinish\s*\(\s*\)/.test(stripCommentLines(src))) {
-      fail(`${f.slice(ROOT.length + 1)} calls finish() — only test-all.mjs may print the global summary; discovered suites use pass/fail and return`);
-      continue;
-    }
-    // Neither guard above survives contact with an uncaught THROW, which ends
-    // the run just as completely and rather more quietly: node unwinds straight
-    // out of test-all, finish() never prints its summary, and every suite
-    // sorting after this one silently never runs. That does not read as a
-    // broken suite — it reads as a finished one, so the screen of green above
-    // the cut looks like a pass. (Measured on a Windows box with no symlink
-    // privilege: tests/intake.test.mjs threw at import and took 2067 of 3693
-    // checks with it, with no verdict line at all — #2828.) A discovered suite
-    // is a guest, not a co-host: its crash is one failure, not the end of the
-    // run.
-    const before = results();
-    try {
-      await import(pathToFileURL(f).href);
-    } catch (err) {
-      const ran = (results().passed - before.passed) + (results().failed - before.failed);
-      fail(`${rel} — suite threw and was contained (${err?.code ?? err?.name ?? 'Error'}): ${err?.message ?? err}`);
-      // How much this counts as "one failure" actually cost: the reported
-      // totals only ever include the `ran` assertions above, and nothing else
-      // says the rest never happened — on one platform a suite's crash reads
-      // as one broken assertion, on another the same file's assertions run
-      // and pass, and the two summaries look the same shape (#3976).
-      //
-      // An earlier version of this line also estimated how many assertions
-      // never ran, from a static count of pass()/fail() call sites in the
-      // file. artemtrofymenko (the issue's author) measured that estimate
-      // against real suites and found it wrong in both directions badly
-      // enough to make the diagnostic worse than none: a suite asserting
-      // through a local wrapper (`function ok(cond) { if (cond) pass(...)
-      // else fail(...) }`) has far more real assertions than call sites
-      // (tests/discover-ats.test.mjs: 155 executed, 4 call sites — the
-      // estimate goes negative, `lost > 0` is false, and the line silently
-      // does not print, reverting to exactly the pre-fix silence for the
-      // suites this was built for — 38 of 278 in-process suites use this
-      // shape); a suite writing `if (cond) pass(...); else fail(...)` pairs
-      // has roughly twice as many call sites as real assertions
-      // (tests/providers/_http.test.mjs: ~2x), so the estimate invents lost
-      // assertions that never existed. A signal present for some suites and
-      // silently absent for others turns its own absence into a false
-      // reassurance — worse than never estimating at all. `ran` alone does
-      // not have that failure mode: it is an exact count in every case, so
-      // it is printed unconditionally instead.
-      console.log(`      ${ran} assertion${ran === 1 ? '' : 's'} ran before the throw; everything after it in this file did not run`);
-      // The throw site, not just the message: a suite that dies mid-import
-      // leaves no other clue how far it got.
-      for (const line of String(err?.stack ?? '').split('\n').slice(1, 4)) {
-        if (line.trim()) console.log(`      ${line.trim()}`);
-      }
-    }
+    await importSuiteContained(f, rel);
   }
 }
 
@@ -393,28 +377,14 @@ function spawnSuite(args, timeoutMs, captureFile = null) {
  */
 async function runSuiteInChild(f, scratch, index) {
   const rel = f.slice(ROOT.length + 1);
-  const src = readFileSync(f, 'utf-8');
-  if (/\bprocess\.exit\s*\(/.test(stripCommentLines(src))) {
-    return { ms: 0, lingered: false, report: () => fail(`${rel} calls process.exit() — discovered suites must use pass/fail from tests/helpers.mjs and never exit`) };
+  const kind = discoveredSuiteKind(readFileSync(f, 'utf-8'));
+  if (SUITE_REFUSALS[kind]) {
+    return { ms: 0, lingered: false, report: () => fail(SUITE_REFUSALS[kind](rel)) };
   }
-  if (/from ['"]node:test['"]/.test(src)) {
+  if (kind === 'node-test') {
     const r = await spawnSuite(['--test', f], DEFAULT_SCRIPT_TIMEOUT_MS * PARALLEL_NODE_TEST_BUDGET_FACTOR);
-    return {
-      ms: r.ms,
-      lingered: false,
-      report: () => {
-        if (r.status === 0) {
-          const count = (r.stdout.match(/^(?:#|ℹ) pass (\d+)/m) ?? [])[1];
-          pass(`${rel} — node:test suite passed${count ? ` (${count} tests)` : ''}`);
-          return;
-        }
-        fail(`${rel} — node:test suite failed (${r.timedOut ? `killed after ${Math.round(r.ms / 1000)}s` : `exit ${r.status ?? '?'}`})`);
-        for (const line of childFailureExcerpt(r)) console.log(`      ${line}`);
-      },
-    };
-  }
-  if (/\bfinish\s*\(\s*\)/.test(stripCommentLines(src))) {
-    return { ms: 0, lingered: false, report: () => fail(`${rel} calls finish() — only test-all.mjs may print the global summary; discovered suites use pass/fail and return`) };
+    const how = r.timedOut ? `killed after ${Math.round(r.ms / 1000)}s` : `exit ${r.status ?? '?'}`;
+    return { ms: r.ms, lingered: false, report: () => reportNodeTestSuite(rel, r.status === 0, r.stdout, r, how) };
   }
   const resultFile = join(scratch, `${index}.json`);
   const args = [join(TESTS_DIR, 'run-discovered-child.mjs'), f, resultFile];
