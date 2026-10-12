@@ -15,7 +15,9 @@
 //     the CAREER_OPS_PROFILE override (trimmed; blank counts as unset) wins;
 //   - an explicit root names <root>/config/profile.yml and the override does
 //     NOT beat it;
-//   - the default is <root>/config/profile.yml.
+//   - the default is <root>/config/profile.yml;
+//   - a relative override resolves against the codebase root (the checkout
+//     holding web/), like CAREER_OPS_ROOT, and an absolute one is unchanged.
 // Compare against path-resolver.mjs's getProfilePath when changing either side.
 
 import { pass, fail, ROOT } from './helpers.mjs';
@@ -44,6 +46,8 @@ if (!existsSync(join(ROOT, 'web'))) {
     ['override wins over the derived root', getProfilePath(root, { env: { CAREER_OPS_PROFILE: override } }), override],
     ['override is trimmed', getProfilePath(root, { env: { CAREER_OPS_PROFILE: `  ${override}\n` } }), override],
     ['blank override counts as unset', getProfilePath(root, { env: { CAREER_OPS_PROFILE: ' \t ' } }), def],
+    ['relative override is anchored to the codebase root', getProfilePath(root, { codeRoot: resolve('/fixture/checkout'), env: { CAREER_OPS_PROFILE: 'profiles/me.yml' } }), join(resolve('/fixture/checkout'), 'profiles', 'me.yml')],
+    ['absolute override ignores the codebase root', getProfilePath(root, { codeRoot: resolve('/fixture/checkout'), env: { CAREER_OPS_PROFILE: override } }), override],
     ['explicit root beats the override', getProfilePath(root, { explicitRoot: true, env: { CAREER_OPS_PROFILE: override } }), def],
   ];
   for (const [label, got, want] of cases) {

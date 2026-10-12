@@ -13,21 +13,25 @@
  * `explicitRoot: true` and gets `<root>/config/profile.yml`: the override does
  * not beat a root the caller named.
  *
- * A blank or whitespace-only value counts as unset. How a relative value
- * resolves is decided in resolveOverride() alone.
+ * A blank or whitespace-only value counts as unset. A relative value is anchored
+ * to the codebase root, the checkout containing web/ (resolveCodeRoot(); the
+ * same rule as CAREER_OPS_ROOT), never to the working directory, so it names the
+ * same file whether the server runs from web/ or elsewhere. An absolute value is
+ * returned unchanged. That rule lives in resolveOverride() alone.
  */
 import path from "node:path";
+import { resolveCodeRoot } from "./code-root.mjs";
 
-function resolveOverride(value) {
-  return path.resolve(value);
+function resolveOverride(value, codeRoot) {
+  return path.resolve(codeRoot, value);
 }
 
 /**
  * @param {string} root Absolute data root (careerOpsRoot()).
- * @param {{ explicitRoot?: boolean, env?: Record<string, string | undefined> }} [opts]
+ * @param {{ explicitRoot?: boolean, env?: Record<string, string | undefined>, codeRoot?: string }} [opts]
  * @returns {string} Absolute path to the profile file.
  */
-export function getProfilePath(root, { explicitRoot = false, env = process.env } = {}) {
+export function getProfilePath(root, { explicitRoot = false, env = process.env, codeRoot } = {}) {
   const override = explicitRoot ? undefined : env.CAREER_OPS_PROFILE?.trim();
-  return override ? resolveOverride(override) : path.join(root, "config", "profile.yml");
+  return override ? resolveOverride(override, codeRoot ?? resolveCodeRoot(process.cwd(), env)) : path.join(root, "config", "profile.yml");
 }
