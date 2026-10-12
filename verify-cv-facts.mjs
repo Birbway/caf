@@ -60,6 +60,11 @@ const PROSE_FRAGMENTS = new Set(['building', 'i']);
 // TOOL_PROSE_WORDS it cannot turn into a list that grows by one word per bug
 // report (#4004).
 const DETERMINER_LEAD_RE = /^(?:the|that|this|these|those|our|your|their|its|his|her|my)(?:\s+|$)/i;
+// "a" or "an" before a word opens a noun phrase, and it is a name only inside
+// the phrase: "a Kubernetes cluster" claims Kubernetes, not the cluster. Unlike
+// the determiners above it does not mark the clause as prose, because "using
+// React and an ASP.NET backend" is a list whose second item opens with one.
+const ARTICLE_LEAD_RE = /^an?\s+/i;
 const DECLARED_TOOL_TRIGGER_RE = /^(?:technologies?|tech stack)\s*:/i;
 // What separates the names in a tool list. Beside the comma (Arabic and
 // ideographic ones too) and the three connector words: a double quote, a
@@ -760,6 +765,18 @@ export function factClaims(text, sourceNormalized = null) {
         const fragment = innerTrigger ? afterTrigger : raw;
         const value = normalizeFact(fragment);
         if (!value) continue;
+        // After a leading "a" or "an" only the names are claims. The prose-word
+        // check below would drop the fragment for holding the article, and
+        // reading it whole would check "kubernetes cluster" where the source
+        // says "Kubernetes". A lowercase word behind the article is the noun
+        // or ordinary prose ("a small team"), so it is not read as a name.
+        const article = kind === 'tool' ? ARTICLE_LEAD_RE.exec(fragment.trim()) : null;
+        if (article) {
+          for (const name of toolNameRuns(fragment.trim().slice(article[0].length), { skipLoneLetter: true })) {
+            claims.push({ kind, value: normalizeFact(name) });
+          }
+          continue;
+        }
         if (kind !== 'tool' || isLikelyTool(fragment, sourceNormalized)) claims.push({ kind, value });
         else {
           const names = dottedNamesBeforeConnector(fragment);
