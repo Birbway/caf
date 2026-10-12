@@ -16,9 +16,14 @@
 //   - an explicit root names <root>/config/profile.yml and the override does
 //     NOT beat it;
 //   - the default is <root>/config/profile.yml;
-//   - a relative override resolves against the codebase root (the checkout
-//     holding web/), like CAREER_OPS_ROOT, and an absolute one is unchanged.
+//   - a relative override resolves like core's CAREER_OPS_PORTALS /
+//     CAREER_OPS_PIPELINE / CAREER_OPS_SCAN_HISTORY: against the cwd the core CLI
+//     runs in. The web's own cwd is web/, one directory too deep, so the web
+//     anchors it to the root it passes (the spawned core scripts run with that
+//     root as their cwd); an absolute one is unchanged.
 // Compare against path-resolver.mjs's getProfilePath when changing either side.
+// Unlike core's getProfilePath(rootDir), the web's first argument is the data
+// root and the env wins unless explicitRoot is true.
 
 import { pass, fail, ROOT } from './helpers.mjs';
 import { existsSync } from 'fs';
@@ -46,8 +51,8 @@ if (!existsSync(join(ROOT, 'web'))) {
     ['override wins over the derived root', getProfilePath(root, { env: { CAREER_OPS_PROFILE: override } }), override],
     ['override is trimmed', getProfilePath(root, { env: { CAREER_OPS_PROFILE: `  ${override}\n` } }), override],
     ['blank override counts as unset', getProfilePath(root, { env: { CAREER_OPS_PROFILE: ' \t ' } }), def],
-    ['relative override is anchored to the codebase root', getProfilePath(root, { codeRoot: resolve('/fixture/checkout'), env: { CAREER_OPS_PROFILE: 'profiles/me.yml' } }), join(resolve('/fixture/checkout'), 'profiles', 'me.yml')],
-    ['absolute override ignores the codebase root', getProfilePath(root, { codeRoot: resolve('/fixture/checkout'), env: { CAREER_OPS_PROFILE: override } }), override],
+    ['relative override resolves against the root the web passes', getProfilePath(root, { env: { CAREER_OPS_PROFILE: 'profiles/me.yml' } }), join(root, 'profiles', 'me.yml')],
+    ['absolute override is unchanged', getProfilePath(root, { env: { CAREER_OPS_PROFILE: override } }), override],
     ['explicit root beats the override', getProfilePath(root, { explicitRoot: true, env: { CAREER_OPS_PROFILE: override } }), def],
   ];
   for (const [label, got, want] of cases) {
@@ -57,15 +62,25 @@ if (!existsSync(join(ROOT, 'web'))) {
 }
 
 // ---------------------------------------------------------------------------
-// Scan guard: no file under web/src builds the profile path by hand. A new site
-// that does is the next one to ignore CAREER_OPS_PROFILE (#5026). Comment lines
-// are skipped; the helper itself is exempt.
+// Scan guard: no tracked file under web/src builds the profile path by hand. A
+// new site that does is the next one to ignore CAREER_OPS_PROFILE (#5026). This
+// is a lexical guard, not proof every reader is covered: comment lines are
+// skipped, the helper is exempt, and batch/batch-runner.sh plus the prompts under
+// modes/ and batch/ are outside this change.
 
 console.log('\nprofile path — no hand-built path under web/src');
 
 const BY_HAND = [
   /["']config["']\s*,\s*["']profile\.yml["']/,   // path.join(root, "config", "profile.yml")
   /\bloadYaml\(\s*["']config\/profile\.yml["']/, // portals.ts's relative loader
+  // A whole-string literal "config/profile.yml" passed to an existence check, a
+  // read or a path builder, e.g. existsSync(join(root, "config/profile.yml")) or
+  // has("config/profile.yml"). UI labels, prompts and error text are not calls,
+  // so they do not match; a literal inside a longer sentence is not whole-string.
+  /\b(?:exists\w*|has|statSync|accessSync|readFileSync|readFile|join|resolve)\([^)]*["'`]config\/profile\.yml["'`]/,
+  // A direct read of the variable; only the exempt files below may do it.
+  /\bprocess\.env\.CAREER_OPS_PROFILE\b/,
+  /\benv\.CAREER_OPS_PROFILE\b/,
 ];
 const isComment = (line) => /^\s*(\/\/|\/\*|\*)/.test(line);
 const handBuilt = (line) => !isComment(line) && BY_HAND.some((re) => re.test(line));
@@ -77,6 +92,15 @@ const probes = [
   ['// path.join(root, "config", "profile.yml")', false],
   [' * path.join(root, "config", "profile.yml")', false],
   ['error: "config/profile.yml exists but is not valid YAML"', false],
+  ['return fs.existsSync(path.join(root, "config/profile.yml"));', true],
+  ['const ok = has("config/profile.yml");', true],
+  ['readFileSync(`config/profile.yml`, "utf8")', true],
+  ['  "config/profile.yml": "your profile - target roles, comp, location",', false],
+  ['["config/profile.yml", "config/profile.yml"],', false],
+  ['// existsSync(join(root, "config/profile.yml"))', false],
+  ['const p = process.env.CAREER_OPS_PROFILE?.trim();', true],
+  ['const p = env.CAREER_OPS_PROFILE;', true],
+  ['// reads process.env.CAREER_OPS_PROFILE', false],
 ];
 for (const [line, want] of probes) {
   if (handBuilt(line) === want) pass(`scan classifies: ${line}`);
@@ -94,8 +118,14 @@ if (existsSync(join(ROOT, 'web', 'src'))) {
   } catch (err) {
     fail(`could not list tracked web/src files: ${err.message}`);
   }
-  const helper = 'web/src/lib/core/profile-path.mjs';
-  const scanned = tracked.filter((f) => f !== helper);
+  // Exemptions, explicit: the helper itself (it is the one reader of the
+  // variable), and cv-template.mjs, which must read the variable itself to hand
+  // cv-templates.mjs an absolute path (see its header). Nothing else is exempt.
+  const EXEMPT = new Set([
+    'web/src/lib/core/profile-path.mjs',
+    'web/src/lib/core/cv-template.mjs',
+  ]);
+  const scanned = tracked.filter((f) => !EXEMPT.has(f));
   if (scanned.length > 50) pass(`scanned ${scanned.length} tracked web/src files`);
   else fail(`only ${scanned.length} tracked web/src files scanned; an empty scan cannot pass`);
   const offenders = [];
