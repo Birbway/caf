@@ -33,6 +33,8 @@ export function getCareerOpsRoot() {
 /**
  * Returns the path to the user's config/profile.yml.
  * Priority: rootDir argument > process.env.CAREER_OPS_PROFILE > data root.
+ * A relative override is anchored to the codebase root, like CAREER_OPS_ROOT, so
+ * it names the same file whatever directory the command runs from.
  *
  * Every reader of the profile resolves it here. The override used to be
  * copied by hand into a handful of modules while the rest built the data-root
@@ -46,7 +48,7 @@ export function getCareerOpsRoot() {
 export function getProfilePath(rootDir) {
   if (rootDir) return join(rootDir, 'config', 'profile.yml');
   const override = process.env.CAREER_OPS_PROFILE?.trim();
-  return override ? resolve(override) : join(getCareerOpsRoot(), 'config', 'profile.yml');
+  return override ? resolve(__dirname, override) : join(getCareerOpsRoot(), 'config', 'profile.yml');
 }
 
 /**
