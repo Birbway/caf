@@ -1089,13 +1089,21 @@ const REPO_LOCATION_ENV = [
  * the ordinary way to inherit one. The list is git's own, the rest of
  * `git rev-parse --local-env-vars` after the three hermeticGitEnv handles.
  *
+ * `stdio` is for the calls whose git failure is the expected outcome. The
+ * default inherits stderr, so those print git's own `fatal:` line into an
+ * otherwise passing suite; pass `['pipe', 'pipe', 'pipe']` for a runner that
+ * keeps it. A suite that needs a quiet runner must get it from here rather than
+ * from a bare execFileSync, which would be sealed against nothing.
+ *
  * @param {string} dir - The fixture repository.
+ * @param {{stdio?: import('child_process').StdioOptions}} [options]
  * @returns {(...args: string[]) => string}
  */
-export function hermeticGitRunner(dir) {
+export function hermeticGitRunner(dir, { stdio } = {}) {
   const env = hermeticGitEnv(join(dir, '.git', 'co-hermetic-gitconfig'));
   for (const name of REPO_LOCATION_ENV) delete env[name];
-  return (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf-8', env }).trim();
+  const options = { cwd: dir, encoding: 'utf-8', env, ...(stdio ? { stdio } : {}) };
+  return (...args) => execFileSync('git', args, options).trim();
 }
 
 /**
