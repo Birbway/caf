@@ -122,5 +122,31 @@ const isAbort = (err) => { const e = err?.cause ?? err; return e?.name === 'Abor
   eq('an explicit fallback is honored when the value is unusable', resolveDefaultTimeoutMs('nope', 7_000), 7_000);
 }
 
+// 5. The env var reaches the real request budget, not just the helper.
+// The default is read once at module load, so load a fresh instance with the
+// variable set and stall a request that passes no timeoutMs. If the env read
+// is ever disconnected (e.g. DEFAULT_TIMEOUT_MS hardcoded back to 10_000), the
+// request waits out the 10s default and the hard timeout below fails the test.
+{
+  const prev = process.env.CAREER_OPS_HTTP_TIMEOUT_MS;
+  process.env.CAREER_OPS_HTTP_TIMEOUT_MS = '300';
+  try {
+    const fresh = await import(`${pathToFileURL(join(ROOT, 'providers/_http.mjs')).href}?env-timeout`);
+    const t0 = Date.now();
+    try {
+      await hardTimeout(viaLocal(() => fresh.fetchJson(`${base}/stall`)), 4_000, 'fetchJson /stall with env budget');
+      fail('fetchJson resolved on a stalled body under CAREER_OPS_HTTP_TIMEOUT_MS');
+    } catch (err) {
+      const elapsed = Date.now() - t0;
+      if (!isAbort(err)) fail(`CAREER_OPS_HTTP_TIMEOUT_MS=300 did not set the request budget: ${err?.message}`);
+      else if (elapsed < MAX_ABORT_MS) pass(`CAREER_OPS_HTTP_TIMEOUT_MS=300 aborted a request with no timeoutMs in ${elapsed}ms`);
+      else fail(`CAREER_OPS_HTTP_TIMEOUT_MS=300 took ${elapsed}ms to abort (env budget not applied)`);
+    }
+  } finally {
+    if (prev === undefined) delete process.env.CAREER_OPS_HTTP_TIMEOUT_MS;
+    else process.env.CAREER_OPS_HTTP_TIMEOUT_MS = prev;
+  }
+}
+
 for (const s of sockets) s.destroy();
 server.close();
