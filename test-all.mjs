@@ -349,7 +349,14 @@ function spawnSuite(args, timeoutMs, captureFile = null) {
     const killer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeoutMs);
     child.stdout?.on('data', (d) => out.push(d));
     child.stderr?.on('data', (d) => err.push(d));
+    // Once only. A child that fails to spawn emits 'error' and may emit 'close'
+    // after it; a second closeSync() on the same descriptor throws EBADF from
+    // inside an event handler, which would take the runner down before
+    // finish() prints anything.
+    let settled = false;
     const done = (status, signal) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(killer);
       if (fd !== null) closeSync(fd);
       let merged = '';
