@@ -151,6 +151,13 @@ const SUBJECTS = [
   ['analyzers', 'salary-gap.mjs', cli('salary-gap.mjs')],
   ['analyzers', 'upskill.mjs', cli('upskill.mjs', '--url-text', join(scratch, 'jd.txt'))],
   ['analyzers', 'check-table-freshness.mjs', cli('check-table-freshness.mjs')],
+  // 0. the modules that already honored the override, now routed through the resolver
+  ['resolver users', 'cv-templates.mjs', inline(`const m = await import(${JSON.stringify(module('cv-templates.mjs'))}); m.loadProfileDefault('cv');`)],
+  ['resolver users', 'validate-profile.mjs', cli('validate-profile.mjs')],
+  ['resolver users', 'scan.mjs (country, re-apply windows)', inline(`const m = await import(${JSON.stringify(module('scan.mjs'))}); m.loadCandidateCountry(); m.loadReApplyWindows();`)],
+  ['resolver users', 'followup-cadence.mjs', cli('followup-cadence.mjs')],
+  ['resolver users', 'rejection-latency.mjs', cli('rejection-latency.mjs', '--summary')],
+  ['resolver users', 'company-history.mjs (resolveRegion)', inline(`const m = await import(${JSON.stringify(module('company-history.mjs'))}); m.resolveRegion();`)],
   // 5. provider / script fallbacks
   ['fallbacks', 'providers/_profile-keywords.mjs', inline(`const m = await import(${JSON.stringify(module('providers/_profile-keywords.mjs'))}); m.resolveProfileKeywords();`)],
   ['fallbacks', 'scripts/export-ats-text.mjs', cli('scripts/export-ats-text.mjs')],
