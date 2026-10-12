@@ -11,8 +11,8 @@
   "allowedHosts": [],
   "skill": true,
   "license": "MIT",
-  "version": "0.1.0",
-  "sha": "fff429fe4cdd8aacef633000f9b9e07977d22e31",
+  "version": "0.1.1",
+  "sha": "29a373c3f5a8c1de4e2ef49f01fb87285f0ae12d",
   "registrationIssue": "https://github.com/career-ops-hq/career-ops/issues/5097",
   "addedAt": "2026-10-12"
 }
