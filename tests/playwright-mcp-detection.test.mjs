@@ -20,14 +20,29 @@ const DOCTOR = join(ROOT, 'doctor.mjs');
 // reasoning as the GIT_CONFIG_* pinning in test-all.mjs section 12c (#2569).
 // Scenarios that exercise the plugin path pass their own CLAUDE_CONFIG_DIR.
 const EMPTY_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'co-mcp-emptycfg-'));
+// OpenCode resolves its global config from homedir() (USERPROFILE/HOME), so
+// default scenarios also need an isolated home: without it, a developer who
+// keeps Playwright in their REAL ~/.config/opencode would decide scenario
+// #40's "no config anywhere" result — the same "never read the real machine"
+// reasoning as the CLAUDE_CONFIG_DIR pin above. Scenarios that WANT a home
+// (the user-level-config fixtures) pass their own HOME/USERPROFILE.
+const EMPTY_HOME_DIR = mkdtempSync(join(tmpdir(), 'co-mcp-emptyhome-'));
 
-// Ambient runtime markers from the host session (OPENCODE=1 when the suite
-// runs inside OpenCode) are stripped so the default-CLI scenarios below stay
-// deterministic — the same isolation reasoning as CLAUDE_CONFIG_DIR pinning
-// and as the CAREER_OPS_CLI delete in doctor-cli-resolution.test.mjs.
-// Scenarios that WANT the marker pass OPENCODE explicitly via env.
+// Ambient runtime markers AND ambient OpenCode config-location overrides from
+// the host session (OPENCODE=1 when the suite runs inside OpenCode, plus
+// OPENCODE_CONFIG / OPENCODE_CONFIG_DIR / XDG_CONFIG_HOME) are stripped so
+// the default scenarios stay deterministic — the same isolation reasoning as
+// the CLAUDE_CONFIG_DIR pinning and as the CAREER_OPS_CLI delete in
+// doctor-cli-resolution.test.mjs. Scenarios that WANT any of these values
+// pass them explicitly via env.
 function hostEnv() {
-  const { OPENCODE: _openCodeMarker, ...rest } = process.env;
+  const {
+    OPENCODE: _openCodeMarker,
+    OPENCODE_CONFIG: _openCodeConfig,
+    OPENCODE_CONFIG_DIR: _openCodeConfigDir,
+    XDG_CONFIG_HOME: _xdgConfigHome,
+    ...rest
+  } = process.env;
   return rest;
 }
 
@@ -35,9 +50,10 @@ function runDoctor(cwd, args, env, { executionCwd = cwd } = {}) {
   try {
     const out = execFileSync(NODE, [DOCTOR, '--json', '--target', cwd, ...args], {
       cwd: executionCwd,
-      // Order matters: the empty dir must override an ambient CLAUDE_CONFIG_DIR
-      // from the developer's own shell, while a scenario's explicit env still wins.
-      env: { ...hostEnv(), CLAUDE_CONFIG_DIR: EMPTY_CONFIG_DIR, ...env },
+      // Order matters: the empty dirs must override an ambient CLAUDE_CONFIG_DIR
+      // / HOME from the developer's own shell, while a scenario's explicit env
+      // still wins.
+      env: { ...hostEnv(), CLAUDE_CONFIG_DIR: EMPTY_CONFIG_DIR, HOME: EMPTY_HOME_DIR, USERPROFILE: EMPTY_HOME_DIR, ...env },
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
@@ -51,7 +67,7 @@ function runDoctorHuman(cwd, env, { executionCwd = cwd } = {}) {
   try {
     return execFileSync(NODE, [DOCTOR, '--target', cwd], {
       cwd: executionCwd,
-      env: { ...hostEnv(), CLAUDE_CONFIG_DIR: EMPTY_CONFIG_DIR, ...env },
+      env: { ...hostEnv(), CLAUDE_CONFIG_DIR: EMPTY_CONFIG_DIR, HOME: EMPTY_HOME_DIR, USERPROFILE: EMPTY_HOME_DIR, ...env },
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -1079,8 +1095,136 @@ try {
     }
   }
 
+  // ---------------------------------------------------------------------
+  // CodeRabbit review follow-up on PR #5105: effective-config semantics.
+  // ---------------------------------------------------------------------
+
+  // 44. The runtime marker only counts when it is exactly "1": OPENCODE=0
+  //     (a user opting out) keeps the claude default. No opencode.json in
+  //     this dir, so the checkout hint cannot fire either.
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'co-mcp-44-'));
+    try {
+      const state = runDoctor(dir, [], { OPENCODE: '0' });
+      if (!expectWarn(state, '#44 OPENCODE=0 keeps default')) {
+        // already failed
+      } else if (state.active_cli === 'claude'
+          && state.cli_source === 'default'
+          && state.playwright_mcp?.claude === false) {
+        pass('OPENCODE=0 is not a marker → claude stays the default');
+      } else {
+        fail(`#44 unexpected state: ${JSON.stringify(state)}`);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+
+  // 45. Setting $OPENCODE_CONFIG_DIR must not take the DEFAULT global config
+  //     dir out of the scan: OpenCode MERGES config sources — the custom dir
+  //     is loaded after the global config and overrides it, it never
+  //     replaces it (opencode.ai/docs/config#precedence-order). Two
+  //     sub-fixtures pin both directions: (a) Playwright only in the default
+  //     global dir + a custom dir set → still detected; (b) Playwright only
+  //     in the custom dir → also detected, so the custom dir is scanned too.
+  {
+    const home = mkdtempSync(join(tmpdir(), 'co-mcp-45home-'));
+    const custom = mkdtempSync(join(tmpdir(), 'co-mcp-45custom-'));
+    const dir = mkdtempSync(join(tmpdir(), 'co-mcp-45-'));
+    try {
+      const globalCfg = join(home, '.config', 'opencode');
+      mkdirSync(globalCfg, { recursive: true });
+      const pw = { mcp: { playwright: { type: 'local', command: ['npx', '-y', '@playwright/mcp'] } } };
+      writeFileSync(join(globalCfg, 'opencode.json'), JSON.stringify(pw));
+      writeFileSync(join(custom, 'opencode.json'),
+        JSON.stringify({ mcp: { unrelated: { type: 'local', command: ['x'] } } }));
+      const a = runDoctor(dir, ['--cli', 'opencode'],
+        { HOME: home, USERPROFILE: home, OPENCODE_CONFIG_DIR: custom });
+      const okA = a.playwright_mcp?.opencode === true
+        && Array.isArray(a.warnings)
+        && !a.warnings.some((w) => PLAYWRIGHT_RE.test(w));
+      rmSync(join(globalCfg, 'opencode.json'));
+      writeFileSync(join(custom, 'opencode.json'), JSON.stringify(pw));
+      const b = runDoctor(dir, ['--cli', 'opencode'],
+        { HOME: home, USERPROFILE: home, OPENCODE_CONFIG_DIR: custom });
+      const okB = b.playwright_mcp?.opencode === true
+        && Array.isArray(b.warnings)
+        && !b.warnings.some((w) => PLAYWRIGHT_RE.test(w));
+      if (!a._error && !b._error && okA && okB) {
+        pass('$OPENCODE_CONFIG_DIR set → default global dir stays scanned (and the custom dir too)');
+      } else {
+        fail(`#45 unexpected states: a=${JSON.stringify(a)} b=${JSON.stringify(b)}`);
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(custom, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // 46. A project-level disable of the INHERITED name wins in the merge:
+  //     user config has Playwright, project redefines `playwright` with
+  //     enabled:false → OpenCode will not start it → doctor must warn. The
+  //     project side uses the `mcp.servers` wrapper shape seen in the wild;
+  //     the user side the documented flat shape.
+  {
+    const home = mkdtempSync(join(tmpdir(), 'co-mcp-46home-'));
+    const dir = mkdtempSync(join(tmpdir(), 'co-mcp-46-'));
+    try {
+      const globalCfg = join(home, '.config', 'opencode');
+      mkdirSync(globalCfg, { recursive: true });
+      writeFileSync(join(globalCfg, 'opencode.json'), JSON.stringify({
+        mcp: { playwright: { type: 'local', command: ['npx', '-y', '@playwright/mcp'] } },
+      }));
+      writeFileSync(join(dir, 'opencode.json'), JSON.stringify({
+        mcp: { servers: { playwright: { enabled: false } } },
+      }));
+      const state = runDoctor(dir, ['--cli', 'opencode'], { HOME: home, USERPROFILE: home });
+      if (!expectWarn(state, '#46 project disable wins')) {
+        // already failed
+      } else if (state.playwright_mcp?.opencode === false
+          && state.warnings.some((w) => PLAYWRIGHT_RE.test(w) && /active cli: opencode/i.test(w))) {
+        pass('project enabled:false on the inherited name → merged effective config is unconfigured');
+      } else {
+        fail(`#46 unexpected state: ${JSON.stringify(state)}`);
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // 47. Same-name REPLACEMENT: the project redefines `playwright` with a
+  //     different, non-Playwright command → the effective entry no longer
+  //     references Playwright → warn, even though the user-level file does.
+  {
+    const home = mkdtempSync(join(tmpdir(), 'co-mcp-47home-'));
+    const dir = mkdtempSync(join(tmpdir(), 'co-mcp-47-'));
+    try {
+      const globalCfg = join(home, '.config', 'opencode');
+      mkdirSync(globalCfg, { recursive: true });
+      writeFileSync(join(globalCfg, 'opencode.json'), JSON.stringify({
+        mcp: { playwright: { type: 'local', command: ['npx', '-y', '@playwright/mcp'] } },
+      }));
+      writeFileSync(join(dir, 'opencode.json'), JSON.stringify({
+        mcp: { playwright: { type: 'local', command: ['npx', '-y', 'some-other-mcp'] } },
+      }));
+      const state = runDoctor(dir, ['--cli', 'opencode'], { HOME: home, USERPROFILE: home });
+      if (!expectWarn(state, '#47 project replacement wins')) {
+        // already failed
+      } else if (state.playwright_mcp?.opencode === false
+          && state.warnings.some((w) => PLAYWRIGHT_RE.test(w) && /active cli: opencode/i.test(w))) {
+        pass('project replaces the inherited name → merged effective config is unconfigured');
+      } else {
+        fail(`#47 unexpected state: ${JSON.stringify(state)}`);
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
 } catch (e) {
   fail(`opencode-mcp-detection tests crashed: ${e.message}`);
 } finally {
   rmSync(EMPTY_CONFIG_DIR, { recursive: true, force: true });
+  rmSync(EMPTY_HOME_DIR, { recursive: true, force: true });
 }

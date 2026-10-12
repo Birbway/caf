@@ -424,22 +424,61 @@ function claudeConfigDir() {
   return process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
 }
 
-// OpenCode merges a USER-level config with the project's (opencode.ai/docs/config):
-// ~/.config/opencode/opencode.json[c] by default, or the file named by
-// $OPENCODE_CONFIG, or the directory $OPENCODE_CONFIG_DIR (XDG_CONFIG_HOME
-// honored for the default). Same reasoning as isPlaywrightMcpFromClaudeJson:
-// a server installed at user level is installed and working, so a
-// project-only scan would report a machine that has Playwright MCP as
-// unconfigured. Every candidate is a plain path; missing files read as null.
+// OpenCode's USER-level config sources, in ASCENDING precedence order
+// (opencode.ai/docs/config#precedence-order: global → $OPENCODE_CONFIG →
+// project): ~/.config/opencode/opencode.json[c] (XDG_CONFIG_HOME honored),
+// then $OPENCODE_CONFIG_DIR as a second config-directory candidate, then the
+// $OPENCODE_CONFIG file. Config sources MERGE — the custom directory is
+// loaded after the global config and overrides it, it never replaces it — so
+// setting $OPENCODE_CONFIG_DIR must not take the default global dir out of
+// the scan. Same reasoning as isPlaywrightMcpFromClaudeJson: a server
+// installed at user level is installed and working, so a project-only scan
+// would report a machine that has Playwright MCP as unconfigured. Missing or
+// malformed files read as null.
 function opencodeUserConfigFiles() {
+  const names = ['opencode.json', 'opencode.jsonc'];
   const files = [];
+  const globalDir = process.env.XDG_CONFIG_HOME
+    ? join(process.env.XDG_CONFIG_HOME, 'opencode')
+    : join(homedir(), '.config', 'opencode');
+  for (const name of names) files.push(join(globalDir, name));
+  const customDir = process.env.OPENCODE_CONFIG_DIR;
+  if (customDir && customDir !== globalDir) {
+    for (const name of names) files.push(join(customDir, name));
+  }
   if (process.env.OPENCODE_CONFIG) files.push(process.env.OPENCODE_CONFIG);
-  const dir = process.env.OPENCODE_CONFIG_DIR
-    || (process.env.XDG_CONFIG_HOME
-      ? join(process.env.XDG_CONFIG_HOME, 'opencode')
-      : join(homedir(), '.config', 'opencode'));
-  for (const name of ['opencode.json', 'opencode.jsonc']) files.push(join(dir, name));
   return files;
+}
+
+// The MCP server map one OpenCode config source contributes: the documented
+// flat shape (`mcp: { name: {...} }`), the `mcp: { servers: {...} }` wrapper
+// seen in the wild, and — for configs copied between CLIs — Claude's
+// `mcpServers` bucket.
+function opencodeServerMap(cfg) {
+  if (!cfg || typeof cfg !== 'object') return {};
+  const mcp = (cfg.mcp && typeof cfg.mcp === 'object') ? cfg.mcp : {};
+  const { servers, ...flat } = mcp;
+  return {
+    ...(cfg.mcpServers && typeof cfg.mcpServers === 'object' ? cfg.mcpServers : {}),
+    ...(servers && typeof servers === 'object' ? servers : {}),
+    ...flat,
+  };
+}
+
+// OpenCode MERGES config sources — "Configuration files are merged together,
+// not replaced", later sources overriding earlier ones per SERVER NAME, with
+// `enabled: false` keeping a server from starting (opencode.ai/docs/config,
+// opencode.ai/docs/mcp-servers). So an any-file-contains scan is wrong in
+// both directions: a project file that redefines the inherited `playwright`
+// name — as a disable or as a replacement — must win over a user-level
+// server, and a user-level server must still count when the project file
+// never mentions it. Configs arrive in ASCENDING precedence order; the
+// answer is about the EFFECTIVE entry.
+function hasPlaywrightInMergedOpenCode(configs) {
+  const effective = {};
+  for (const cfg of configs) Object.assign(effective, opencodeServerMap(cfg));
+  return Object.values(effective)
+    .some((def) => def && def.enabled !== false && isPlaywrightServer(def));
 }
 
 // A Claude Code plugin declares its MCP servers in its own .mcp.json, which
@@ -513,6 +552,16 @@ function isPlaywrightMcpFromClaudeJson(root) {
 function isPlaywrightMcpConfigured(root, activeCli) {
   const entry = MCP_CONFIGS.find((c) => c.cli === activeCli);
   if (!entry) return false; // known CLI but no MCP file mapping; caller warns
+  // OpenCode reads every source below (user-level configs, then the project)
+  // and MERGES them, so the question is about the effective server map — not
+  // whether any one file mentions the package (hasPlaywrightInMergedOpenCode).
+  if (entry.userFiles) {
+    const configs = [
+      ...entry.userFiles(),
+      ...entry.files.map((rel) => join(root, ...rel.split('/'))),
+    ].map(readConfigIfPresent).filter(Boolean);
+    return hasPlaywrightInMergedOpenCode(configs);
+  }
   const inProject = entry.files.some((rel) => {
     const file = join(root, ...rel.split('/'));
     return hasPlaywrightIn(readConfigIfPresent(file));
@@ -520,16 +569,8 @@ function isPlaywrightMcpConfigured(root, activeCli) {
   if (inProject) return true;
   // Gated behind the project scan, so an already-configured project pays no
   // extra I/O and non-plugin CLIs never touch the user config dir.
-  if (entry.plugins === true
-      && (isPlaywrightMcpFromClaudeJson(root) || isPlaywrightMcpFromPlugin(root))) {
-    return true;
-  }
-  // User-level config (OpenCode's global opencode.json[c]) — also gated
-  // behind the project scan for the same cost reason.
-  if (entry.userFiles) {
-    return entry.userFiles().some((file) => hasPlaywrightIn(readConfigIfPresent(file)));
-  }
-  return false;
+  return entry.plugins === true
+    && (isPlaywrightMcpFromClaudeJson(root) || isPlaywrightMcpFromPlugin(root));
 }
 
 // CLI resolution: --cli flag > $CAREER_OPS_CLI > .env (CAREER_OPS_CLI=...) >
@@ -564,7 +605,8 @@ function resolveActiveCli() {
   // Without this, doctor started from inside OpenCode falls through to the
   // claude default and then scans Claude's MCP configs — reporting "Playwright
   // MCP not detected" on a machine where it is configured in opencode.json.
-  if (process.env.OPENCODE) {
+  // Exact match: a user who sets OPENCODE=0 to opt out keeps the default.
+  if (process.env.OPENCODE === '1') {
     return { cli: 'opencode', source: 'auto' };
   }
   // Checkout hint: an opencode.json/opencode.jsonc in the launch directory
