@@ -49,56 +49,53 @@ test("reads process.env by default", () => {
   }
 });
 
-// A relative CAREER_OPS_PROFILE resolves against the codebase root (the checkout
-// containing web/), like CAREER_OPS_ROOT, never against the working directory.
-// Mirrors the documented contract of the core's getProfilePath().
-const CODE = path.resolve("/fixture/checkout");
+// A relative CAREER_OPS_PROFILE resolves like the core's sibling lane variables
+// (CAREER_OPS_PORTALS, CAREER_OPS_PIPELINE, CAREER_OPS_SCAN_HISTORY): against the
+// cwd the core CLI runs in. The web's own cwd is <checkout>/web, one directory too
+// deep, while the core scripts it spawns run with cwd = the root it passes, so the
+// base here is the `root` argument, never process.cwd().
+import fs from "node:fs";
+import os from "node:os";
 
-test("relative override resolves against the codebase root", () => {
+async function withCwdAndEnv(cwd, profile, fn) {
+  const prev = { cwd: process.cwd(), profile: process.env.CAREER_OPS_PROFILE };
+  process.chdir(cwd);
+  process.env.CAREER_OPS_PROFILE = profile;
+  try {
+    return await fn();
+  } finally {
+    process.chdir(prev.cwd);
+    if (prev.profile === undefined) delete process.env.CAREER_OPS_PROFILE;
+    else process.env.CAREER_OPS_PROFILE = prev.profile;
+  }
+}
+
+test("relative override resolves against the root argument", () => {
   assert.equal(
-    getProfilePath(ROOT, { codeRoot: CODE, env: { CAREER_OPS_PROFILE: "profiles/me.yml" } }),
-    path.join(CODE, "profiles", "me.yml"),
+    getProfilePath(ROOT, { env: { CAREER_OPS_PROFILE: "profiles/me.yml" } }),
+    path.join(ROOT, "profiles", "me.yml"),
   );
 });
 
-test("absolute override passes through unchanged whatever the codebase root", () => {
-  assert.equal(getProfilePath(ROOT, { codeRoot: CODE, env: { CAREER_OPS_PROFILE: OVERRIDE } }), OVERRIDE);
+test("absolute override passes through unchanged", () => {
+  assert.equal(getProfilePath(ROOT, { env: { CAREER_OPS_PROFILE: OVERRIDE } }), OVERRIDE);
 });
 
-test("relative override ignores the working directory (cwd = <checkout>/web, as under next)", async () => {
+test("relative override ignores the cwd when it is <checkout>/web, as under next", async () => {
   const { fileURLToPath } = await import("node:url");
   const checkout = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-  const prev = { cwd: process.cwd(), profile: process.env.CAREER_OPS_PROFILE, code: process.env.CAREER_OPS_CODE_ROOT };
-  process.chdir(path.join(checkout, "web"));
-  process.env.CAREER_OPS_PROFILE = "profiles/me.yml";
-  delete process.env.CAREER_OPS_CODE_ROOT;
-  try {
-    assert.equal(getProfilePath(ROOT), path.join(checkout, "profiles", "me.yml"));
-  } finally {
-    process.chdir(prev.cwd);
-    for (const [k, v] of [["CAREER_OPS_PROFILE", prev.profile], ["CAREER_OPS_CODE_ROOT", prev.code]]) {
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
-    }
-  }
+  await withCwdAndEnv(path.join(checkout, "web"), "profiles/me.yml", () => {
+    assert.equal(getProfilePath(ROOT), path.join(ROOT, "profiles", "me.yml"));
+  });
 });
 
-test("relative override with an unrelated cwd still hits the configured codebase root", async () => {
-  const os = await import("node:os");
-  const fs = await import("node:fs");
+test("relative override ignores an unrelated cwd", async () => {
   const elsewhere = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "profile-path-cwd-")));
-  const prev = { cwd: process.cwd(), profile: process.env.CAREER_OPS_PROFILE, code: process.env.CAREER_OPS_CODE_ROOT };
-  process.chdir(elsewhere);
-  process.env.CAREER_OPS_PROFILE = "profiles/me.yml";
-  process.env.CAREER_OPS_CODE_ROOT = CODE;
   try {
-    assert.equal(getProfilePath(ROOT), path.join(CODE, "profiles", "me.yml"));
+    await withCwdAndEnv(elsewhere, "profiles/me.yml", () => {
+      assert.equal(getProfilePath(ROOT), path.join(ROOT, "profiles", "me.yml"));
+    });
   } finally {
-    process.chdir(prev.cwd);
-    for (const [k, v] of [["CAREER_OPS_PROFILE", prev.profile], ["CAREER_OPS_CODE_ROOT", prev.code]]) {
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
-    }
     fs.rmSync(elsewhere, { recursive: true, force: true });
   }
 });
