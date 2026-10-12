@@ -227,6 +227,31 @@ try {
   ats.status === 0 && /Acme Widgets/.test(ats.stdout)
     ? pass('fallbacks: scripts/export-ats-text.mjs reads cv.md from the data root along with the profile, from any cwd')
     : failOnce(`fallbacks: scripts/export-ats-text.mjs run outside the data root exited ${ats.status} and printed ${JSON.stringify(ats.stdout.slice(0, 120))} without the CV's experience (stderr: ${JSON.stringify(ats.stderr.slice(0, 120))})`);
+
+  // 3b. generate-pdf renders in the tracker workspace, which CAREER_OPS_TRACKER can
+  // move off the data root. With no override it reads that workspace's profile; an
+  // override that is set wins even when it names the data-root profile itself, so
+  // "is an override set" cannot be inferred by comparing paths.
+  const pdfRoot = join(scratch, 'pdf-data-root');
+  const pdfWorkspace = join(scratch, 'pdf-workspace');
+  for (const dir of [join(pdfRoot, 'config'), join(pdfWorkspace, 'config'), join(pdfWorkspace, 'data')]) mkdirSync(dir, { recursive: true });
+  writeFileSync(join(pdfRoot, 'config', 'profile.yml'), 'page_format: a4\n', 'utf-8');
+  writeFileSync(join(pdfWorkspace, 'config', 'profile.yml'), 'page_format: letter\n', 'utf-8');
+  writeFileSync(join(pdfWorkspace, 'data', 'applications.md'), '# Applications Tracker\n', 'utf-8');
+  const sheetFor = (profileEnv) => spawnSync(NODE, ['--input-type=module', '-e',
+    `const m = await import(${JSON.stringify(module('generate-pdf.mjs'))}); console.log(m.injectPrintPageCss('<html><head></head><body></body></html>'));`], {
+    cwd: decoyCwd, encoding: 'utf-8', timeout: 60_000,
+    env: { ...process.env, CAREER_OPS_ROOT: pdfRoot, CAREER_OPS_DATA_DIR: '', CAREER_OPS_TRACKER: join(pdfWorkspace, 'data', 'applications.md'), CAREER_OPS_PROFILE: profileEnv },
+  }).stdout;
+  const pageSize = (css) => (css.match(/size:\s*(A4|Letter)/i) || [])[1];
+  const unsetSheet = pageSize(sheetFor(''));
+  const namingDataRoot = pageSize(sheetFor(join(pdfRoot, 'config', 'profile.yml')));
+  unsetSheet === 'Letter'
+    ? pass('builders: generate-pdf with no override reads the tracker workspace profile')
+    : failOnce(`builders: generate-pdf with no override used sheet ${unsetSheet}, expected Letter from the tracker workspace profile`);
+  namingDataRoot === 'A4'
+    ? pass('builders: generate-pdf honors an override that names the data-root profile itself')
+    : failOnce(`builders: generate-pdf ignored CAREER_OPS_PROFILE naming the data-root profile: sheet ${namingDataRoot}, expected A4`);
 } catch (e) {
   failOnce(`profile-path readers suite crashed: ${e.stack || e.message}`);
 } finally {
