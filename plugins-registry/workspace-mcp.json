@@ -1,0 +1,18 @@
+{
+  "name": "career-ops-plugin-workspace-mcp",
+  "id": "workspace-mcp",
+  "repo": "https://github.com/theridgerugby/career-ops-plugin-workspace-mcp",
+  "author": "theridgerugby",
+  "hooks": [
+    "export"
+  ],
+  "description": "Give an explicitly connected local agent read-only access to job-workspace metadata.",
+  "requiredEnv": [],
+  "allowedHosts": [],
+  "skill": true,
+  "license": "MIT",
+  "version": "0.1.0",
+  "sha": "fff429fe4cdd8aacef633000f9b9e07977d22e31",
+  "registrationIssue": "https://github.com/career-ops-hq/career-ops/issues/5097",
+  "addedAt": "2026-10-12"
+}
