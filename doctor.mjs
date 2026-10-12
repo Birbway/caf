@@ -14,7 +14,7 @@ import * as yaml from 'js-yaml';
 import dotenv from 'dotenv';
 import { findTitleFilterConflicts } from './lib/title-filter-conflicts.mjs';
 import { discoverPlugins, pluginRoots, pluginStatus } from './plugins/_engine.mjs';
-import { getCareerOpsRoot, getProfilePath } from './path-resolver.mjs';
+import { getCareerOpsRoot, getProfilePath, hasProfileOverride } from './path-resolver.mjs';
 import { validateProfile, EXAMPLE_PATH } from './validate-profile.mjs';
 import { resolveExtractorMode } from './browser-extract.mjs';
 import { parseConfigByExtension } from './jsonc-parse.mjs';
@@ -65,6 +65,18 @@ const projectRoot = explicitTarget || getCareerOpsRoot();
 // --target diagnoses a whole other checkout, so that checkout's profile is the
 // one that counts; otherwise CAREER_OPS_PROFILE applies as it does everywhere.
 const profilePathFor = (root) => (explicitTarget ? getProfilePath(root) : getProfilePath());
+// scan.mjs loads the data root's .env before it reads the profile, so an override
+// set only there is a working setup. The full .env load stays inside
+// resolveActiveCli (and only when CAREER_OPS_CLI is unset); this takes just the
+// profile override, so every check and --json see the same file.
+if (!hasProfileOverride()) {
+  try {
+    const fromEnvFile = dotenv.parse(readFileSync(join(projectRoot, '.env'))).CAREER_OPS_PROFILE;
+    if (fromEnvFile?.trim()) process.env.CAREER_OPS_PROFILE = fromEnvFile;
+  } catch {
+    // no .env, or unreadable: the shell environment and the data root decide
+  }
+}
 // node_modules and .git belong to the CODE checkout, not the resolved data
 // root — under a split checkout (CAREER_OPS_ROOT/CAREER_OPS_DATA_DIR or the
 // .career-ops-data marker) those are two different directories, and neither
@@ -633,6 +645,14 @@ function prereqPresent(root, path) {
 function checkPrereq({ path, fix }) {
   if (prereqPresent(projectRoot, path)) {
     return { pass: true, label: `${path} found` };
+  }
+  if (path === 'config/profile.yml' && hasProfileOverride()) {
+    const named = profilePathFor(projectRoot);
+    return {
+      warn: true,
+      label: `${path} not found (CAREER_OPS_PROFILE names ${named})`,
+      fix: [`Create ${named}, or unset CAREER_OPS_PROFILE to use the profile in the data root`],
+    };
   }
   return { warn: true, label: `${path} not found (user setup required)`, fix };
 }

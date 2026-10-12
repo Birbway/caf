@@ -211,7 +211,7 @@ try {
     'upskill.mjs',
   ]);
   const HAND_BUILT = [
-    /process\.env\.CAREER_OPS_PROFILE/,
+    /process\.env\.CAREER_OPS_PROFILE(?!\s*=[^=])/,   // a read; assigning it (doctor.mjs, from .env) is not a path
     /\b(?:join|resolve)\([^\n]*['"](?:config\/)?profile\.yml['"]/,
     /(?<![=!])=\s*['"]config\/profile\.yml['"]/,
     /readFile\(['"]config\/profile\.yml/,
