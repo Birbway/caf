@@ -17,9 +17,9 @@ console.log('\nA tool named after a leading "a" or "an"');
 // nothing, so does the article form. If it claims the whole fragment, the
 // claims are the tool-shaped names in it instead, each alone, so a source that
 // says "Kubernetes" backs "a Kubernetes cluster". The names are capitalised
-// words, words with a digit or an inner capital, and dotted names such as
-// "node.js". A fragment with none of them ("a small team", "a 2024 roadmap")
-// claims nothing. The determiners of #4004 ("the", "our", "their") still mark
+// words, words with an inner capital, digit-led words that are not a quantity
+// ("3CX", "4D", "n8n"), and dotted names such as "node.js". A fragment with none
+// of them ("a small team", "a 2024 roadmap") claims nothing. The determiners of #4004 ("the", "our", "their") still mark
 // ordinary reference.
 const tmp = mkdtempSync(join(tmpdir(), 'career-ops-leading-article-'));
 try {
@@ -107,8 +107,8 @@ try {
   claims('a dotted name after "a" is read without the noun behind it',
     'Built the platform using a Next.js app.', ['next', 'next.js']);
 
-  // F1: a lowercase suffix joined by a hyphen describes the name, it is not
-  // part of it. A name with a digit after the hyphen stays whole.
+  // A lowercase suffix joined by a hyphen describes the name, it is not part
+  // of it. A name with a digit or a capital after the hyphen stays whole.
   for (const [article, name, suffix, noun] of [
     ['a', 'Kubernetes', 'based', 'stack'],
     ['an', 'AI', 'powered', 'workflow'],
@@ -120,14 +120,23 @@ try {
     passes(`"${phrase}" passes when the source backs ${name}`,
       `- Ran workloads using ${name}.`, `- Built the platform using ${phrase}.`);
   }
+  claims('every lowercase segment after the name is cut', 'Built the platform using a Kubernetes-based-managed stack.', ['kubernetes']);
   blocksOn('a name with a version after a hyphen stays whole',
     '- Drafted copy using GPT-3.', '- Drafted copy using a GPT-4 agent.', ['gpt-4']);
   passes('a backed name with a version after a hyphen passes',
     '- Drafted copy using GPT-4.', '- Drafted copy using a GPT-4 agent.');
-  blocksOn('a single capital letter before a hyphen stays whole',
-    reactOnly, '- Built the platform using an E-commerce site.', ['e-commerce']);
+  // A single letter before a lowercase suffix is a prefix of an ordinary
+  // word ("C-suite", "E-commerce", "X-ray"), not a name.
+  for (const phrase of ['a C-suite narrative', 'a C-suite sponsor', 'an E-commerce platform', 'an X-ray machine']) {
+    passes(`"${phrase}" passes`, reactOnly, `- Built the platform using ${phrase}.`);
+    claims(`"${phrase}" claims no tool`, `Built the platform using ${phrase}.`, []);
+  }
+  // A suffix that is not lowercase keeps the word whole.
+  for (const [phrase, name] of [['a T-Mobile plan', 't-mobile'], ['a Wi-Fi network', 'wi-fi'], ['a Pre-IPO round', 'pre-ipo']]) {
+    blocksOn(`"${phrase}" is checked as ${name}`, reactOnly, `- Built the platform using ${phrase}.`, [name]);
+  }
 
-  // F2: a single quote around a name is not part of it, straight or curly.
+  // A single quote around a name is not part of it, straight or curly.
   for (const [label, open, close] of [['straight', "'", "'"], ['curly', '‘', '’']]) {
     blocksOn(`a name in ${label} single quotes after an article is checked`,
       reactOnly, `- Built the platform using an ${open}Elasticsearch${close} index.`, ['elasticsearch']);
@@ -137,7 +146,7 @@ try {
       reactOnly, `- Built the platform using React and an ${open}Elasticsearch${close} index.`, ['elasticsearch']);
   }
 
-  // F3: a possessive is the name followed by "'s".
+  // A possessive is the name followed by "'s".
   for (const [label, mark] of [['straight', "'"], ['curly', '’']]) {
     blocksOn(`a name with a ${label} possessive after an article is checked as the name`,
       reactOnly, `- Built the platform using an Elasticsearch${mark}s index.`, ['elasticsearch']);
@@ -145,23 +154,28 @@ try {
       '- Ran search on Elasticsearch.', `- Built the platform using an Elasticsearch${mark}s index.`);
   }
 
-  // F4: the article form reaches the verdict of the same text without it,
-  // because it goes through the same decision. Where the sentence without an
-  // article claims nothing, the one with it claims nothing either.
+  // The article form reaches the verdict and the claims of the same text
+  // without it, because it goes through the same decision. Where the sentence
+  // without an article claims nothing, the one with it claims nothing either.
   const financeBacked = '- Partnered with the CFO and Finance.';
   sameVerdict('"Worked with a Finance team" reads as "Worked with Finance team"',
     '- Worked with a Finance team.', '- Worked with Finance team.', financeBacked);
   sameVerdict('"Worked with a CFO" reads as "Worked with CFO"',
     '- Worked with a CFO.', '- Worked with CFO.', financeBacked);
-  sameVerdict('"using a Building permit" reads as "using Building permit"',
-    '- Built it using a Building permit.', '- Built it using Building permit.', '- Handled the Building permit process.');
-  sameVerdict('"using a U.S. team" reads as "using U.S. team"',
-    '- Built it using a U.S. team.', '- Built it using U.S. team.', '- Led the U.S. team.');
+  // A word that is only ever prose is never a name on its own, so the article
+  // form claims nothing where the form without it claims the whole phrase.
+  claims('a prose word alone after an article is not claimed', 'Built it using a Building permit.', []);
+  passes('a prose word alone after an article passes', reactOnly, '- Built it using a Building permit.');
+  // The capture stops at the dot of an abbreviation and leaves one letter.
+  for (const phrase of ['Hired using a U.S. agency.', 'Grew it using a U.K. partner.']) {
+    passes(`"${phrase}" passes`, reactOnly, `- ${phrase}`);
+    claims(`"${phrase}" claims no tool`, phrase, []);
+  }
   sameClaims('"Worked with a Finance team" claims what "Worked with Finance team" claims',
     'Worked with a Finance team.', 'Worked with Finance team.');
   sameClaims('"Worked with a CFO" claims what "Worked with CFO" claims',
     'Worked with a CFO.', 'Worked with CFO.');
-  // F5: a digit in a name keeps the name, and a number alone names nothing.
+  // A digit in a name keeps the name.
   blocksOn('a name with a digit after "an" is checked as the name',
     reactOnly, '- Stored the exports using an S3 bucket.', ['s3']);
   passes('a backed name with a digit after "an" passes',
@@ -170,10 +184,26 @@ try {
     reactOnly, '- Automated the intake using an n8n workflow.', ['n8n']);
   passes('a backed lowercase name with a digit after "an" passes',
     '- Automated the intake using n8n.', '- Automated the intake using an n8n workflow.');
+  // A digit-led word is a name unless its letters read as a measure: nothing,
+  // a lowercase unit ("10x", "99.9ms") or one magnitude capital ("5M", "1.5B").
+  for (const [phrase, name] of [['a 3CX phone', '3cx'], ['a 4D database', '4d'], ['a 1C platform', '1c'], ['a 3CX', '3cx']]) {
+    blocksOn(`"${phrase}" is checked as ${name}`, reactOnly, `- Built it using ${phrase}.`, [name]);
+    passes(`"${phrase}" passes when the source backs ${name}`, `- Ran it on ${name.toUpperCase()}.`, `- Built it using ${phrase}.`);
+  }
+  claims('"a 3CX" claims what "3CX" claims', 'Built it using a 3CX.', toolValues('Built it using 3CX.'));
+  // Unchanged main blocks both of these as whole phrases; a number alone is
+  // not a tool, and "10x" stays a metric claim.
+  passes('a number with a noun after an article is not a tool',
+    reactOnly, '- Planned the launch using a 2024 roadmap.');
+  claims('a number with a noun after an article yields nothing', 'Planned it using a 2024 roadmap.', []);
+  claims('a multiplier with a noun after an article yields nothing',
+    'Staffed the team using a 10x engineer.', []);
+  claims('a magnitude with a noun after an article yields nothing', 'Planned it using a 5M budget.', []);
+  claims('a percentage with a noun after an article yields nothing', 'Planned it using a 40% target.', []);
   blocksOn('a versioned name after "a" is checked as the name',
     reactOnly, '- Ran the build using a Python 3 runtime.', ['python']);
 
-  // F6: a single capital letter is a language when a noun follows it.
+  // A single capital letter is a language when a noun follows it.
   blocksOn('"an R package" is checked as R',
     reactOnly, '- Built the model using an R package.', ['r']);
   blocksOn('"a C library" is checked as C',
@@ -185,10 +215,9 @@ try {
   passes('a backed R after "an" passes',
     '- Built models in R.', '- Built the model using an R package.');
 
-  // Ordinary prose behind an article is not a tool: the sentence without the
-  // article claims no tool-shaped name either. These also pass on unchanged
-  // main, where every article fragment is dropped, so they guard the fix
-  // against reading more than names.
+  // Ordinary prose behind an article is not a tool. These also pass on
+  // unchanged main, where every article fragment is dropped, so they guard the
+  // fix against reading more than names.
   passes('an article before lowercase prose is not a tool',
     reactOnly, '- Built the platform using a small team.');
   passes('an article before a lowercase phrase behind "worked with" is not a tool',
@@ -199,10 +228,6 @@ try {
     reactOnly, '- Built the platform using React and a custom internal workflow.');
   passes('a capitalised article before lowercase prose is not a tool',
     reactOnly, '- Built the platform using An outside agency.');
-  passes('a number with a noun after an article is not a tool',
-    reactOnly, '- Planned the launch using a 2024 roadmap.');
-  claims('a multiplier with a noun after an article yields nothing',
-    'Staffed the team using a 10x engineer.', []);
   claims('an article before a lowercase phrase yields nothing', 'Built it using a small team.', []);
   claims('an article before a lone lowercase word yields nothing', 'Worked with an agency.', []);
 
@@ -216,8 +241,9 @@ try {
   blocksOn('a determiner later in a list taints only its own fragment',
     reactOnly, '- Built the platform using React, the Kubernetes cluster and an Elasticsearch index.', ['elasticsearch']);
 
-  // A fragment of four or more words is read by its names, with or without the
-  // article counted, as it was before. The fix must not narrow that reading.
+  // A fragment of four or more words, counting the article, is read by its
+  // names, as it was before. The fix must not narrow that reading. Both pass
+  // on unchanged main.
   claims('a four-word fragment led by an article is still read by its names',
     'Built it using a mix of Python and Go.', ['python', 'go']);
   blocksOn('a four-word fragment behind "worked with" is still read by its names',
@@ -236,6 +262,20 @@ try {
     '- Built it using React and ASP.NET.', '- Built the platform using React and an ASP.NET backend.');
   passes('guard: a backed dotted name after "a" passes',
     '- Shipped it using Next.js.', '- Rebuilt the storefront using a Next.js app.');
+  // Growth, not a wall-clock limit, as in verify-cv-facts-tool-fragments: ten
+  // times the input may take about ten times as long, and quadratic growth
+  // takes a hundred times. A name with a long run of hyphenated lowercase
+  // segments, then a capital, was scanned from every hyphen.
+  const timeHyphenRun = repeats => {
+    const started = performance.now();
+    factClaims(`- Built it using a Ab${'-ab'.repeat(repeats)}-A stack.`);
+    return performance.now() - started;
+  };
+  timeHyphenRun(2000);
+  const smallHyphenRun = Math.max(timeHyphenRun(4000), 1);
+  const largeHyphenRun = timeHyphenRun(40000);
+  if (largeHyphenRun < 1000 || largeHyphenRun / smallHyphenRun < 40) pass('a long run of hyphenated segments after an article is read in linear time');
+  else fail(`a long hyphenated run scaled superlinearly: ${Math.round(smallHyphenRun)} ms for 4,000, ${Math.round(largeHyphenRun)} ms for 40,000`);
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }
