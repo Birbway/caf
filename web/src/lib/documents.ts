@@ -20,8 +20,9 @@ export interface DiscoverOptions {
 }
 
 export function discoverDocuments(opts: DiscoverOptions): DiscoveredDocument[] {
-  const { outputDir, manifestPath, workspaceRoot, isRegularContainedFile } = opts;
-  
+  const { outputDir, manifestPath, workspaceRoot, isRegularContainedFile } =
+    opts;
+
   if (!fs.existsSync(outputDir)) return [];
 
   const manifestRows: {
@@ -52,7 +53,7 @@ export function discoverDocuments(opts: DiscoverOptions): DiscoveredDocument[] {
         if (pdfRel) {
           const pdfAbs = path.normalize(path.resolve(workspaceRoot, pdfRel));
           const normOutput = path.resolve(outputDir);
-          
+
           // Reject manifest entries that resolve outside the intended output scope
           // We only discover immediate children of outputDir, so exact dirname match is appropriate.
           if (path.dirname(pdfAbs) === normOutput) {
@@ -79,11 +80,11 @@ export function discoverDocuments(opts: DiscoverOptions): DiscoveredDocument[] {
 
   for (const filename of entries) {
     if (!filename.toLowerCase().endsWith(".pdf")) continue;
-    
+
     const absPath = path.resolve(outputDir, filename);
-    
+
     // 2. Clarify symlink policy: Reject symlinks outright (internal and external)
-    // Rationale: Generated PDFs are canonical outputs written directly by the CLI. 
+    // Rationale: Generated PDFs are canonical outputs written directly by the CLI.
     // Allowing symlinks here is unnecessary and introduces path resolution / spoofing risks.
     try {
       if (!fs.lstatSync(absPath).isFile()) continue;
@@ -165,7 +166,7 @@ export async function handleDocumentsRequest(
   req: Request,
   root: string,
   manifestPath: string | null,
-  isRegularContainedFile: (absPath: string, root: string) => boolean
+  isRegularContainedFile: (absPath: string, root: string) => boolean,
 ) {
   const url = new URL(req.url);
   const id = url.searchParams.get("id");
@@ -178,7 +179,7 @@ export async function handleDocumentsRequest(
       outputDir,
       manifestPath,
       workspaceRoot: root,
-      isRegularContainedFile
+      isRegularContainedFile,
     });
   } catch (err) {
     return new Response("failed to discover documents", { status: 500 });
@@ -188,7 +189,7 @@ export async function handleDocumentsRequest(
     const filename = decodeId(id);
     if (!filename) return new Response("invalid identifier", { status: 400 });
 
-    const doc = documents.find(d => d.filename === filename);
+    const doc = documents.find((d) => d.filename === filename);
     if (!doc) return new Response("document not found", { status: 404 });
 
     const absPath = path.resolve(outputDir, filename);
@@ -200,7 +201,10 @@ export async function handleDocumentsRequest(
     let fd: number;
     try {
       // O_NOFOLLOW prevents opening a symlink as a file (supported on POSIX, may be ignored on Windows).
-      fd = fs.openSync(absPath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+      fd = fs.openSync(
+        absPath,
+        fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0),
+      );
     } catch {
       return new Response("document unavailable", { status: 404 });
     }
@@ -212,15 +216,20 @@ export async function handleDocumentsRequest(
       }
 
       const buf = fs.readFileSync(fd);
-      const asciiFilename = doc.filename.replace(/[^\x20-\x7E]/g, "?").replace(/(["\\])/g, "\\$1");
-      const encodedFilename = encodeURIComponent(doc.filename).replace(/[()*]/g, c => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+      const asciiFilename = doc.filename
+        .replace(/[^\x20-\x7E]/g, "?")
+        .replace(/(["\\])/g, "\\$1");
+      const encodedFilename = encodeURIComponent(doc.filename).replace(
+        /[()*]/g,
+        (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+      );
       return new Response(new Uint8Array(buf), {
         status: 200,
         headers: {
           "Content-Type": "application/pdf",
           "Content-Disposition": `inline; filename="${asciiFilename}"; filename*=UTF-8''${encodedFilename}`,
-          "Cache-Control": "no-store"
-        }
+          "Cache-Control": "no-store",
+        },
       });
     } catch {
       return new Response("could not read the PDF", { status: 500 });
@@ -229,17 +238,17 @@ export async function handleDocumentsRequest(
     }
   }
 
-  const payload = documents.map(doc => ({
+  const payload = documents.map((doc) => ({
     id: encodeId(doc.filename),
     filename: doc.filename,
     kind: doc.kind,
     date: doc.date,
     reportId: doc.reportId,
     format: doc.format,
-    mtimeMs: doc.mtimeMs
+    mtimeMs: doc.mtimeMs,
   }));
 
   return Response.json(payload, {
-    headers: { "Cache-Control": "no-store" }
+    headers: { "Cache-Control": "no-store" },
   });
 }

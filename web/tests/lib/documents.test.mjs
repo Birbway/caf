@@ -361,14 +361,21 @@ test("Malformed or partially populated manifest rows", () => {
 test("Manifest row with no kind defaults to cv matching cv-selection behavior", () => {
   const { root, outputDir, manifestPath, isRegularContainedFile, cleanup } = setupTestEnv();
   try {
-    // Filename does NOT start with cv- or contain cover, so fallback filename heuristics would yield unknown
+    // Filenames do NOT start with cv- or contain cover, so fallback filename heuristics would yield unknown
     fs.writeFileSync(path.join(outputDir, "Jane-Doe-Resume.pdf"), "fake pdf");
+    fs.writeFileSync(path.join(outputDir, "legacy-without-kind-col.pdf"), "fake pdf");
+    fs.writeFileSync(path.join(outputDir, "whitespace-kind.pdf"), "fake pdf");
+    fs.writeFileSync(path.join(outputDir, "invalid-kind.pdf"), "fake pdf");
+    fs.writeFileSync(path.join(outputDir, "explicit-cover.pdf"), "fake pdf");
+
     const manifestContent = [
       "# report\tpdf\thtml\tformat\tdate\tkind",
       "42\toutput/Jane-Doe-Resume.pdf\t\tletter\t2026-08-01\t", // empty kind column
       "43\toutput/legacy-without-kind-col.pdf\t\tletter\t2026-08-01", // row written before kind column existed (#3959)
+      "44\toutput/whitespace-kind.pdf\t\tletter\t2026-08-01\t   ", // whitespace-only kind column
+      "45\toutput/invalid-kind.pdf\t\tletter\t2026-08-01\tportfolio", // invalid non-empty kind must remain unknown
+      "46\toutput/explicit-cover.pdf\t\tletter\t2026-08-01\tcover", // explicit cover kind preserved
     ].join("\n");
-    fs.writeFileSync(path.join(outputDir, "legacy-without-kind-col.pdf"), "fake pdf");
     fs.writeFileSync(manifestPath, manifestContent);
 
     const results = discoverDocuments({
@@ -387,6 +394,21 @@ test("Manifest row with no kind defaults to cv matching cv-selection behavior", 
     assert.ok(doc43);
     assert.equal(doc43.kind, "cv");
     assert.equal(doc43.reportId, "43");
+
+    const doc44 = results.find(d => d.filename === "whitespace-kind.pdf");
+    assert.ok(doc44);
+    assert.equal(doc44.kind, "cv");
+    assert.equal(doc44.reportId, "44");
+
+    const doc45 = results.find(d => d.filename === "invalid-kind.pdf");
+    assert.ok(doc45);
+    assert.equal(doc45.kind, "unknown");
+    assert.equal(doc45.reportId, "45");
+
+    const doc46 = results.find(d => d.filename === "explicit-cover.pdf");
+    assert.ok(doc46);
+    assert.equal(doc46.kind, "cover");
+    assert.equal(doc46.reportId, "46");
   } finally {
     cleanup();
   }

@@ -1,1 +1,3 @@
-export { DocumentsPageSkeleton as default } from "@/components/page-loading-skeletons";
+import { DocumentsPageSkeleton } from "@/components/page-loading-skeletons";
+
+export default DocumentsPageSkeleton;

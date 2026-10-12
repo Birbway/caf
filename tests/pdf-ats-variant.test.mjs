@@ -72,22 +72,22 @@ function runDocumentedStep(payload) {
   writeFileSync(styledJson, JSON.stringify(payload, null, 2));
   const env = { ...process.env, CAREER_OPS_ROOT: dataRoot };
 
-  const fill = (cmd, atsTemplate) => cmd
+  const fillToken = (token, atsTemplate) => token
     .replaceAll('{candidate}', 'jane-smith')
     .replaceAll('{company}', 'acme')
     .replaceAll('/tmp/', `${dir}/`)
-    .replace(/(^|\s)output\//g, `$1${dir}/output/`)
+    .replace(/^output\//, `${dir}/output/`)
     .replaceAll('{ats-template}', atsTemplate ?? '{ats-template}');
 
   let atsTemplate;
   const steps = [];
   for (const raw of documentedCommands()) {
     if (raw.startsWith('node generate-pdf.mjs')) continue;
-    const [command, redirect] = fill(raw, atsTemplate).split(' > ');
-    const args = command.split(/\s+/).slice(1);
+    const [rawCommand, rawRedirect] = raw.split(' > ');
+    const args = rawCommand.split(/\s+/).slice(1).map((tok) => fillToken(tok, atsTemplate));
     const r = spawnSync(process.execPath, args, { cwd: ROOT, env, encoding: 'utf-8', timeout: 60_000 });
     assert.equal(r.error, undefined, `${raw} failed to spawn: ${r.error?.message}`);
-    if (redirect) writeFileSync(redirect.trim(), r.stdout);
+    if (rawRedirect) writeFileSync(fillToken(rawRedirect.trim(), atsTemplate), r.stdout);
     if (args[0] === 'cv-templates.mjs') atsTemplate = r.stdout.trim();
     steps.push({ raw, status: r.status, stdout: r.stdout, stderr: r.stderr });
   }
