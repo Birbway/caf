@@ -530,11 +530,12 @@ function isLikelyTool(value, sourceNormalized) {
 // "99.9ms", "40%").
 const QUANTITY_WORD_RE = /^(?:\P{L}*|\d[\d.,]*\p{L}{0,2}%?)$/u;
 // What the same test accepts as a measure when a digit-led word may be a name.
-// A measure is a number alone, or a number with lowercase unit letters ("10x",
-// "99.9ms") or one capital the claim patterns read as a magnitude or a
-// multiplier ("5M", "1.5B", "50K", "3X"). Any other capital makes the word a
-// name: "3CX", "4D" and "1C" are products, while "12MB" is read as one too.
-const MEASURE_WORD_RE = /^(?:\P{L}*|\d[\d.,]*(?:\p{Ll}{1,2}|[KMBX])?)$/u;
+// A measure is a number alone, or a number with one suffix letter from k, m, b
+// or x in either case: the suffixes the metric patterns read on a number
+// ("50k users", "1.5M users", "10x"). Any other letters make the word a name,
+// lowercase or not: "3CX", "4d", "3cx", "4me" and "12MB". The suffix cannot
+// tell a product from a unit, so "4K" and "3M" read as measures.
+const MEASURE_WORD_RE = /^(?:\P{L}*|\d[\d.,]*[kKmMbBxX]?)$/u;
 // A word of single letters joined by dots or slashes: "U.S.", "A/B", "I/O".
 const ABBREVIATION_WORD_RE = /^\p{L}(?:[./]\p{L})+\.?$/u;
 
@@ -825,8 +826,8 @@ export function factClaims(text, sourceNormalized = null) {
         // instead, each alone, so "a Kubernetes cluster" checks "kubernetes"
         // where the source says "Kubernetes". The names are the ones
         // `toolNameRuns` reads: capitalised words, words with an inner
-        // capital, digit-led words that are not a measure ("3CX", "n8n"), and
-        // dotted names such as "node.js". A fragment with none of them ("a
+        // capital, words with a digit that are not a measure ("3CX", "n8n"),
+        // and dotted names such as "node.js". A fragment with none of them ("a
         // small team", "a 2024 roadmap") then claims nothing, and neither does
         // a word that is only ever prose (`PROSE_FRAGMENTS`).
         const trimmed = fragment.trim();

@@ -17,10 +17,10 @@ console.log('\nA tool named after a leading "a" or "an"');
 // nothing, so does the article form. If it claims the whole fragment, the
 // claims are the tool-shaped names in it instead, each alone, so a source that
 // says "Kubernetes" backs "a Kubernetes cluster". The names are capitalised
-// words, words with an inner capital, digit-led words that are not a quantity
-// ("3CX", "4D", "n8n"), and dotted names such as "node.js". A fragment with none
-// of them ("a small team", "a 2024 roadmap") claims nothing. The determiners of #4004 ("the", "our", "their") still mark
-// ordinary reference.
+// words, words with an inner capital, words with a digit that are not a
+// measure ("3CX", "4D", "n8n"), and dotted names such as "node.js". A fragment
+// with none of them ("a small team", "a 2024 roadmap") claims nothing. The
+// determiners of #4004 ("the", "our", "their") still mark ordinary reference.
 const tmp = mkdtempSync(join(tmpdir(), 'career-ops-leading-article-'));
 try {
   const source = join(tmp, 'cv.md');
@@ -33,7 +33,7 @@ try {
     writeFileSync(source, `${cv}\n`);
     return verifyFacts(target, { sourcePaths: [source], configPath: config });
   };
-  // Claims are compared as sets: the order they come in is not part of the contract.
+  // Claims are compared as sets: their order is not part of the contract.
   const sorted = values => [...values].sort();
   const sameSet = (found, expected) => JSON.stringify(sorted(found)) === JSON.stringify(sorted(expected));
   const tools = result => result.unsupportedFacts.filter(claim => claim.kind === 'tool').map(claim => claim.value);
@@ -184,26 +184,34 @@ try {
     reactOnly, '- Automated the intake using an n8n workflow.', ['n8n']);
   passes('a backed lowercase name with a digit after "an" passes',
     '- Automated the intake using n8n.', '- Automated the intake using an n8n workflow.');
-  // A digit-led word is a name unless its letters read as a measure: nothing,
-  // a lowercase unit ("10x", "99.9ms") or one magnitude capital ("5M", "1.5B").
+  // A digit-led word is a name unless it is a measure: a number alone, or a
+  // number with one suffix letter from k, m, b or x, in either case, the
+  // suffixes the metric patterns read on a number ("50k users", "10x"). Any
+  // other letters make it a name, lowercase or not.
   for (const [phrase, name] of [['a 3CX phone', '3cx'], ['a 4D database', '4d'], ['a 1C platform', '1c'], ['a 3CX', '3cx']]) {
     blocksOn(`"${phrase}" is checked as ${name}`, reactOnly, `- Built it using ${phrase}.`, [name]);
     passes(`"${phrase}" passes when the source backs ${name}`, `- Ran it on ${name.toUpperCase()}.`, `- Built it using ${phrase}.`);
   }
   claims('"a 3CX" claims what "3CX" claims', 'Built it using a 3CX.', toolValues('Built it using 3CX.'));
-  // Unchanged main blocks both of these as whole phrases; a number alone is
-  // not a tool, and "10x" stays a metric claim.
-  passes('a number with a noun after an article is not a tool',
-    reactOnly, '- Planned the launch using a 2024 roadmap.');
-  claims('a number with a noun after an article yields nothing', 'Planned it using a 2024 roadmap.', []);
-  claims('a multiplier with a noun after an article yields nothing',
-    'Staffed the team using a 10x engineer.', []);
-  claims('a magnitude with a noun after an article yields nothing', 'Planned it using a 5M budget.', []);
-  claims('a percentage with a noun after an article yields nothing', 'Planned it using a 40% target.', []);
+  // Lowercase letters after the digits do not make a measure either. Main
+  // blocks each of these as a whole phrase.
+  for (const [phrase, name] of [
+    ['a 4me workspace', '4me'], ['a 3cx phone', '3cx'], ['a 4d database', '4d'],
+    ['a 5ms latency', '5ms'], ['a 2kg weight', '2kg'], ['a 12MB cache', '12mb'],
+  ]) {
+    blocksOn(`"${phrase}" is checked as ${name}`, reactOnly, `- Built it using ${phrase}.`, [name]);
+    claims(`"${phrase}" claims ${name}`, `Built it using ${phrase}.`, [name]);
+  }
   blocksOn('a versioned name after "a" is checked as the name',
     reactOnly, '- Ran the build using a Python 3 runtime.', ['python']);
 
-  // A single capital letter is a language when a noun follows it.
+  // A single capital letter followed by a noun is claimed: "an R package"
+  // checks R. Known limit: it is not claimed before a hyphen suffix or alone,
+  // because "a C-suite sponsor" would then block. Main passes all of these.
+  claims('known limit: "an R-based pipeline" claims no tool', 'Built it using an R-based pipeline.', []);
+  claims('known limit: "a C-based toolchain" claims no tool', 'Built it using a C-based toolchain.', []);
+  claims('known limit: "an R" alone claims no tool', 'Built it using an R.', []);
+  passes('known limit: "an R-based pipeline" passes', reactOnly, '- Built it using an R-based pipeline.');
   blocksOn('"an R package" is checked as R',
     reactOnly, '- Built the model using an R package.', ['r']);
   blocksOn('"a C library" is checked as C',
@@ -216,8 +224,7 @@ try {
     '- Built models in R.', '- Built the model using an R package.');
 
   // Ordinary prose behind an article is not a tool. These also pass on
-  // unchanged main, where every article fragment is dropped, so they guard the
-  // fix against reading more than names.
+  // unchanged main, so they guard the fix against reading more than names.
   passes('an article before lowercase prose is not a tool',
     reactOnly, '- Built the platform using a small team.');
   passes('an article before a lowercase phrase behind "worked with" is not a tool',
@@ -248,6 +255,21 @@ try {
     'Built it using a mix of Python and Go.', ['python', 'go']);
   blocksOn('a four-word fragment behind "worked with" is still read by its names',
     reactOnly, '- Worked with a Board on strategy.', ['board']);
+
+  // Measure guards. These also pass before the digit rule, so they pin the
+  // measure side of it rather than prove the rule. Unchanged main blocks each
+  // as a whole phrase, so they are not regression guards against main.
+  // "4K" and "3M" are measures here, so "a 4K camera" and "a 3M respirator"
+  // pass: a known limit, because the suffix cannot tell a product from a unit.
+  for (const [phrase, label] of [
+    ['a 2024 roadmap', 'a number'], ['a 10x engineer', 'a multiplier'], ['a 5M budget', 'a magnitude'],
+    ['a 50K budget', 'a thousand'], ['a 1.5B budget', 'a billion'], ['a 40% target', 'a percentage'],
+    ['a 4K camera', 'known limit: a product written like a thousand'],
+    ['a 3M respirator', 'known limit: a product written like a million'],
+  ]) {
+    claims(`${label} with a noun after an article claims no tool: "${phrase}"`, `Built it using ${phrase}.`, []);
+  }
+  passes('a number with a noun after an article passes', reactOnly, '- Planned the launch using a 2024 roadmap.');
 
   // Regression guards. Each of these passes on unchanged main too, because it
   // never reaches the article branch or only passes there by being dropped.
