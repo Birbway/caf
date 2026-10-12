@@ -33,7 +33,9 @@ export function OnboardingProgress({ compact = false }: { compact?: boolean }) {
 
   const refetch = useCallback(() => {
     fetch("/api/doctor").then((r) => r.json()).then(setDoctor).catch(() => {});
-    fetch("/api/personalization").then((r) => r.json()).then((d) => setSections(Array.isArray(d.sections) ? d.sections : [])).catch(() => {});
+    // A failed read keeps `sections` null (the panel says nothing): an empty
+    // list would count as "every section done" and hide the panel.
+    fetch("/api/personalization").then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status))))).then((d) => setSections(Array.isArray(d.sections) ? d.sections : null)).catch(() => setSections(null));
   }, []);
 
   useEffect(() => {

@@ -472,12 +472,15 @@ export function AssistantConsole() {
       },
       writePersonalization: (patch) => {
         fetch("/api/personalization", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) })
-          .then(() => {
+          .then(async (r) => {
+            // A refused or failed write must not pass for a saved one: the route
+            // answers 409/500 with the reason, and the file is left as it was.
+            if (!r.ok) throw new Error(((await r.json().catch(() => null)) as { error?: string } | null)?.error || `HTTP ${r.status}`);
             router.refresh();
             // The onboarding panel listens for this to refetch section state.
             window.dispatchEvent(new CustomEvent("co-onboarding-changed"));
           })
-          .catch(() => {});
+          .catch((e) => appendParts([{ type: "note", text: `Your personalization was NOT saved: ${e instanceof Error ? e.message : "the request failed"}` }]));
       },
     };
   }
