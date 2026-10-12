@@ -115,7 +115,8 @@ try {
         const at = join(dir, 'node_modules', spec.name);
         mkdirSync(at, { recursive: true });
         writeFileSync(join(at, 'package.json'), JSON.stringify({
-          name: spec.name, from, type: 'module', exports: './index.js', dependencies: spec.dependencies ?? {},
+          name: spec.name, from, type: 'module', exports: './index.js',
+          dependencies: spec.dependencies ?? {}, peerDependencies: spec.peerDependencies ?? {},
         }), 'utf-8');
         writeFileSync(join(at, 'index.js'), spec.main ?? `export default ${JSON.stringify(from)};`, 'utf-8');
       };
@@ -249,6 +250,27 @@ try {
           pass('when linking is refused, the copied package still loads its own dependency');
         } else {
           fail(`transitive (copy): reason=${JSON.stringify(reason)}, link attempts=${attempts}, symlink=${copied.isSymbolicLink()}, import=${JSON.stringify(got)}`);
+        }
+      }
+
+      // The same, for a PEER dependency. A package imports its peer like any
+      // other, and the peer is installed beside it rather than declared under
+      // `dependencies`, so a copy that follows only `dependencies` loses it.
+      {
+        const { root, sandbox } = layout('wt-peer-copy', {
+          installed: [
+            { name: 'demo-peer', main: "export default 'from the peer';" },
+            { name: 'demo-pkg', main: "import peer from 'demo-peer'; export default peer;", peerDependencies: { 'demo-peer': '*' } },
+          ],
+          declared: ['demo-pkg'],
+        });
+        const refuse = () => { throw Object.assign(new Error('EPERM: operation not permitted, symlink'), { code: 'EPERM' }); };
+        const reason = linkNodeModules(sandbox, root, { link: refuse });
+        const got = await importFrom(sandbox, 'demo-pkg');
+        if (reason === null && got === 'from the peer') {
+          pass('when linking is refused, the copied package still loads an installed peer dependency');
+        } else {
+          fail(`peer (copy): reason=${JSON.stringify(reason)}, import=${JSON.stringify(got)}`);
         }
       }
 

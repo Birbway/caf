@@ -21,10 +21,10 @@ import { findCorePackage, linkCorePackage } from "../helpers/core-package.mjs";
 function tree(t) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "core-package-")));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
-  const install = (dir, pkg, main = "export default 'x';", dependencies = {}) => {
+  const install = (dir, pkg, main = "export default 'x';", dependencies = {}, peerDependencies = {}) => {
     const at = path.join(base, dir, "node_modules", pkg);
     fs.mkdirSync(at, { recursive: true });
-    fs.writeFileSync(path.join(at, "package.json"), JSON.stringify({ name: pkg, type: "module", exports: "./index.js", dependencies }));
+    fs.writeFileSync(path.join(at, "package.json"), JSON.stringify({ name: pkg, type: "module", exports: "./index.js", dependencies, peerDependencies }));
     fs.writeFileSync(path.join(at, "index.js"), main);
     return at;
   };
@@ -128,6 +128,21 @@ test("linkCorePackage: the copy follows a dependency chain, and a cycle does not
 
   const mod = await import(pathToFileURL(path.join(sandbox, "copied.mjs")).href);
   assert.equal(mod.default, "a>b>c");
+});
+
+test("linkCorePackage: the copy brings an installed peer dependency too", async (t) => {
+  const { install, dir } = tree(t);
+  // A peer is imported like any other dependency and installed beside the
+  // package, but declared under peerDependencies, not dependencies.
+  install("main", "demo-peer", "export default 'from the peer';");
+  install("main", "demo", "import peer from 'demo-peer'; export default peer;", {}, { "demo-peer": "*" });
+  const sandbox = dir("elsewhere/sandbox");
+  fs.writeFileSync(path.join(sandbox, "copied.mjs"), "export { default } from 'demo';");
+
+  linkCorePackage(sandbox, "demo", dir("main/wt"), { link: refuseToLink });
+
+  const mod = await import(pathToFileURL(path.join(sandbox, "copied.mjs")).href);
+  assert.equal(mod.default, "from the peer");
 });
 
 test("linkCorePackage: a dependency installed nowhere does not stop the copy", (t) => {

@@ -71,7 +71,10 @@ function copyPackageWithDependencies(source, dest, chain = new Set()) {
   } catch {
     return;
   }
-  for (const name of Object.keys({ ...manifest.optionalDependencies, ...manifest.dependencies })) {
+  // Peers too. A package imports its peer like any other dependency, and npm
+  // installs the peer beside it, so the original resolves it from its own
+  // location and a copy that left it behind does not.
+  for (const name of Object.keys({ ...manifest.peerDependencies, ...manifest.optionalDependencies, ...manifest.dependencies })) {
     const installed = findCorePackage(name, real);
     if (installed === null) continue;
     const depReal = fs.realpathSync(installed);
