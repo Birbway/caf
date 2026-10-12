@@ -1678,12 +1678,12 @@ try {
 
     const mainDocPage = deadThirdParty(true);
     const mainDocDead = await checkUrlLiveness(mainDocPage, 'https://careers.example.com/jobs/1');
-    if (mainDocDead.result === 'uncertain' && mainDocDead.code === 'blocked_host' && mainDocPage.abortCount === 1) {
-      pass('a non-resolving MAIN DOCUMENT is aborted and still returns blocked_host');
+    if (mainDocDead.result === 'uncertain' && mainDocDead.code === 'dns_no_addresses' && mainDocPage.abortCount === 1) {
+      pass('a non-resolving MAIN DOCUMENT is aborted and reads uncertain (dns_no_addresses), not blocked_host');
     } else {
       fail(
         `main-document DNS failure handled wrongly: ${JSON.stringify(mainDocDead)}, ` +
-        `aborts=${mainDocPage.abortCount} (want uncertain/blocked_host, aborts 1)`
+        `aborts=${mainDocPage.abortCount} (want uncertain/dns_no_addresses, aborts 1)`
       );
     }
   } finally {

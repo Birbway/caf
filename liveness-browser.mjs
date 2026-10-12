@@ -331,6 +331,15 @@ export async function installLivenessRouteGuard(page) {
         // nothing. Only the VERDICT stops being poisoned, and only for a
         // subresource: if the main document itself has no usable address, that is a
         // real finding about the posting and still counts.
+        //
+        // It counts as `uncertain` under its DNS tag, though, not as `blocked_host`.
+        // That code says the URL points into private space, and `scan --verify`
+        // records it as skipped_blocked_host, for good. No usable address can just
+        // as well be a DNS outage or the user's own filter, which say nothing lasting
+        // about the URL. The catch in checkUrlLiveness treats a DNS failure as
+        // transient for the same reason, and `--verify` keeps this verdict as it
+        // keeps a navigation_error.
+        //
         // Whether this was the main document or a subresource can only be asked
         // of a real Playwright request. Callers may pass a lighter route double
         // (the test suite does, with request() returning just a url()), and for
@@ -346,8 +355,10 @@ export async function installLivenessRouteGuard(page) {
           ? request.isNavigationRequest() && request.frame() === page.mainFrame()
           : true;
         const noUsableAddress = err?.livenessCode === 'dns_no_addresses' || err?.livenessCode === 'dns_sinkhole';
-        if (!noUsableAddress || isMainDocument) {
+        if (!noUsableAddress) {
           page._blockedByGuard = { code: 'blocked_host', reason: err.message };
+        } else if (isMainDocument) {
+          page._blockedByGuard = { code: err.livenessCode, reason: err.message };
         }
         return route.abort('blockedbyclient');
       }
