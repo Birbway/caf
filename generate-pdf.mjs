@@ -45,7 +45,7 @@ import { readFile } from 'fs/promises';
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { randomUUID } from 'node:crypto';
-import { getCareerOpsRoot, getProfilePath } from './path-resolver.mjs';
+import { getCareerOpsRoot, getProfilePath, hasProfileOverride } from './path-resolver.mjs';
 import { readStyleTokens, injectThemeStyle, readCvSectionOrder } from './theme-style.mjs';
 import { validateCvExperienceOrder } from './cv-experience-order.mjs';
 import { resolvePdfIndexPath, resolveTrackerPath, resolveWorkspaceRootFor, writeFileAtomic } from './tracker-utils.mjs';
@@ -72,8 +72,7 @@ const PDF_PAGE_MARGIN = '0.6in';
  */
 function workspaceProfilePath(explicitRoot) {
   if (explicitRoot) return getProfilePath(explicitRoot);
-  const named = getProfilePath();
-  return named === getProfilePath(getCareerOpsRoot()) ? getProfilePath(workspaceRoot) : named;
+  return hasProfileOverride() ? getProfilePath() : getProfilePath(workspaceRoot);
 }
 
 // Canonical tracker workspace: realpath so a symlinked ancestor (e.g. macOS
