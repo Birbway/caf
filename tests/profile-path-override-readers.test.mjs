@@ -272,6 +272,19 @@ try {
   takesProfile && snapshotCall && /\bprofilePath,/.test(snapshotCall[0])
     ? pass('updater: apply() hands the profile CAREER_OPS_PROFILE selects to the template-variant snapshot (source check)')
     : failOnce(`updater: apply() does not pass getProfilePath() into snapshotConfiguredTemplateVariants (takesProfile=${takesProfile}, call=${snapshotCall ? 'found' : 'missing'})`);
+
+  // 3c. cv-sync-check's advice for a missing profile. With an override that names a
+  // file that is not there, "copy the example into config/profile.yml" changes
+  // nothing; the message has to name the variable and the path it points at.
+  const missingNamed = join(scratch, 'typo-profile.yml');
+  const sync = spawnSync(NODE, [join(ROOT, 'cv-sync-check.mjs')], {
+    cwd: decoyCwd, encoding: 'utf-8', timeout: 60_000,
+    env: { ...process.env, CAREER_OPS_ROOT: dataRoot, CAREER_OPS_DATA_DIR: '', CAREER_OPS_PROFILE: missingNamed },
+  });
+  const syncOut = `${sync.stdout}${sync.stderr}`;
+  /CAREER_OPS_PROFILE/.test(syncOut) && syncOut.includes(missingNamed)
+    ? pass('builders: cv-sync-check names CAREER_OPS_PROFILE and its target when that file is missing')
+    : failOnce(`builders: cv-sync-check did not name CAREER_OPS_PROFILE and ${missingNamed} for a missing override target: ${JSON.stringify(syncOut.slice(0, 200))}`);
 } catch (e) {
   failOnce(`profile-path readers suite crashed: ${e.stack || e.message}`);
 } finally {
