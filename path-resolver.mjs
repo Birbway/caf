@@ -31,10 +31,21 @@ export function getCareerOpsRoot() {
 }
 
 /**
+ * True when CAREER_OPS_PROFILE names a profile. Callers that must tell "an
+ * override is set" from "none" use this instead of comparing paths: an override
+ * may name the data-root profile itself.
+ *
+ * @returns {boolean}
+ */
+export function hasProfileOverride() {
+  return Boolean(process.env.CAREER_OPS_PROFILE?.trim());
+}
+
+/**
  * Returns the path to the user's config/profile.yml.
  * Priority: rootDir argument > process.env.CAREER_OPS_PROFILE > data root.
- * A relative override is anchored to the codebase root, like CAREER_OPS_ROOT, so
- * it names the same file whatever directory the command runs from.
+ * A relative override resolves against the working directory, like the other
+ * lane variables (CAREER_OPS_PORTALS, CAREER_OPS_PIPELINE, CAREER_OPS_SCAN_HISTORY).
  *
  * Every reader of the profile resolves it here. The override used to be
  * copied by hand into a handful of modules while the rest built the data-root
@@ -48,7 +59,7 @@ export function getCareerOpsRoot() {
 export function getProfilePath(rootDir) {
   if (rootDir) return join(rootDir, 'config', 'profile.yml');
   const override = process.env.CAREER_OPS_PROFILE?.trim();
-  return override ? resolve(__dirname, override) : join(getCareerOpsRoot(), 'config', 'profile.yml');
+  return override ? resolve(override) : join(getCareerOpsRoot(), 'config', 'profile.yml');
 }
 
 /**

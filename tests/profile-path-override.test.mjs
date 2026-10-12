@@ -3,10 +3,14 @@
 //
 // cv-templates.mjs documented the precedence: the override wins over the data
 // root. The expression that implements it was then copied by hand into six more
-// modules, and every other reader built the data-root path on its own and never
-// looked at the variable. One command could report the same profile as both
+// modules, and most other core readers built the data-root path on their own and
+// never looked at the variable. One command could report the same profile as both
 // missing and fine (doctor.mjs), and `scan.mjs` followed the named profile while
 // the evaluators that ran next read a different one.
+//
+// Scope: the .mjs modules at the repo root and under lib/, providers/ and scripts/.
+// The web app has its own helper and test, and batch/batch-runner.sh and the mode
+// prompts that tell an agent to read config/profile.yml are not covered here.
 //
 // Three layers, because each catches a different way to get this wrong:
 //   1. getProfilePath() itself: the precedence, in one place.
@@ -47,7 +51,7 @@ function restoreEnv() {
 try {
   // ── 1. getProfilePath() ────────────────────────────────────────────────────
   const resolverUrl = pathToFileURL(join(ROOT, 'path-resolver.mjs')).href;
-  const { getProfilePath, getCareerOpsRoot } = await import(resolverUrl);
+  const { getProfilePath, hasProfileOverride, getCareerOpsRoot } = await import(resolverUrl);
 
   if (typeof getProfilePath !== 'function') {
     fail('path-resolver.mjs exports no getProfilePath(): there is no single place the override is resolved');
@@ -71,24 +75,40 @@ try {
       ? pass('getProfilePath() trims the override')
       : fail(`getProfilePath() did not trim the override: got ${JSON.stringify(getProfilePath())}`);
 
-    // A relative override is anchored to the codebase, the rule CAREER_OPS_ROOT and
-    // CAREER_OPS_TRACKER already follow, so it means the same file from any cwd.
-    const codeRoot = ROOT;
+    // A relative override resolves against the working directory, as the sibling
+    // lane variables (CAREER_OPS_PORTALS, CAREER_OPS_PIPELINE, CAREER_OPS_SCAN_HISTORY)
+    // do. docs/SCRIPTS.md sets them together as relative paths.
     const cwdBefore = process.cwd();
     try {
       process.env.CAREER_OPS_PROFILE = 'config/profile.example.yml';
-      const fromRepoRoot = (process.chdir(codeRoot), getProfilePath());
-      const fromElsewhere = (process.chdir(scratch), getProfilePath());
-      const wantRelative = join(codeRoot, 'config', 'profile.example.yml');
-      fromRepoRoot === wantRelative
-        ? pass('a relative CAREER_OPS_PROFILE resolves against the codebase root from the repo root')
-        : fail(`relative override from the repo root gave ${fromRepoRoot}, expected ${wantRelative}`);
-      fromElsewhere === wantRelative
-        ? pass('a relative CAREER_OPS_PROFILE still resolves against the codebase root when the cwd is elsewhere')
-        : fail(`relative override from another cwd gave ${fromElsewhere}, expected ${wantRelative}`);
+      process.chdir(ROOT);
+      const fromRepoRoot = getProfilePath();
+      const wantFromRoot = join(process.cwd(), 'config', 'profile.example.yml');
+      fromRepoRoot === wantFromRoot
+        ? pass('a relative CAREER_OPS_PROFILE resolves against the cwd (repo root)')
+        : fail(`relative override from the repo root gave ${fromRepoRoot}, expected ${wantFromRoot}`);
+      process.chdir(scratch);
+      const fromElsewhere = getProfilePath();
+      const wantFromScratch = join(process.cwd(), 'config', 'profile.example.yml');
+      fromElsewhere === wantFromScratch
+        ? pass('a relative CAREER_OPS_PROFILE follows the cwd when the command runs elsewhere')
+        : fail(`relative override from another cwd gave ${fromElsewhere}, expected ${wantFromScratch}`);
     } finally {
       process.chdir(cwdBefore);
     }
+
+    // generate-pdf has to tell "an override is set" from "no override" without
+    // comparing paths, since an override may name the data-root profile itself.
+    delete process.env.CAREER_OPS_PROFILE;
+    const flags = [];
+    for (const v of [undefined, '', '   ', dataRootProfile, namedProfile]) {
+      if (v === undefined) delete process.env.CAREER_OPS_PROFILE;
+      else process.env.CAREER_OPS_PROFILE = v;
+      flags.push(hasProfileOverride?.());
+    }
+    JSON.stringify(flags) === JSON.stringify([false, false, false, true, true])
+      ? pass('hasProfileOverride() is true for any non-blank override, including one naming the data-root profile')
+      : fail(`hasProfileOverride() gave ${JSON.stringify(flags)}, expected [false,false,false,true,true]`);
 
     for (const blank of ['', '   ']) {
       process.env.CAREER_OPS_PROFILE = blank;
@@ -131,9 +151,36 @@ try {
     : fail('doctor --json lists config/profile.yml missing although CAREER_OPS_PROFILE names an existing file');
 
   const absent = join(scratch, 'does-not-exist.yml');
-  /config\/profile\.yml not found/.test(runDoctor([], absent))
+  const absentOut = runDoctor([], absent);
+  /config\/profile\.yml not found/.test(absentOut)
     ? pass('doctor still reports the profile missing when the override names a file that is not there')
     : fail('doctor passed the prerequisite although CAREER_OPS_PROFILE names a file that does not exist');
+  /CAREER_OPS_PROFILE/.test(absentOut) && absentOut.includes(absent) && !/cp config\/profile\.example\.yml/.test(absentOut)
+    ? pass('doctor names CAREER_OPS_PROFILE and the file it points at, instead of advising a copy that would change nothing')
+    : fail('doctor advice for a missing override target does not name the variable and path, or still says to copy the example');
+
+  // scan.mjs loads the data root's .env before it reads the profile, so an
+  // override set only there is a working setup; doctor has to agree whether or not
+  // an unrelated CAREER_OPS_CLI is already exported (that decides if .env loads).
+  const envRoot = join(scratch, 'env-root');
+  mkdirSync(envRoot, { recursive: true });
+  writeFileSync(join(envRoot, '.env'), `CAREER_OPS_PROFILE=${namedProfile}\n`, 'utf-8');
+  const runDoctorEnvFile = (args, cli) => {
+    const env = { ...process.env, CAREER_OPS_ROOT: envRoot, CAREER_OPS_DATA_DIR: '' };
+    delete env.CAREER_OPS_PROFILE;
+    if (cli) env.CAREER_OPS_CLI = cli; else delete env.CAREER_OPS_CLI;
+    const r = spawnSync(NODE, [join(ROOT, 'doctor.mjs'), ...args], { cwd: scratch, encoding: 'utf-8', timeout: 60000, env });
+    if (r.error) throw r.error;
+    return `${r.stdout}${r.stderr}`;
+  };
+  for (const cli of [undefined, 'claude']) {
+    const label = cli ? 'with CAREER_OPS_CLI exported' : 'without CAREER_OPS_CLI';
+    const human = runDoctorEnvFile([], cli);
+    const json = JSON.parse(runDoctorEnvFile(['--json'], cli));
+    !/config\/profile\.yml not found/.test(human) && !json.missing.includes('config/profile.yml')
+      ? pass(`doctor honors a CAREER_OPS_PROFILE set in the data root .env, human and --json alike (${label})`)
+      : fail(`doctor disagrees with itself about a .env-set CAREER_OPS_PROFILE (${label}): human says not found=${/config\/profile\.yml not found/.test(human)}, --json missing=${json.missing.includes('config/profile.yml')}`);
+  }
 
   /config\/profile\.yml not found/.test(runDoctor([], undefined))
     ? pass('doctor reports the profile missing when neither the override nor the data root has one')
@@ -145,7 +192,7 @@ try {
   const EXEMPT = new Set(['path-resolver.mjs', 'career-profile.mjs']);
   const PENDING = new Set([]);
   const HAND_BUILT = [
-    /process\.env\.CAREER_OPS_PROFILE/,
+    /process\.env\.CAREER_OPS_PROFILE(?!\s*=[^=])/,   // a read; assigning it (doctor.mjs, from .env) is not a path
     /\b(?:join|resolve)\([^\n]*['"](?:config\/)?profile\.yml['"]/,
     /(?<![=!])=\s*['"]config\/profile\.yml['"]/,
     /readFile\(['"]config\/profile\.yml/,
