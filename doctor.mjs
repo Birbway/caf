@@ -377,12 +377,14 @@ async function checkPlaywright() {
 // Per-CLI MCP config registry. `plugins: true` marks a CLI whose MCP servers
 // can also arrive from outside the project root: from .claude.json or from an
 // installed plugin (see isPlaywrightMcpFromClaudeJson, isPlaywrightMcpFromPlugin).
+// `userFiles` marks a CLI whose USER-level config can also carry servers
+// (see opencodeUserConfigFiles).
 const MCP_CONFIGS = [
   { cli: 'claude',   files: ['.mcp.json', '.claude/settings.json', '.claude/settings.local.json'], plugins: true },
   // opencode.jsonc is JSONC: OpenCode accepts comments and trailing commas
   // there, and JSON.parse throwing on them used to read as "no MCP server
   // configured" (#2252).
-  { cli: 'opencode', files: ['opencode.json', 'opencode.jsonc'] },
+  { cli: 'opencode', files: ['opencode.json', 'opencode.jsonc'], userFiles: () => opencodeUserConfigFiles() },
 ];
 
 // Server qualifies if its definition references the @playwright/mcp package,
@@ -420,6 +422,24 @@ function readConfigIfPresent(file) {
 // the tests point it at a tmpdir so this never reads the real machine.
 function claudeConfigDir() {
   return process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+}
+
+// OpenCode merges a USER-level config with the project's (opencode.ai/docs/config):
+// ~/.config/opencode/opencode.json[c] by default, or the file named by
+// $OPENCODE_CONFIG, or the directory $OPENCODE_CONFIG_DIR (XDG_CONFIG_HOME
+// honored for the default). Same reasoning as isPlaywrightMcpFromClaudeJson:
+// a server installed at user level is installed and working, so a
+// project-only scan would report a machine that has Playwright MCP as
+// unconfigured. Every candidate is a plain path; missing files read as null.
+function opencodeUserConfigFiles() {
+  const files = [];
+  if (process.env.OPENCODE_CONFIG) files.push(process.env.OPENCODE_CONFIG);
+  const dir = process.env.OPENCODE_CONFIG_DIR
+    || (process.env.XDG_CONFIG_HOME
+      ? join(process.env.XDG_CONFIG_HOME, 'opencode')
+      : join(homedir(), '.config', 'opencode'));
+  for (const name of ['opencode.json', 'opencode.jsonc']) files.push(join(dir, name));
+  return files;
 }
 
 // A Claude Code plugin declares its MCP servers in its own .mcp.json, which
@@ -500,15 +520,24 @@ function isPlaywrightMcpConfigured(root, activeCli) {
   if (inProject) return true;
   // Gated behind the project scan, so an already-configured project pays no
   // extra I/O and non-plugin CLIs never touch the user config dir.
-  return entry.plugins === true
-    && (isPlaywrightMcpFromClaudeJson(root) || isPlaywrightMcpFromPlugin(root));
+  if (entry.plugins === true
+      && (isPlaywrightMcpFromClaudeJson(root) || isPlaywrightMcpFromPlugin(root))) {
+    return true;
+  }
+  // User-level config (OpenCode's global opencode.json[c]) — also gated
+  // behind the project scan for the same cost reason.
+  if (entry.userFiles) {
+    return entry.userFiles().some((file) => hasPlaywrightIn(readConfigIfPresent(file)));
+  }
+  return false;
 }
 
 // CLI resolution: --cli flag > $CAREER_OPS_CLI > .env (CAREER_OPS_CLI=...) >
-// default ('claude'). An unknown value at ANY level returns the sentinel
-// 'unknown' and produces no output — CLI-dependent checks are silently
-// skipped. .env parsing is best-effort: missing file is normal, malformed
-// values are caught per call below.
+// runtime marker (OPENCODE=1 → opencode) > checkout hint (an opencode.json
+// with no Claude MCP config beside it) > default ('claude'). An unknown value
+// at ANY level returns the sentinel 'unknown' and produces no output —
+// CLI-dependent checks are silently skipped. .env parsing is best-effort:
+// missing file is normal, malformed values are caught per call below.
 function resolveActiveCli() {
   if (cliFlag !== undefined && cliFlag !== null) {
     if (!VALID_CLIS.includes(cliFlag)) {
@@ -530,6 +559,25 @@ function resolveActiveCli() {
       return { cli: 'unknown', source: '.env', warning: `CAREER_OPS_CLI in .env is not a recognized CLI. Valid: ${VALID_CLIS.join(', ')}.` };
     }
     return { cli: process.env.CAREER_OPS_CLI, source: '.env' };
+  }
+  // Runtime marker: OpenCode stamps OPENCODE=1 on every process it runs.
+  // Without this, doctor started from inside OpenCode falls through to the
+  // claude default and then scans Claude's MCP configs — reporting "Playwright
+  // MCP not detected" on a machine where it is configured in opencode.json.
+  if (process.env.OPENCODE) {
+    return { cli: 'opencode', source: 'auto' };
+  }
+  // Checkout hint: an opencode.json/opencode.jsonc in the launch directory
+  // with NO Claude MCP config beside it means this checkout is driven from
+  // OpenCode (shell runs inside OpenCode are already caught by the marker
+  // above; a checkout carrying .mcp.json/.claude config stays on the claude
+  // default, so dual-config checkouts behave exactly as before).
+  const cwd = process.cwd();
+  const hasOpenCodeCfg = ['opencode.json', 'opencode.jsonc'].some((f) => existsSync(join(cwd, f)));
+  const hasClaudeCfg = ['.mcp.json', '.claude/settings.json', '.claude/settings.local.json']
+    .some((f) => existsSync(join(cwd, f)));
+  if (hasOpenCodeCfg && !hasClaudeCfg) {
+    return { cli: 'opencode', source: 'auto' };
   }
   return { cli: 'claude', source: 'default' };
 }
@@ -562,7 +610,7 @@ function checkPlaywrightMcp(root, activeCli) {
         ? `No project-level MCP config, no server in .claude.json (~/.claude.json, or $CLAUDE_CONFIG_DIR/.claude.json when set), and no enabled plugin providing one, was detected for ${activeCli}.`
         : `No project-level MCP config was detected for ${activeCli}.`,
       activeCli === 'opencode'
-        ? 'Add the Playwright MCP server to opencode.json (see opencode.example.json) or pass --cli <name> if you actually run a different CLI.'
+        ? 'Add the Playwright MCP server to opencode.json (project; see opencode.example.json) or to the global ~/.config/opencode/opencode.json[c] (or $OPENCODE_CONFIG), or pass --cli <name> if you actually run a different CLI.'
         : `Add the Playwright MCP server to your ${activeCli} config, or install a plugin that provides it (e.g. /plugin install playwright@claude-plugins-official).`,
     ],
   };

@@ -21,13 +21,23 @@ const DOCTOR = join(ROOT, 'doctor.mjs');
 // Scenarios that exercise the plugin path pass their own CLAUDE_CONFIG_DIR.
 const EMPTY_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'co-mcp-emptycfg-'));
 
+// Ambient runtime markers from the host session (OPENCODE=1 when the suite
+// runs inside OpenCode) are stripped so the default-CLI scenarios below stay
+// deterministic — the same isolation reasoning as CLAUDE_CONFIG_DIR pinning
+// and as the CAREER_OPS_CLI delete in doctor-cli-resolution.test.mjs.
+// Scenarios that WANT the marker pass OPENCODE explicitly via env.
+function hostEnv() {
+  const { OPENCODE: _openCodeMarker, ...rest } = process.env;
+  return rest;
+}
+
 function runDoctor(cwd, args, env, { executionCwd = cwd } = {}) {
   try {
     const out = execFileSync(NODE, [DOCTOR, '--json', '--target', cwd, ...args], {
       cwd: executionCwd,
       // Order matters: the empty dir must override an ambient CLAUDE_CONFIG_DIR
       // from the developer's own shell, while a scenario's explicit env still wins.
-      env: { ...process.env, CLAUDE_CONFIG_DIR: EMPTY_CONFIG_DIR, ...env },
+      env: { ...hostEnv(), CLAUDE_CONFIG_DIR: EMPTY_CONFIG_DIR, ...env },
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
@@ -41,7 +51,7 @@ function runDoctorHuman(cwd, env, { executionCwd = cwd } = {}) {
   try {
     return execFileSync(NODE, [DOCTOR, '--target', cwd], {
       cwd: executionCwd,
-      env: { ...process.env, CLAUDE_CONFIG_DIR: EMPTY_CONFIG_DIR, ...env },
+      env: { ...hostEnv(), CLAUDE_CONFIG_DIR: EMPTY_CONFIG_DIR, ...env },
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -924,6 +934,149 @@ try {
         fail(`#37 unexpected state: ${JSON.stringify(state)}`);
       }
     });
+  }
+
+  // ---------------------------------------------------------------------
+  // OpenCode CLI resolution: runtime marker, checkout hint, and user-level
+  // config — the fix for "doctor searches Claude while the MCP server lives
+  // in OpenCode" (an OpenCode install reading as claude/unconfigured).
+  // ---------------------------------------------------------------------
+
+  // 38. OPENCODE=1 runtime marker, no flag/env/.env, project opencode.json
+  //     (in the `mcp.servers` shape OpenCode writes) carries the server.
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'co-mcp-38-'));
+    try {
+      writeFileSync(join(dir, 'opencode.json'), JSON.stringify({
+        mcp: { servers: { playwright: { type: 'local', command: ['npx', '-y', '@playwright/mcp@latest'] } } },
+      }));
+      const state = runDoctor(dir, [], { OPENCODE: '1' });
+      if (!expectWarn(state, '#38 OPENCODE marker')) {
+        // already failed
+      } else if (state.active_cli === 'opencode'
+          && state.cli_source === 'auto'
+          && state.playwright_mcp?.opencode === true
+          && Array.isArray(state.warnings)
+          && !state.warnings.some((w) => PLAYWRIGHT_RE.test(w))) {
+        pass('OPENCODE=1 + opencode.json → active_cli=opencode (cli_source=auto), detected, no warning');
+      } else {
+        fail(`#38 unexpected state: ${JSON.stringify(state)}`);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+
+  // 39. An explicit CAREER_OPS_CLI still beats the runtime marker: explicit
+  //     choice > ambient signal.
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'co-mcp-39-'));
+    try {
+      const state = runDoctor(dir, [], { OPENCODE: '1', CAREER_OPS_CLI: 'claude' });
+      if (!expectWarn(state, '#39 env beats marker')) {
+        // already failed
+      } else if (state.active_cli === 'claude'
+          && state.cli_source === 'env'
+          && state.playwright_mcp?.claude === false
+          && state.warnings.some((w) => PLAYWRIGHT_RE.test(w) && /active cli: claude/i.test(w))) {
+        pass('CAREER_OPS_CLI=claude beats OPENCODE=1 marker (cli_source=env)');
+      } else {
+        fail(`#39 unexpected state: ${JSON.stringify(state)}`);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+
+  // 40. Marker with no config anywhere → warning labeled with the DETECTED
+  //     CLI, not the claude default.
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'co-mcp-40-'));
+    try {
+      const state = runDoctor(dir, [], { OPENCODE: '1' });
+      if (!expectWarn(state, '#40 marker without config')) {
+        // already failed
+      } else if (state.active_cli === 'opencode'
+          && state.cli_source === 'auto'
+          && state.playwright_mcp?.opencode === false
+          && state.warnings.some((w) => PLAYWRIGHT_RE.test(w) && /active cli: opencode/i.test(w))) {
+        pass('OPENCODE=1 without config → warning labels active CLI: opencode (cli_source=auto)');
+      } else {
+        fail(`#40 unexpected state: ${JSON.stringify(state)}`);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+
+  // 41. Checkout hint: no runtime marker, but the launch directory carries
+  //     opencode.json and NO Claude MCP config → opencode. Plain-shell runs
+  //     inside a checkout that is driven from OpenCode resolve correctly too.
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'co-mcp-41-'));
+    try {
+      writeFileSync(join(dir, 'opencode.json'),
+        JSON.stringify({ mcp: { playwright: { type: 'local', command: ['npx', '-y', '@playwright/mcp'] } } }));
+      const state = runDoctor(dir, [], {});
+      if (!expectWarn(state, '#41 checkout hint')) {
+        // already failed
+      } else if (state.active_cli === 'opencode'
+          && state.cli_source === 'auto'
+          && state.playwright_mcp?.opencode === true
+          && !state.warnings.some((w) => PLAYWRIGHT_RE.test(w))) {
+        pass('opencode.json in launch dir, no Claude config → checkout hint resolves opencode (cli_source=auto)');
+      } else {
+        fail(`#41 unexpected state: ${JSON.stringify(state)}`);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+
+  // 42. The hint must NOT fire when a Claude MCP config sits beside it — a
+  //     dual-config checkout keeps the historical claude default (#7's rule,
+  //     extended to .mcp.json).
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'co-mcp-42-'));
+    try {
+      writeFileSync(join(dir, 'opencode.json'),
+        JSON.stringify({ mcp: { playwright: { type: 'local', command: ['npx', '@playwright/mcp'] } } }));
+      writeFileSync(join(dir, '.mcp.json'),
+        JSON.stringify({ mcpServers: { unrelated: { command: 'false' } } }));
+      const state = runDoctor(dir, [], {});
+      if (!expectWarn(state, '#42 dual config keeps claude default')) {
+        // already failed
+      } else if (state.active_cli === 'claude'
+          && state.cli_source === 'default'
+          && state.playwright_mcp?.claude === false) {
+        pass('.mcp.json beside opencode.json → no hint, claude stays the default');
+      } else {
+        fail(`#42 unexpected state: ${JSON.stringify(state)}`);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+
+  // 43. User-level OpenCode config (~/.config/opencode/opencode.json): the
+  //     project has no MCP config, but the global one does → detected, same
+  //     parity ~/.claude.json already had. HOME/USERPROFILE point the child's
+  //     homedir() at a tmpdir; the override env vars are blanked so an
+  //     ambient OPENCODE_CONFIG/XDG_CONFIG_HOME cannot decide the result.
+  {
+    const home = mkdtempSync(join(tmpdir(), 'co-mcp-43home-'));
+    const dir = mkdtempSync(join(tmpdir(), 'co-mcp-43-'));
+    try {
+      const cfgDir = join(home, '.config', 'opencode');
+      mkdirSync(cfgDir, { recursive: true });
+      writeFileSync(join(cfgDir, 'opencode.json'),
+        JSON.stringify({ mcp: { playwright: { type: 'local', command: ['npx', '-y', '@playwright/mcp'] } } }));
+      const state = runDoctor(dir, ['--cli', 'opencode'], {
+        HOME: home, USERPROFILE: home,
+        OPENCODE_CONFIG: '', OPENCODE_CONFIG_DIR: '', XDG_CONFIG_HOME: '',
+      });
+      if (!expectWarn(state, '#43 user-level opencode config')) {
+        // already failed
+      } else if (state.playwright_mcp?.opencode === true
+          && !state.warnings.some((w) => PLAYWRIGHT_RE.test(w))) {
+        pass('global ~/.config/opencode/opencode.json with Playwright → detected, no warning');
+      } else {
+        fail(`#43 unexpected state: ${JSON.stringify(state)}`);
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 
 } catch (e) {
