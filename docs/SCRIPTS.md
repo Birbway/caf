@@ -863,6 +863,14 @@ and probes those companies via the ATS providers instead of (or in addition
 to) the directory walk. Other flags: `--verbose`, `--json`, `--include-undated`,
 `--shuffle`.
 
+`--resume` continues an interrupted sweep from its checkpoint, and refuses when
+the run would mix two configurations: different `--ats`, `--limit` or
+`--include-undated` flags, `--shuffle`, or a `portals.yml` filter edited since
+the checkpoint was written (`title_filter` / `title_filter_full`,
+`title_filter_overrides`, `location_filter`, `content_filter`,
+`domain_filter`). The error names the filter that changed; restore it to finish
+the sweep, or delete the checkpoint to start fresh.
+
 ### DNS pacing
 
 A full sweep resolves one hostname per Workday, iCIMS and BambooHR tenant — 25,205 distinct hostnames across the current datasets (3,781 Workday + 10,108 iCIMS + 11,316 BambooHR), against 3 for Greenhouse, Lever and Ashby combined. Those lookups are irreducible (nothing to cache: every hostname is distinct), and issued unpaced they trip the per-client rate limit on a resolver like Pi-hole, which then refuses queries for the whole machine — the scan reports thousands of misleading `fetch failed` lines while the boards themselves are fine (#2229).
