@@ -1,9 +1,8 @@
 import { buildConversationContext } from "@/lib/assistant-history.mjs";
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
-import fs from "node:fs";
-import path from "node:path";
 import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from "@/lib/clis";
 import { careerOpsRoot, readMemory, doctorState } from "@/lib/career-ops";
+import { resolveCodeRoot } from "@/lib/core/code-root.mjs";
 import { CAPS } from "@/lib/worker-capabilities.mjs";
 import { scopeFrom } from "@/lib/claude-invocation.mjs";
 import { fencingReport } from "@/lib/cli-fencing.mjs";
@@ -12,18 +11,21 @@ import { fencingReport } from "@/lib/cli-fencing.mjs";
 // that spelled its own omitted MultiEdit, which --permission-mode acceptEdits
 // then auto-approves (#2185, #2507).
 const ADVISOR_SCOPE = scopeFrom("Read,WebFetch,Glob,Grep");
-import { sectionState } from "@/lib/personalization.mjs";
+import { readPersonalizationState } from "@/lib/personalization-file.mjs";
 
-/** Human labels of the modes/_profile.md sections still identical to the template. */
-function personalizationGeneric(): string[] {
-  const root = careerOpsRoot();
-  const read = (p: string) => { try { return fs.readFileSync(p, "utf8"); } catch { return ""; } };
-  const user = read(path.join(root, "modes", "_profile.md"));
-  const tpl = read(path.join(root, "modes", "_profile.template.md"));
-  if (!tpl) return [];
-  return sectionState(user, tpl)
-    .filter((s: { state: string }) => s.state !== "filled")
-    .map((s: { heading: string }) => s.heading.replace(/^## Your /, "").toLowerCase());
+/**
+ * Human labels of the modes/_profile.md sections still identical to the template.
+ * null = could not be determined (profile or template unreadable): the caller
+ * must say so rather than report "filled" or ask for writes that would fail.
+ */
+function personalizationGeneric(): string[] | null {
+  try {
+    return readPersonalizationState(careerOpsRoot(), resolveCodeRoot(process.cwd(), process.env)).sections
+      .filter((s: { state: string }) => s.state !== "filled")
+      .map((s: { heading: string }) => s.heading.replace(/^## Your /, "").toLowerCase());
+  } catch {
+    return null;
+  }
 }
 
 export const runtime = "nodejs"; // child_process (spawn) requires the Node runtime
@@ -114,10 +116,12 @@ export async function POST(req: Request) {
   // doctorState alone would call a generic file "done". Section state is what
   // tells the assistant which parts of the brief are still not this person's.
   const generic = personalizationGeneric();
-  const personalizationLine = generic.length
-    ? `\n- Personalization still on the template (ask about these, then setPersonalization): ${generic.join(", ")}`
-    : "\n- Personalization: filled";
-  const setupLine = onboardingNeeded || generic.length
+  const personalizationLine = generic === null
+    ? "\n- Personalization: could not be read right now — do NOT emit setPersonalization and do NOT say it is complete; if the user asks, tell them the personalization file could not be read"
+    : generic.length
+      ? `\n- Personalization still on the template (ask about these, then setPersonalization): ${generic.join(", ")}`
+      : "\n- Personalization: filled";
+  const setupLine = onboardingNeeded || generic === null || generic.length
     ? `\n\nSETUP STATE (authoritative — the SAME signal the home screen uses; trust it over guessing, and do NOT re-ask for anything already on file):\n- CV on file (cv.md): ${hasCv ? "YES — do NOT ask for it again; read it to be concrete" : "NO — this is the first thing to collect"}\n- Still missing: ${missing.length ? missing.join(", ") : "nothing"}${personalizationLine}\nWhen onboarding, START at the first item actually missing. If the CV is already on file, SKIP step 1 entirely and go straight to the next missing prerequisite (usually the profile — target roles, comp, location), then the personalization sections still on the template.`
     : `\n\nSETUP STATE: this user is fully set up (CV + profile + scanner + personalization all on file). Do NOT run onboarding or ask for a CV — just help them with what they actually asked.`;
   const prompt = `${SYSTEM_PREAMBLE}${setupLine}${memoryLine}${pageLine}\n\n--- Conversation ---\n${convo}\nUser: ${message}\nAssistant:`;
