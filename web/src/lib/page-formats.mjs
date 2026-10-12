@@ -25,3 +25,19 @@ export const PAGE_FORMATS = new Set(["a4", "letter"]);
  * this only applies when it declares nothing at all.
  */
 export const DEFAULT_PAGE_FORMAT = "letter";
+
+/** The `config/profile.yml` key holding the user's standing preference. */
+export const PROFILE_PAGE_FORMAT_KEY = "page_format";
+
+/**
+ * Canonicalize one candidate value, or reject it. Case and padding are forgiven,
+ * matching `normalizePageFormat` in lib/page-format.mjs.
+ *
+ * @param {unknown} value
+ * @returns {"a4"|"letter"|null}
+ */
+export function normalizePageFormat(value) {
+  if (typeof value !== "string") return null;
+  const lower = value.trim().toLowerCase();
+  return PAGE_FORMATS.has(lower) ? lower : null;
+}
