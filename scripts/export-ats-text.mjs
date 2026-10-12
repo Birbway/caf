@@ -5,12 +5,12 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import * as yaml from 'js-yaml';
 import { isMainModule } from '../lib/is-main-module.mjs';
-import { getProfilePath } from '../path-resolver.mjs';
+import { getCareerOpsRoot, getProfilePath } from '../path-resolver.mjs';
 import { validateFlags } from '../lib/cli-flags.mjs';
 
 /**
@@ -247,7 +247,7 @@ export function loadProfile(customProfilePath = null, customCvPath = null) {
   }
 
   let cvData = {};
-  const cvSource = customCvPath || process.env.CAREER_OPS_CV || 'cv.md';
+  const cvSource = customCvPath || process.env.CAREER_OPS_CV || join(getCareerOpsRoot(), 'cv.md');
   if (customCvPath) {
     if (!existsSync(customCvPath)) {
       throw new Error(`CV file not found at: ${customCvPath}`);
