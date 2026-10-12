@@ -1,3 +1,25 @@
+/** Keep a late Skip failure from replacing feedback for a requested Undo.
+ * Each notice owns its actions. Awaiting skip() also awaits failure handling.
+ * @param {(done: boolean) => Promise<void>} persistSkip
+ * @param {(error: unknown) => void} onSkipFailure
+ */
+export function createInboxSkipActions(persistSkip, onSkipFailure) {
+  let undoRequested = false;
+  return {
+    skip: async () => {
+      try {
+        await persistSkip(true);
+      } catch (error) {
+        if (!undoRequested) onSkipFailure(error);
+      }
+    },
+    undo: () => {
+      undoRequested = true;
+      return persistSkip(false);
+    },
+  };
+}
+
 /** Serialize writes for one posting while still reporting failures to the UI.
  * A failed request must not poison the chain: the next Undo/retry still runs.
  * @param {Map<string, Promise<void>>} chains

@@ -94,7 +94,7 @@ test("Inbox Undo remains retryable after failure", { skip: !url || !root, timeou
     await row("Fixture Alpha").getByTitle("Skip — hide from the inbox").waitFor();
   }
 
-  await t.test("a failed Skip cannot replace the feedback for a requested Undo", async () => {
+  await t.test("Undo waits for a failed Skip and restores the row without a stale error", async () => {
     await resetInbox();
     await page.setViewportSize({ width: 1280, height: 900 });
     let releaseSkip;
@@ -117,9 +117,8 @@ test("Inbox Undo remains retryable after failure", { skip: !url || !root, timeou
       await undo().click();
       releaseSkip();
       await until(() => undoRequests === 1);
-      await page.waitForTimeout(100); // let the Skip rejection render while Undo is held
-      assert.equal(await writeAlerts().count(), 0);
-      assert.equal(await row("Fixture Alpha").count(), 0);
+      // Failure-handler completion is asserted deterministically in the unit
+      // suite. This browser check covers request order and the restored UI.
       releaseUndo();
       await row("Fixture Alpha").getByTitle("Skip — hide from the inbox").waitFor();
       assert.equal(await writeAlerts().count(), 0);

@@ -13,7 +13,7 @@ import { TriageRow, type RowScore } from "./triage-row";
 import { ShortlistTray, type ShortItem } from "./shortlist-tray";
 import { cn } from "@/lib/cn";
 import { estimateRunCost } from "@/lib/run-cost-estimate.mjs";
-import { queueInboxSkip } from "@/lib/inbox-skip-client.mjs";
+import { createInboxSkipActions, queueInboxSkip } from "@/lib/inbox-skip-client.mjs";
 
 const SHORTLIST_KEY = "career-ops:shortlist";
 const HIDDEN_KEY = "career-ops:hidden";
@@ -187,22 +187,20 @@ export function InboxTriage({ inbox }: { inbox: InboxJob[] }) {
   const skip = (job: InboxJob) => {
     setWriteError("");
     setHidden((h) => (h.includes(job.url) ? h : [...h, job.url]));
-    let undoRequested = false;
-    const notice: UndoNotice = {
-      label: `Skipped ${job.company}`,
-      fn: async () => {
-        undoRequested = true;
-        await persistSkip(job.url, false);
-        setHidden((h) => h.filter((u) => u !== job.url));
-      },
-    };
-    setUndo(notice);
-    void persistSkip(job.url, true).catch(() => {
-      if (undoRequested) return;
+    const actions = createInboxSkipActions((done) => persistSkip(job.url, done), () => {
       setHidden((h) => h.filter((u) => u !== job.url));
       setUndo((current) => current?.fn === notice.fn && !current.busy ? null : current);
       setWriteError(`Could not skip ${job.company}. Please try Skip again.`);
     });
+    const notice: UndoNotice = {
+      label: `Skipped ${job.company}`,
+      fn: async () => {
+        await actions.undo();
+        setHidden((h) => h.filter((u) => u !== job.url));
+      },
+    };
+    setUndo(notice);
+    void actions.skip();
   };
   const restoreHidden = async () => {
     if (restoreRunning.current) return;

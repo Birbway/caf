@@ -1,9 +1,37 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { queueInboxSkip } from "../../src/lib/inbox-skip-client.mjs";
+import { createInboxSkipActions, queueInboxSkip } from "../../src/lib/inbox-skip-client.mjs";
 
 const url = "https://example.com/fixture-alpha";
 const ok = (done) => Response.json({ ok: true, done, matched: 1, changed: 1 });
+
+test("a Skip failure is suppressed after Undo is requested, even while Undo is pending", async () => {
+  let rejectSkip;
+  let resolveUndo;
+  let undoFinished = false;
+  const skip = new Promise((_, reject) => { rejectSkip = reject; });
+  const undo = new Promise((resolve) => { resolveUndo = resolve; });
+  const failures = [];
+  const actions = createInboxSkipActions((done) => done ? skip : undo, (error) => failures.push(error));
+  const skipped = actions.skip();
+  const restored = actions.undo().then(() => { undoFinished = true; });
+  rejectSkip(new Error("Skip failed"));
+  await skipped; // the rejection handler has completed; Undo is still unresolved
+  assert.equal(undoFinished, false);
+  assert.deepEqual(failures, []);
+  resolveUndo();
+  await restored;
+  assert.equal(undoFinished, true);
+  assert.deepEqual(failures, []);
+});
+
+test("Skip failures still surface when Undo was not requested for that action", async () => {
+  const failure = new Error("Skip failed");
+  const failures = [];
+  const actions = createInboxSkipActions(async () => { throw failure; }, (error) => failures.push(error));
+  await actions.skip();
+  assert.deepEqual(failures, [failure]);
+});
 
 test("Skip and Undo use the existing endpoint and are serialized per URL", async () => {
   const chains = new Map();
