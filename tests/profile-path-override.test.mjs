@@ -71,6 +71,25 @@ try {
       ? pass('getProfilePath() trims the override')
       : fail(`getProfilePath() did not trim the override: got ${JSON.stringify(getProfilePath())}`);
 
+    // A relative override is anchored to the codebase, the rule CAREER_OPS_ROOT and
+    // CAREER_OPS_TRACKER already follow, so it means the same file from any cwd.
+    const codeRoot = ROOT;
+    const cwdBefore = process.cwd();
+    try {
+      process.env.CAREER_OPS_PROFILE = 'config/profile.example.yml';
+      const fromRepoRoot = (process.chdir(codeRoot), getProfilePath());
+      const fromElsewhere = (process.chdir(scratch), getProfilePath());
+      const wantRelative = join(codeRoot, 'config', 'profile.example.yml');
+      fromRepoRoot === wantRelative
+        ? pass('a relative CAREER_OPS_PROFILE resolves against the codebase root from the repo root')
+        : fail(`relative override from the repo root gave ${fromRepoRoot}, expected ${wantRelative}`);
+      fromElsewhere === wantRelative
+        ? pass('a relative CAREER_OPS_PROFILE still resolves against the codebase root when the cwd is elsewhere')
+        : fail(`relative override from another cwd gave ${fromElsewhere}, expected ${wantRelative}`);
+    } finally {
+      process.chdir(cwdBefore);
+    }
+
     for (const blank of ['', '   ']) {
       process.env.CAREER_OPS_PROFILE = blank;
       getProfilePath() === dataRootProfile
@@ -128,7 +147,7 @@ try {
   const HAND_BUILT = [
     /process\.env\.CAREER_OPS_PROFILE/,
     /\b(?:join|resolve)\([^\n]*['"](?:config\/)?profile\.yml['"]/,
-    /=\s*['"]config\/profile\.yml['"]/,
+    /(?<![=!])=\s*['"]config\/profile\.yml['"]/,
     /readFile\(['"]config\/profile\.yml/,
   ];
   const isComment = (line) => /^\s*(\/\/|\*|\/\*)/.test(line);
