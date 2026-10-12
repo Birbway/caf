@@ -125,17 +125,11 @@ try {
   // core's. career-profile.mjs reads data/career-profile.yml, a different file.
   const EXEMPT = new Set(['path-resolver.mjs', 'career-profile.mjs']);
   const PENDING = new Set([
-    'batch-evaluate-gemini.mjs',
     'browser-extract.mjs',
     'build-cv-html.mjs',
     'check-table-freshness.mjs',
     'cv-sync-check.mjs',
-    'gemini-eval.mjs',
     'generate-pdf.mjs',
-    'ollama-eval.mjs',
-    'openai-eval.mjs',
-    'openai-tailor.mjs',
-    'openrouter-runner.mjs',
     'prepare-application.mjs',
     'providers/_profile-keywords.mjs',
     'salary-gap.mjs',
