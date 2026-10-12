@@ -51,7 +51,7 @@ function firstMatch(title: string, positives: string[]): string | undefined {
  * posture as seedExploreFilters in portals.ts). Annotation only: the result
  * never feeds filtering, ordering, or the summary counts.
  */
-function loadProfileTargets(): string[] {
+export function loadProfileTargets(): string[] {
   try {
     const doc = yaml.load(fs.readFileSync(path.join(careerOpsRoot(), "config", "profile.yml"), "utf8"));
     return profileTargetKeywords(doc && typeof doc === "object" ? (doc as Record<string, unknown>) : null);
@@ -158,7 +158,7 @@ type ScanJson = {
 // Scan budget (ms) from config/profile.yml `scan.timeout_seconds` — the same
 // place `scan.extractor` lives. Never throws: a missing/malformed profile keeps
 // the default (a broken config must not block scanning).
-function readScanTimeoutMs(): number {
+export function readScanTimeoutMs(): number {
   try {
     const parsed = yaml.load(fs.readFileSync(path.join(careerOpsRoot(), "config", "profile.yml"), "utf8"));
     return resolveScanTimeoutMs(parsed);
