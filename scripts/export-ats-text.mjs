@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import * as yaml from 'js-yaml';
 import { isMainModule } from '../lib/is-main-module.mjs';
+import { getProfilePath } from '../path-resolver.mjs';
 import { validateFlags } from '../lib/cli-flags.mjs';
 
 /**
@@ -215,7 +216,7 @@ export function normalizeProfile(raw = {}, cvData = {}) {
  */
 export function loadProfile(customProfilePath = null, customCvPath = null) {
   let profileRaw = null;
-  const profileSource = customProfilePath || process.env.CAREER_OPS_PROFILE || 'config/profile.yml';
+  const profileSource = customProfilePath || getProfilePath();
 
   if (customProfilePath) {
     if (!existsSync(customProfilePath)) {

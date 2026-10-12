@@ -124,11 +124,7 @@ try {
   // web/ resolves its own root and carries its own helper; this scan is the
   // core's. career-profile.mjs reads data/career-profile.yml, a different file.
   const EXEMPT = new Set(['path-resolver.mjs', 'career-profile.mjs']);
-  const PENDING = new Set([
-    'browser-extract.mjs',
-    'providers/_profile-keywords.mjs',
-    'scripts/export-ats-text.mjs',
-  ]);
+  const PENDING = new Set([]);
   const HAND_BUILT = [
     /process\.env\.CAREER_OPS_PROFILE/,
     /\b(?:join|resolve)\([^\n]*['"](?:config\/)?profile\.yml['"]/,
