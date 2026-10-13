@@ -65,18 +65,18 @@ const projectRoot = explicitTarget || getCareerOpsRoot();
 // --target diagnoses a whole other checkout, so that checkout's profile is the
 // one that counts; otherwise CAREER_OPS_PROFILE applies as it does everywhere.
 const profilePathFor = (root) => (explicitTarget ? getProfilePath(root) : getProfilePath());
-// scan.mjs loads the data root's .env before it reads the profile, so an override
-// set only there is a working setup. The full .env load stays inside
-// resolveActiveCli (and only when CAREER_OPS_CLI is unset); this takes just the
-// profile override, so every check and --json see the same file.
-if (!hasProfileOverride()) {
+// Only scan.mjs, the evaluators and openrouter-runner load a .env; most readers
+// of the profile see the process environment alone. Doctor reports what they see,
+// so an override set only in the root's .env is looked up for the advice below
+// but never counted as a found profile.
+const profileFromEnvFile = (root) => {
   try {
-    const fromEnvFile = dotenv.parse(readFileSync(join(projectRoot, '.env'))).CAREER_OPS_PROFILE;
-    if (fromEnvFile?.trim()) process.env.CAREER_OPS_PROFILE = fromEnvFile;
+    const value = dotenv.parse(readFileSync(join(root, '.env'))).CAREER_OPS_PROFILE;
+    return value?.trim() ? value.trim() : null;
   } catch {
-    // no .env, or unreadable: the shell environment and the data root decide
+    return null; // no .env, or unreadable
   }
-}
+};
 // node_modules and .git belong to the CODE checkout, not the resolved data
 // root — under a split checkout (CAREER_OPS_ROOT/CAREER_OPS_DATA_DIR or the
 // .career-ops-data marker) those are two different directories, and neither
@@ -539,7 +539,10 @@ function resolveActiveCli() {
   }
   // .env is best-effort: missing file → fall through to default. dotenv does
   // not throw on a missing path when `quiet: true`, so no try/catch is needed.
+  // The load must not make a .env-only CAREER_OPS_PROFILE look like a shell one.
+  const hadProfileOverride = hasProfileOverride();
   dotenv.config({ path: join(projectRoot, '.env'), quiet: true });
+  if (!hadProfileOverride) delete process.env.CAREER_OPS_PROFILE;
   if (process.env.CAREER_OPS_CLI) {
     if (!VALID_CLIS.includes(process.env.CAREER_OPS_CLI)) {
       return { cli: 'unknown', source: '.env', warning: `CAREER_OPS_CLI in .env is not a recognized CLI. Valid: ${VALID_CLIS.join(', ')}.` };
@@ -646,12 +649,20 @@ function checkPrereq({ path, fix }) {
   if (prereqPresent(projectRoot, path)) {
     return { pass: true, label: `${path} found` };
   }
-  if (path === 'config/profile.yml' && hasProfileOverride()) {
+  if (path === 'config/profile.yml' && !explicitTarget && hasProfileOverride()) {
     const named = profilePathFor(projectRoot);
     return {
       warn: true,
       label: `${path} not found (CAREER_OPS_PROFILE names ${named})`,
       fix: [`Create ${named}, or unset CAREER_OPS_PROFILE to use the profile in the data root`],
+    };
+  }
+  const fromEnvFile = path === 'config/profile.yml' && !explicitTarget ? profileFromEnvFile(projectRoot) : null;
+  if (fromEnvFile) {
+    return {
+      warn: true,
+      label: `${path} not found (.env sets CAREER_OPS_PROFILE=${fromEnvFile}, but most commands never load .env)`,
+      fix: [`Export CAREER_OPS_PROFILE=${fromEnvFile} in your shell so every command sees it, or remove it from .env and put the profile at ${profilePathFor(projectRoot)}`],
     };
   }
   return { warn: true, label: `${path} not found (user setup required)`, fix };

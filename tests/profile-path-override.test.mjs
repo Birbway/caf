@@ -159,9 +159,11 @@ try {
     ? pass('doctor names CAREER_OPS_PROFILE and the file it points at, instead of advising a copy that would change nothing')
     : fail('doctor advice for a missing override target does not name the variable and path, or still says to copy the example');
 
-  // scan.mjs loads the data root's .env before it reads the profile, so an
-  // override set only there is a working setup; doctor has to agree whether or not
-  // an unrelated CAREER_OPS_CLI is already exported (that decides if .env loads).
+  // Only scan.mjs (data root), the evaluators (cwd) and openrouter-runner (code
+  // root) load a .env; generate-pdf, cv-sync-check, upskill, salary-gap and the
+  // rest read the process environment alone. Doctor reports what those readers
+  // see, so an override set only in .env is NOT a found profile, and the advice
+  // says why instead of leaving the user with a green doctor and a failing tool.
   const envRoot = join(scratch, 'env-root');
   mkdirSync(envRoot, { recursive: true });
   writeFileSync(join(envRoot, '.env'), `CAREER_OPS_PROFILE=${namedProfile}\n`, 'utf-8');
@@ -177,10 +179,24 @@ try {
     const label = cli ? 'with CAREER_OPS_CLI exported' : 'without CAREER_OPS_CLI';
     const human = runDoctorEnvFile([], cli);
     const json = JSON.parse(runDoctorEnvFile(['--json'], cli));
-    !/config\/profile\.yml not found/.test(human) && !json.missing.includes('config/profile.yml')
-      ? pass(`doctor honors a CAREER_OPS_PROFILE set in the data root .env, human and --json alike (${label})`)
-      : fail(`doctor disagrees with itself about a .env-set CAREER_OPS_PROFILE (${label}): human says not found=${/config\/profile\.yml not found/.test(human)}, --json missing=${json.missing.includes('config/profile.yml')}`);
+    /config\/profile\.yml not found/.test(human) && json.missing.includes('config/profile.yml')
+      ? pass(`doctor does not count a CAREER_OPS_PROFILE set only in .env as a found profile, human and --json alike (${label})`)
+      : fail(`doctor counted a .env-only CAREER_OPS_PROFILE (${label}): human not-found=${/config\/profile\.yml not found/.test(human)}, --json missing=${json.missing.includes('config/profile.yml')}`);
+    /\.env/.test(human) && /shell/.test(human) && human.includes(namedProfile)
+      ? pass(`doctor says the .env sets CAREER_OPS_PROFILE but most commands never load it, and names the file (${label})`)
+      : fail(`doctor advice for a .env-only CAREER_OPS_PROFILE does not name the .env, the shell, and the file (${label})`);
   }
+
+  // --target diagnoses another checkout, so CAREER_OPS_PROFILE does not apply to
+  // it: the missing-profile advice is the plain copy, not the variable's, and
+  // neither the target's .env nor the shell's override leaks into the verdict.
+  const targetDir = join(scratch, 'target-checkout');
+  mkdirSync(targetDir, { recursive: true });
+  writeFileSync(join(targetDir, '.env'), `CAREER_OPS_PROFILE=${namedProfile}\n`, 'utf-8');
+  const targetOut = runDoctor(['--target', targetDir], namedProfile);
+  /config\/profile\.yml not found/.test(targetOut) && !/CAREER_OPS_PROFILE/.test(targetOut) && /cp config\/profile\.example\.yml/.test(targetOut)
+    ? pass('doctor --target does not blame or advise CAREER_OPS_PROFILE for the target checkout')
+    : fail(`doctor --target mentioned CAREER_OPS_PROFILE for a checkout the variable does not apply to: ${targetOut.split('\n').filter((l) => /profile\.yml|CAREER_OPS_PROFILE/.test(l)).join(' | ')}`);
 
   /config\/profile\.yml not found/.test(runDoctor([], undefined))
     ? pass('doctor reports the profile missing when neither the override nor the data root has one')
@@ -211,7 +227,7 @@ try {
     'upskill.mjs',
   ]);
   const HAND_BUILT = [
-    /process\.env\.CAREER_OPS_PROFILE(?!\s*=[^=])/,   // a read; assigning it (doctor.mjs, from .env) is not a path
+    /(?<!delete\s)process\.env\.CAREER_OPS_PROFILE(?!\s*=[^=])/,   // a read; deleting it (doctor.mjs, undoing a .env load) is not a path
     /\b(?:join|resolve)\([^\n]*['"](?:config\/)?profile\.yml['"]/,
     /(?<![=!])=\s*['"]config\/profile\.yml['"]/,
     /readFile\(['"]config\/profile\.yml/,
