@@ -109,21 +109,53 @@ export async function assertSafeApplyUrl(url) {
 }
 
 /**
- * Context-wide route interceptor (main document, redirect hops, subresources).
- * Same wiring as archive-posting.mjs / liveness-browser.mjs.
+ * `rejectPrivateOrInvalid` allows only http(s). WebSocket URLs are the same
+ * host with a different scheme, so map ws/wss before the shared classifier.
  *
- * @param {{ route: (pattern: string, handler: (route: { request: () => { url: () => string }, abort: (code?: string) => unknown, continue: () => unknown }) => unknown) => Promise<unknown> }} context
+ * @param {string} url
+ */
+function httpUrlForGuard(url) {
+  if (/^wss:/i.test(url)) return url.replace(/^wss:/i, "https:");
+  if (/^ws:/i.test(url)) return url.replace(/^ws:/i, "http:");
+  return url;
+}
+
+/**
+ * Context-wide route interceptor (main document, redirect hops, subresources,
+ * and WebSockets). Same host check as archive-posting.mjs / liveness-browser.mjs.
+ *
+ * Playwright does not send WebSocket handshakes through `context.route()`.
+ * Close without `connectToServer` when the guard refuses the host. An allowed
+ * socket keeps Playwright's default forwarding. Do not install `onMessage`:
+ * that disables forwarding.
+ *
+ * @param {{
+ *   route: (pattern: string, handler: (route: { request: () => { url: () => string }, abort: (code?: string) => unknown, continue: () => unknown }) => unknown) => Promise<unknown>,
+ *   routeWebSocket: (pattern: RegExp, handler: (ws: { url: () => string, close: (opts?: { code?: number, reason?: string }) => unknown, connectToServer: () => unknown }) => unknown) => Promise<unknown>,
+ * }} context
  */
 export async function installApplyEgressGuard(context) {
   const { rejectPrivateOrInvalid, validateUrlSecurity } = await loadCoreGuard();
+  const allowed = async (url) => {
+    const httpUrl = httpUrlForGuard(url);
+    if (rejectPrivateOrInvalid(httpUrl)) return false;
+    try {
+      await validateUrlSecurity(httpUrl);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   await context.route("**/*", async (route) => {
     const requestUrl = route.request().url();
-    if (rejectPrivateOrInvalid(requestUrl)) return route.abort("blockedbyclient");
-    try {
-      await validateUrlSecurity(requestUrl);
-      return route.continue();
-    } catch {
-      return route.abort("blockedbyclient");
+    if (!(await allowed(requestUrl))) return route.abort("blockedbyclient");
+    return route.continue();
+  });
+  await context.routeWebSocket(/.*/, async (ws) => {
+    if (!(await allowed(ws.url()))) {
+      await ws.close({ code: 1008, reason: "blocked" });
+      return;
     }
+    ws.connectToServer();
   });
 }

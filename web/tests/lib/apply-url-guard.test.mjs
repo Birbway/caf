@@ -99,6 +99,7 @@ async function runGuard(requestUrl, { resolver } = {}) {
         pattern = p;
         handler = cb;
       },
+      async routeWebSocket() {},
     };
     await installApplyEgressGuard(context);
     let verdict = null;
@@ -209,5 +210,65 @@ describe("DNS + redirect layer (serial: shared hostResolver seam)", { concurrenc
   test("installApplyEgressGuard: blocks file: on a redirect hop", async () => {
     const { verdict } = await runGuard("file:///etc/passwd", { resolver: async () => ["93.184.216.34"] });
     assert.deepEqual(verdict, { action: "abort", code: "blockedbyclient" });
+  });
+
+  async function runSocket(requestUrl, { resolver } = {}) {
+    const restore = resolver ? setHostResolver(resolver) : null;
+    try {
+      /** @type {RegExp | null} */
+      let pattern = null;
+      /** @type {((ws: { url: () => string, close: (opts?: { code?: number, reason?: string }) => unknown, connectToServer: () => unknown }) => unknown) | null} */
+      let handler = null;
+      const context = {
+        async route() {},
+        async routeWebSocket(p, cb) {
+          pattern = p;
+          handler = cb;
+        },
+      };
+      await installApplyEgressGuard(context);
+      let closed = null;
+      let connected = false;
+      await handler({
+        url: () => requestUrl,
+        close: async (opts) => { closed = opts ?? {}; },
+        connectToServer: () => { connected = true; return {}; },
+      });
+      return { pattern, closed, connected };
+    } finally {
+      restore?.();
+    }
+  }
+
+  test("installApplyEgressGuard: registers a websocket route", async () => {
+    const { pattern } = await runSocket("wss://boards.greenhouse.io/socket", {
+      resolver: async () => ["93.184.216.34"],
+    });
+    assert.equal(pattern?.test("wss://boards.greenhouse.io/socket"), true);
+  });
+
+  test("installApplyEgressGuard: forwards a public websocket without closing it", async () => {
+    const { closed, connected } = await runSocket("wss://boards.greenhouse.io/socket", {
+      resolver: async () => ["93.184.216.34"],
+    });
+    assert.equal(connected, true);
+    assert.equal(closed, null);
+  });
+
+  test("installApplyEgressGuard: closes a literal private websocket without connecting", async () => {
+    const { closed, connected } = await runSocket("ws://127.0.0.1/admin", {
+      resolver: async () => ["93.184.216.34"],
+    });
+    assert.equal(connected, false);
+    assert.deepEqual(closed, { code: 1008, reason: "blocked" });
+  });
+
+  test("installApplyEgressGuard: closes a websocket whose host resolves to loopback", async () => {
+    const { closed, connected } = await runSocket("wss://ssrf-blocked-host.local/socket", {
+      resolver: async (hostname) => (hostname === "ssrf-blocked-host.local" ? ["127.0.0.1"] : ["93.184.216.34"]),
+    });
+    assert.equal(connected, false);
+    assert.deepEqual(closed, { code: 1008, reason: "blocked" });
+    assertNoLeak(closed);
   });
 });
