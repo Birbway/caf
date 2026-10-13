@@ -38,7 +38,6 @@ export function TodayDashboard({
   const [overdue, setOverdue] = useState(0);
   const [followupsLoading, setFollowupsLoading] = useState(true);
   const [followupsError, setFollowupsError] = useState(false);
-  const [nextUpcoming, setNextUpcoming] = useState<FollowUp | null>(null);
   const [followupsEnabled, setFollowupsEnabled] = useState(true);
   const [upcoming, setUpcoming] = useState<FollowUp[]>([]);
   const [fresh, setFresh] = useState<DiscoveredOffer[]>([]);
@@ -70,7 +69,6 @@ export function TodayDashboard({
         // is overdue" (the old `?? d.entries?.length` fallback).
         setFollowups(Array.isArray(d.entries) ? d.entries : []);
         setOverdue((d.metadata?.overdue ?? 0) + (d.metadata?.urgent ?? 0));
-        setNextUpcoming(d.nextUpcoming ?? null);
         setFollowupsEnabled(d.followupsEnabled !== false);
         setUpcoming(Array.isArray(d.upcoming) ? d.upcoming : []);
       })
@@ -216,9 +214,9 @@ export function TodayDashboard({
         <Section icon={Bell} title="Follow-ups due" hint="Keep your applications alive — a nudge beats silence">
           <div className="grid gap-2.5">
             {followups.map((f) => (
-              // Refetch (not a local decrement) so the parent's followups/nextUpcoming
-              // stay in sync with the server — logging the LAST due item must flip this
-              // section over to "Next follow-up" instead of leaving it empty.
+              // Refetch (not a local decrement) so the parent's followups/upcoming
+              // stay in sync with the server. Logging the LAST due item must flip this
+              // section over to "Upcoming" instead of leaving it empty.
               <FollowUpCard key={`${f.num}-${f.company}`} followup={f} onLogged={refetch} />
             ))}
           </div>
@@ -241,16 +239,6 @@ export function TodayDashboard({
               </li>
             ))}
           </ul>
-        </Section>
-      )}
-
-      {!followupsLoading && !followupsError && followups.length === 0 && upcoming.length === 0 && nextUpcoming && (
-        <Section icon={Bell} title="Next follow-up" hint="Nothing due yet">
-          <p className="text-sm text-muted">
-            <span className="font-medium text-foreground">{nextUpcoming.company}</span>
-            {nextUpcoming.role && <span> · {nextUpcoming.role}</span>}
-            {nextUpcoming.nextFollowupDate && <span className="text-faint"> · {nextUpcoming.nextFollowupDate}</span>}
-          </p>
         </Section>
       )}
 
