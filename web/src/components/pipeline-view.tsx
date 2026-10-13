@@ -220,7 +220,7 @@ export function PipelineView({
         /* ── Inbox: the triage surface (Abundance → Triage → Shortlist → Score) ── */
         <>
           <InboxTriage inbox={pendingInbox} />
-          {pendingInbox.length === 0 && <InboxEmpty count={0} filtered={false} />}
+          {pendingInbox.length === 0 && <InboxEmpty tracked={visibleApplications.length} />}
         </>
       ) : isPending || filtered.length > 0 ? (
         /* ── Tracker table ──
@@ -339,15 +339,7 @@ export function PipelineView({
 
 // Empty inbox. Self-sufficient for the mainstream user (a primary in-web action),
 // honest for devs (the CLI/file path stays, demoted to progressive transparency).
-function InboxEmpty({ count, filtered }: { count: number; filtered: boolean }) {
-  if (filtered) {
-    return (
-      <div className="mt-4 rounded-2xl border border-dashed border-border bg-surface/30 px-6 py-12 text-center">
-        <p className="font-display text-lg">No matches</p>
-        <p className="mx-auto mt-1 max-w-sm text-sm text-muted">Clear the search to see the full inbox.</p>
-      </div>
-    );
-  }
+function InboxEmpty({ tracked }: { tracked: number }) {
   return (
     <div className="dot-bg mt-4 overflow-hidden rounded-2xl border border-border bg-surface/50 bg-origin-border bg-gradient-to-tr from-brand/10 via-transparent to-transparent shadow-lg">
       <div className="flex items-center gap-2 border-b border-foreground/10 px-5 py-3">
@@ -360,23 +352,26 @@ function InboxEmpty({ count, filtered }: { count: number; filtered: boolean }) {
         <p className="font-display text-lg">
           Your <span className="text-brand">inbox</span> is empty.
         </p>
-        {count > 0 ? (
-          <p className="mx-auto mt-2 max-w-sm text-sm text-muted">Nothing pending right now.</p>
-        ) : (
-          <>
-            <p className="mx-auto mt-2 max-w-sm text-sm text-muted">Find roles that match your CV — free, no tokens spent.</p>
-            <Link
-              href="/explore?run=1"
-              className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand px-5 py-2.5 text-sm font-medium text-brand-foreground shadow-sm transition-all duration-200 hover:bg-brand-200 hover:-translate-y-0.5 hover:shadow-md"
-            >
-              <Compass className="size-4" /> Run your first free scan <ArrowRight className="size-4" />
-            </Link>
-            <p className="mx-auto mt-4 max-w-sm text-xs text-muted">
-              Prefer the terminal? Run <code className="rounded bg-surface-hover px-1 py-0.5 font-mono">career-ops scan</code>, or add job URLs to{" "}
-              <code className="rounded bg-surface-hover px-1 py-0.5 font-mono">data/pipeline.md</code>.
-            </p>
-          </>
+        {tracked > 0 && (
+          <p className="mx-auto mt-2 max-w-sm text-sm text-muted">
+            New postings land here. Your{" "}
+            <Link href="/pipeline?tab=ALL" className="font-medium text-brand-text underline-offset-2 hover:underline">
+              {tracked} tracked role{tracked === 1 ? "" : "s"}
+            </Link>{" "}
+            {tracked === 1 ? "is" : "are"} under All.
+          </p>
         )}
+        <p className="mx-auto mt-2 max-w-sm text-sm text-muted">Find roles that match your CV — free, no tokens spent.</p>
+        <Link
+          href="/explore?run=1"
+          className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand px-5 py-2.5 text-sm font-medium text-brand-foreground shadow-sm transition-all duration-200 hover:bg-brand-200 hover:-translate-y-0.5 hover:shadow-md"
+        >
+          <Compass className="size-4" /> {tracked > 0 ? "Run a free scan" : "Run your first free scan"} <ArrowRight className="size-4" />
+        </Link>
+        <p className="mx-auto mt-4 max-w-sm text-xs text-muted">
+          Prefer the terminal? Run <code className="rounded bg-surface-hover px-1 py-0.5 font-mono">career-ops scan</code>, or add job URLs to{" "}
+          <code className="rounded bg-surface-hover px-1 py-0.5 font-mono">data/pipeline.md</code>.
+        </p>
       </div>
     </div>
   );
