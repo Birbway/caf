@@ -2292,8 +2292,9 @@ function isRoleLocationSuffix(tag) {
 }
 
 // "(m/w/d)", "(f/m/x)", "(H/F)", "(all genders)": the letter order differs by
-// board, and the tag never tells two roles apart.
-const ROLE_GENDER_TAG_RE = /^(?:[mwfdxh](?:\s*\/\s*(?:[mwfdxh]|div|divers)){1,3}|all genders?)$/;
+// board, and the tag never tells two roles apart. "h" (homme) only counts
+// next to "f": "(H/W)" is hardware, a discipline that does tell roles apart.
+const ROLE_GENDER_TAG_RE = /^(?:[mwfdx](?:\s*\/\s*(?:[mwfdx]|div|divers)){1,3}|(?:h\s*\/\s*f|f\s*\/\s*h)(?:\s*\/\s*[xd])?|all genders?)$/;
 
 /**
  * Normalize a role title for stable scan-time duplicate identity.
