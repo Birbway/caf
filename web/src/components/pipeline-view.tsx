@@ -3,7 +3,7 @@
 import { startTransition, useCallback, useEffect, useMemo, useOptimistic, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Search, ChevronsUpDown, X, Compass, ArrowRight } from "lucide-react";
+import { Search, ChevronsUpDown, X, Compass, ArrowRight, ExternalLink } from "lucide-react";
 import type { Application, InboxJob } from "@/lib/career-ops";
 import { Badge } from "@/components/ui/badge";
 import { CompanyLogo } from "@/components/company-logo";
@@ -18,6 +18,7 @@ import { startRouteProgress } from "@/components/route-progress";
 import { sortRows } from "@/lib/core/pipeline-sort.mjs";
 import { PageFrame } from "@/components/page-frame";
 import { pipelineQuery } from "@/lib/pipeline-navigation.mjs";
+import { postingHref, postingLabel } from "@/lib/posting-url.mjs";
 
 // INBOX (the triage queue) is the default tab; the rest filter the tracker.
 const TABS = [
@@ -260,6 +261,7 @@ export function PipelineView({
                 const company = companyPresentation(r);
                 const key = applicationKey(r);
                 const detailHref = `/pipeline/${encodeURIComponent(r.n)}${detailQuery ? `?${detailQuery}` : ""}`;
+                const posting = postingHref(r.url);
                 return (
                   <tr key={key} data-application-key={key} className="group transition-colors hover:bg-surface/40">
                     <td className="whitespace-nowrap px-4 py-3 font-medium tabular-nums">
@@ -274,7 +276,21 @@ export function PipelineView({
                       </Link>
                     </td>
                   <td className="px-4 py-3 text-muted">
-                    <Link href={detailHref}>{r.role}</Link>
+                    <div className="flex items-center gap-2">
+                      <Link href={detailHref}>{r.role}</Link>
+                      {posting && (
+                        <a
+                          href={posting}
+                          target="_blank"
+                          rel="noreferrer"
+                          title={posting}
+                          className="inline-flex shrink-0 items-center gap-1 text-xs text-brand hover:underline"
+                        >
+                          {postingLabel(posting)}
+                          <ExternalLink className="size-3" />
+                        </a>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <Badge tone={scoreTone(r.score)}>{r.score || "—"}</Badge>

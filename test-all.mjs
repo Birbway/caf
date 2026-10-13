@@ -16392,20 +16392,31 @@ try {
     fail(`tracker URL cell contract broken — ${brokenReaders.join('; ')}. A reader that misses the link form reads the row as having NO url and silently drops it to fuzzy dedup (#3516)`);
   }
 
-  // 55.1c the boundary that kept the web out of this change: the TSV's `url`
-  // field stays a RAW url, and the web (which WRITES those TSVs) does not read
-  // the tracker's url cell — its field map has no `url` entry. If either half
-  // stops holding, the link form becomes a lockstep core+web change.
+  // 55.1c the web reads the tracker URL column, so it has to return the same
+  // href extractCellUrl returns. A reader that keeps the `[label](href)` text
+  // treats the row as having no URL anywhere `new URL()` is applied to the
+  // cell. The TSV `url` field stays a raw URL. This check is the tracker cell.
   if (existsSync(join(ROOT, 'web', 'src', 'lib', 'tracker-table.mjs'))) {
-    const webTableSrc = readFileSync(join(ROOT, 'web', 'src', 'lib', 'tracker-table.mjs'), 'utf-8');
-    const webFieldBlock = webTableSrc.match(/const WEB_FIELD = \{[\s\S]*?\};/)?.[0] ?? '';
-    if (webFieldBlock && !/\burl:/.test(webFieldBlock)) {
-      pass('web tracker reader still ignores the URL column — the #3516 link form stays a core-only change');
+    const { extractCellUrl } = await import(pathToFileURL(join(ROOT, 'tracker-parse.mjs')).href);
+    const { parseApplications } = await import(pathToFileURL(join(ROOT, 'web', 'src', 'lib', 'tracker-table.mjs')).href);
+    const href = 'https://jobs.example.com/Engineer_(Remote)';
+    const cells = [`[workday](${href})`, href, '—'];
+    const lines = cells.map((cell, i) =>
+      `| ${i + 1} | 2026-01-01 | Acme | Engineer | 4.0/5 | Applied | ❌ | — | n | ${cell} |`);
+    const md = [
+      '| # | Date | Company | Role | Score | Status | PDF | Report | Notes | URL |',
+      '|---|------|---------|------|-------|--------|-----|--------|-------|-----|',
+      ...lines,
+    ].join('\n');
+    const got = parseApplications(md, ROOT).map((row) => row.url);
+    const expected = cells.map((cell) => extractCellUrl(cell));
+    if (got.length === expected.length && got.every((value, i) => value === expected[i])) {
+      pass('web tracker reader maps the URL column and returns the same href as extractCellUrl (#3516)');
     } else {
-      fail('web tracker reader now maps the URL column: the markdown-link cell form (#3516) must be taught to it in lockstep, or the cell must go back to a raw URL');
+      fail(`web tracker reader URL cells ${JSON.stringify(got)} differ from extractCellUrl ${JSON.stringify(expected)}. The markdown-link form has to be extracted in lockstep (#3516)`);
     }
   } else {
-    console.log('   ⏭️  web/ not present (core-only install) — skipping the web URL-column boundary check');
+    console.log('   ⏭️  web/ not present (core-only install) — skipping the web URL-column check');
   }
 
   // 55.2 scan-history.tsv header prefix (lib/scan-history-columns.mjs, the
