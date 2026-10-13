@@ -22,7 +22,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync, readFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import {
   acquirePipelineLock, LockTimeoutError, OWNERLESS_GRACE_MS,
@@ -68,29 +68,40 @@ function churnLock(lockDir, everyMs) {
 // Real holders are other processes, so this is the closer model.
 //
 // The directory is created once and never removed. Each handoff swaps in a new
-// owner.json by rename, which is atomic, so the waiter never sees a free lock.
+// owner.json by rename, retried through Windows contention. A rename is atomic,
+// so the waiter never sees a free lock.
 // A remove-then-create swap would leave a gap another thread can slip through.
 // Resolves once the first owner is on disk; stop() is async because it ends the
 // worker.
 async function churnLockInWorker(lockDir, everyMs) {
   const worker = new Worker(`
-    const { mkdirSync, writeFileSync, renameSync } = require('node:fs');
+    const { mkdirSync, writeFileSync } = require('node:fs');
     const { join } = require('node:path');
     const { workerData, parentPort } = require('node:worker_threads');
-    const owner = join(workerData.lockDir, 'owner.json');
-    const staged = join(workerData.lockDir, 'owner.json.next');
-    let handoffs = 0;
-    const stamp = () => JSON.stringify({
-      pid: process.pid, token: 'handoff-' + handoffs++, started_at: new Date().toISOString(),
-    });
-    mkdirSync(workerData.lockDir, { recursive: true });
-    writeFileSync(owner, stamp(), 'utf-8');
-    parentPort.postMessage('ready');
-    setInterval(() => {
-      writeFileSync(staged, stamp(), 'utf-8');
-      renameSync(staged, owner);
-    }, workerData.everyMs);
-  `, { eval: true, workerData: { lockDir, everyMs } });
+    (async () => {
+      const { renameSyncWithRetry } = await import(workerData.trackerUtilsUrl);
+      const owner = join(workerData.lockDir, 'owner.json');
+      const staged = join(workerData.lockDir, 'owner.json.next');
+      let handoffs = 0;
+      const stamp = () => JSON.stringify({
+        pid: process.pid, token: 'handoff-' + handoffs++, started_at: new Date().toISOString(),
+      });
+      mkdirSync(workerData.lockDir, { recursive: true });
+      writeFileSync(owner, stamp(), 'utf-8');
+      parentPort.postMessage('ready');
+      setInterval(() => {
+        writeFileSync(staged, stamp(), 'utf-8');
+        renameSyncWithRetry(staged, owner);
+      }, workerData.everyMs);
+    })();
+  `, {
+    eval: true,
+    workerData: {
+      lockDir,
+      everyMs,
+      trackerUtilsUrl: pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'tracker-utils.mjs')).href,
+    },
+  });
   await new Promise((resolve, reject) => {
     worker.once('message', resolve);
     worker.once('error', reject);
