@@ -29,6 +29,7 @@ import {
   renderPortalEntry,
   dedupeAgainstPortals,
   insertIntoTrackedCompanies,
+  splicedCorrectly,
   parseWorkdayHint,
   buildWorkdayCandidates,
   resolveCompany,
@@ -266,6 +267,37 @@ const commentDoc = '# top comment\ntracked_companies:\n  # inline comment\n  - n
 const commentInserted = insertIntoTrackedCompanies(commentDoc, [snip]);
 ok('preserves top comment', commentInserted.includes('# top comment'));
 ok('preserves inline comment', commentInserted.includes('# inline comment'));
+
+// Other legitimate ways to write the block. Each used to leave a portals.yml the
+// scanner cannot parse: a second `tracked_companies:` key (a duplicate mapping
+// key) or entries at two different indents.
+const namesAfter = (text) => { try { return yaml.load(text).tracked_companies.map(e => e.name); } catch { return null; } };
+
+const flowEmpty = insertIntoTrackedCompanies('title_filter:\n  positive: [a]\n\ntracked_companies: []\n\njob_boards: []\n', [snip]);
+eq('empty flow list `[]` → one block, the new entry', namesAfter(flowEmpty), ['New']);
+ok('empty flow list → no second tracked_companies key', flowEmpty.match(/^tracked_companies:/gm).length === 1);
+
+const trailingComment = insertIntoTrackedCompanies('tracked_companies:   # my companies\n  - name: Existing\n    careers_url: https://jobs.lever.co/existing\n\njob_boards: []\n', [snip]);
+eq('header with a trailing comment → entry added to the same block', namesAfter(trailingComment), ['Existing', 'New']);
+ok('header with a trailing comment → comment kept', trailingComment.includes('tracked_companies:   # my companies'));
+
+const flowEmptyComment = insertIntoTrackedCompanies('tracked_companies: []   # none yet\njob_boards: []\n', [snip]);
+eq('`[]` with a trailing comment → entry added, comment kept', namesAfter(flowEmptyComment), ['New']);
+ok('`[]` with a trailing comment → comment kept', flowEmptyComment.includes('tracked_companies:   # none yet'));
+
+// Entries written at column 0 (what PyYAML's default dump produces). The old
+// boundary test read the first `- name:` as the next top-level key and inserted
+// before it, at a different indent.
+const colZero = insertIntoTrackedCompanies('title_filter:\n  positive: [a]\n\ntracked_companies:\n- name: Existing\n  careers_url: https://jobs.lever.co/existing\n- name: Second\n  careers_url: https://jobs.lever.co/second\n\njob_boards: []\n', [snip]);
+eq('column-0 entries → new entry joins the list', namesAfter(colZero), ['Existing', 'Second', 'New']);
+ok('column-0 entries → new entry written at column 0 too', /^- name: New$/m.test(colZero));
+ok('column-0 entries → still before job_boards:', colZero.indexOf('- name: New') < colZero.indexOf('job_boards:'));
+
+// splicedCorrectly: the guard --write applies to its own output.
+ok('splicedCorrectly accepts the expected count', splicedCorrectly(inserted, 2));
+ok('splicedCorrectly rejects a wrong count', !splicedCorrectly(inserted, 3));
+ok('splicedCorrectly rejects a duplicated key', !splicedCorrectly('tracked_companies: [{name: A}]\ntracked_companies:\n  - name: B\n', 1));
+ok('splicedCorrectly rejects text without a list', !splicedCorrectly('title_filter: {}\n', 0));
 
 // ============================================================================
 // 6b. Workday coordinate parsing (pure, no network)
@@ -505,6 +537,44 @@ ok('DNS-shaped TypeError → not marked as a refused redirect',
   dnsFailure.unresolved.errors.every(e => e.refusedRedirect !== true));
 ok('DNS-shaped TypeError → the slug is never blamed for a transport failure',
   !/redirected off-tenant/i.test(dnsFailure.unresolved.reason));
+
+// ── SmartRecruiters' phantom empty board must not outrank a real "not found" (#4179) ──
+//
+// SmartRecruiters' public postings API answers 200 with totalFound:0 (here:
+// content: []) for ANY slug, including one that does not exist — unlike every
+// other vendor, "empty" from this one establishes nothing. emptyBoards is
+// checked FIRST in the reason ladder, so counting it there let a single
+// phantom hit outrank a genuine "no board anywhere" verdict.
+const srEmptyCtx = () => ({
+  fetchJson: async () => ({ content: [] }),
+  fetchText: async () => { throw new Error('unused'); },
+});
+const srOnly = await resolveCompany({ name: 'Zz No Such Company 8841' },
+  { vendors: ['smartrecruiters'], includeWorkday: false, ctx: srEmptyCtx() });
+ok('SmartRecruiters-only, always empty → NOT reported as "board(s) found"',
+  !/board\(s\) found/i.test(srOnly.unresolved.reason));
+ok('SmartRecruiters-only, always empty → falls through to the real "not found" verdict',
+  /no supported ATS board found/i.test(srOnly.unresolved.reason));
+ok('SmartRecruiters-only, always empty → contributes nothing to emptyBoards',
+  !srOnly.unresolved.emptyBoards);
+ok('SmartRecruiters-only, always empty → contributes nothing to errors either (it is not an error)',
+  !srOnly.unresolved.errors);
+ok('SmartRecruiters-only, always empty → the vendor still shows as tried',
+  srOnly.unresolved.triedVendors.includes('smartrecruiters'));
+
+// Control, the direction that must NOT change: a genuinely empty board from an
+// ORDINARY vendor still populates emptyBoards and gets the "board(s) found"
+// verdict — only SmartRecruiters' answer is untrustworthy this way.
+const ghEmptyCtx = () => ({
+  fetchJson: async () => ({ jobs: [] }),
+  fetchText: async () => { throw new Error('unused'); },
+});
+const ghEmpty = await resolveCompany({ name: 'Real But Jobless Co' },
+  { vendors: ['gh'], includeWorkday: false, ctx: ghEmptyCtx() });
+ok('Greenhouse-only, genuinely empty → still reported as "board(s) found"',
+  /board\(s\) found/i.test(ghEmpty.unresolved.reason));
+ok('Greenhouse-only, genuinely empty → still populates emptyBoards',
+  ghEmpty.unresolved.emptyBoards?.length === 1 && ghEmpty.unresolved.emptyBoards[0].vendor === 'gh');
 
 // The refused-redirect branch sits ABOVE the workday-hint branch, so a
 // malformed hint alongside a refusal reports the redirect. That order is

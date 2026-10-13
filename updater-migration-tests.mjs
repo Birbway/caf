@@ -7,9 +7,9 @@
  * newly introduced system paths without touching user data.
  */
 
-import { readFileSync, existsSync, rmSync } from 'fs';
+import { readFileSync, existsSync, rmSync, realpathSync } from 'fs';
 import { execFileSync, spawnSync } from 'child_process';
-import { dirname } from 'path';
+import { dirname, join, sep } from 'path';
 import { createReexecMarker, consumeReexecMarker } from './update-system.mjs';
 
 let passed = 0;
@@ -43,10 +43,66 @@ try {
 // checkout. Give that copy its own tiny repository so update-system's
 // production guard can distinguish a valid fixture from an install whose git
 // operations would escape into an enclosing repository.
+//
+// That repository is scaffolding for this suite alone, so it is removed again
+// on exit. test-all runs every smoke script from the SAME shared copy, and a
+// `.git` left behind makes that copy a checkout of its own for every script
+// after this one: `update-system.mjs check` then passes its nested-install
+// guard and fetches upstream main into the empty fixture repository - a full
+// clone over the network inside the smoke matrix, killed at the shared 30s
+// budget on any connection slow enough (`exit null, signal SIGTERM`).
+//
+// Removal is keyed on whether `.git` existed BEFORE this script ran, never on
+// the toplevel comparison below: a cleanup keyed on a path comparison could
+// delete a real repository the day that comparison is wrong again. A `.git`
+// this script did not create is never touched, a linked worktree's `.git` file
+// included. The handler is registered before `git init` so a setup that fails
+// halfway still leaves the copy as it found it.
+
+// Two spellings of one directory must compare equal (#3732). git prints the
+// toplevel with forward slashes and Node's process.cwd() uses backslashes on
+// Windows, so a plain string comparison never matched there and a standalone
+// run from the checkout root took the init branch inside the real repository,
+// overwriting its repo-local identity. Both paths exist, so resolve each to
+// its canonical on-disk form before comparing.
+function sameDirectory(a, b) {
+  return realpathSync.native(a) === realpathSync.native(b);
+}
+
+{
+  const cwd = process.cwd();
+  const spellings = [
+    ['forward slashes, as git prints a Windows toplevel', cwd.split(sep).join('/')],
+    ['a trailing separator', cwd + sep],
+  ];
+  for (const [label, spelling] of spellings) {
+    if (sameDirectory(spelling, cwd)) pass(`toplevel guard matches the cwd spelled with ${label} (#3732)`);
+    else fail(`toplevel guard matches the cwd spelled with ${label} (#3732)`);
+  }
+  // A checkout at a filesystem root is its own parent, so there is nothing
+  // distinct to compare against there.
+  const parent = dirname(cwd);
+  if (parent !== cwd) {
+    if (!sameDirectory(parent, cwd)) pass('toplevel guard still tells the parent directory apart');
+    else fail('toplevel guard still tells the parent directory apart');
+  }
+}
+
 try {
   const cwd = process.cwd();
   const toplevel = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' }).trim();
-  if (toplevel !== cwd) {
+  if (!sameDirectory(toplevel, cwd)) {
+    const fixtureGitDir = join(cwd, '.git');
+    if (!existsSync(fixtureGitDir)) {
+      process.on('exit', () => {
+        try {
+          rmSync(fixtureGitDir, { recursive: true, force: true });
+        } catch (error) {
+          console.error(`FAIL migration fixture cleanup: ${error.message}`);
+          process.exitCode = 1;
+        }
+      });
+    }
     execFileSync('git', ['init', '-q'], { cwd });
     execFileSync('git', ['config', 'user.email', 'tests@example.invalid'], { cwd });
     execFileSync('git', ['config', 'user.name', 'career-ops tests'], { cwd });
@@ -193,9 +249,24 @@ try {
 // inside it. Add an entry to ALLOWED_MISSING_ENTRIES only with a comment
 // justifying why it may legitimately be absent.
 const ALLOWED_MISSING_ENTRIES = new Set([
-  // Kept in SYSTEM_PATHS for one release so staleSystemFiles() prunes the
+  // Retired by #3765, which moved these four suites into tests/. They are kept
+  // in SYSTEM_PATHS deliberately so `staleSystemFiles` can still prune an
+  // upgrading install's leftover copies (see the "Retired paths" block in
+  // update-system.mjs); a retired path is only useful to the prune while it is
+  // still listed, and by definition it is no longer on disk here.
+  'agent-inbox-tests.mjs',
+  'followup-seed-tests.mjs',
+  'paste-reply-tests.mjs',
+  'set-status-tests.mjs',
+  // Kept in SYSTEM_PATHS for one release so staleSystemFiles() prunes each
   // retired suite during upgrades after it moved into tests/.
   'lib/context-budget.test.mjs',
+  // Same reason: moved to tests/contact-extract.test.mjs, kept listed so the
+  // prune still reaches an upgrading install's leftover copy.
+  'contact-extract-tests.mjs',
+  'tracker-columns-tests.mjs', // → tests/tracker-columns.test.mjs (#4758)
+  // Same reason: moved to tests/tracker-writer-lock.test.mjs (#4759).
+  'tracker-writer-lock-tests.mjs',
 ]);
 for (const [listName, entries] of [['SYSTEM_PATHS', systemPaths], ['BOOTSTRAP_PATHS', bootstrapPaths]]) {
   for (const entry of entries) {
@@ -228,8 +299,6 @@ const requiredSystemPaths = [
   '.qwen/',
   '.antigravitycli/skills/',
   '.grok/skills/',
-  '.cursor/skills/',
-  'tracker-columns-tests.mjs',
   'updater-migration-tests.mjs',
   'README.ar.md',
   'README.de.md',
@@ -246,7 +315,6 @@ const requiredSystemPaths = [
 
 const requiredBootstrapPaths = [
   '.agents/',
-  '.cursor/skills/',
   '.opencode/skills/',
   '.antigravitycli/skills/',
   '.grok/skills/',
@@ -256,7 +324,6 @@ const requiredBootstrapPaths = [
   'tracker-utils.mjs',
   'tracker-parse.mjs',
   'updater-migration-tests.mjs',
-  'tracker-columns-tests.mjs',
 ];
 
 for (const path of requiredSystemPaths) {
@@ -275,12 +342,65 @@ const twoPassManifestChecks = [
     pattern: /CAREER_OPS_UPDATE_REEXEC/,
   },
   {
-    name: 'apply resolves the re-exec checkout closure from FETCH_HEAD (#1245)',
-    pattern: /resolveReexecCheckout\('FETCH_HEAD',\s*'update-system\.mjs'\)/,
+    // #3052's own mechanism: bare `main` lets git auto-follow a tag into
+    // FETCH_HEAD. Naming the full ref (refs/heads/main, or refs/tags/<release>
+    // on the default channel) and disabling tag-following is what makes the
+    // fetch produce the requested ref and nothing else.
+    name: 'apply fetches the requested ref by explicit refspec with tag-following off (#3052)',
+    pattern: /const targetRefspec = refspecForTarget\(targetRef\);[\s\S]{0,2000}?git\('fetch',\s*'--no-tags',\s*CANONICAL_REPO,\s*targetRefspec\)/,
   },
   {
-    name: 'apply checks out the resolved re-exec files from FETCH_HEAD (#1245)',
-    pattern: /git\('checkout',\s*'FETCH_HEAD',\s*'--',\s*\.\.\.reexecFiles\)/,
+    // The authoritative SHA must be read BEFORE the fetch: read after, a push
+    // landing in between makes the legitimate new tip look like a stale target.
+    name: 'apply reads the authoritative SHA before fetching (#3052)',
+    pattern: /const authoritativeCommit = inheritedTarget \? '' : await upstreamRefCommit\(targetRefspec\);[\s\S]{0,900}?git\('fetch',\s*'--no-tags'/,
+  },
+  {
+    // #3052: FETCH_HEAD is a pseudo-ref, re-resolved on every read. apply() read
+    // it a dozen times, so nothing tied those reads to one tree. Resolve once.
+    // `const`, and no try/catch around it: a child that cannot resolve its
+    // parent's SHA must abort, not silently re-pin its own FETCH_HEAD while
+    // running bootstrap files the parent checked out from the parent's target.
+    name: 'apply pins the fetched target to an immutable SHA, with no fallback (#3052)',
+    pattern: /const targetCommit = inheritedTarget\s*\n?\s*\? pinInheritedTarget\(inheritedTarget\)\s*\n?\s*: pinRefToCommit\('FETCH_HEAD'\);/,
+  },
+  {
+    // Verifying the version direction is not verifying the target's identity:
+    // a rogue tree shipping a high VERSION passes the downgrade guard. apply()
+    // must consume the authoritative SHA check() has always resolved.
+    name: 'apply cross-checks the pinned target against the requested upstream ref (#3052)',
+    pattern: /const identity = targetIdentityRefusal\(targetCommit,\s*authoritativeCommit,\s*targetRefspec\);\s*\n\s*if \(identity\) throw new Error\(/,
+  },
+  {
+    // #3052: compareVersions() was only ever called from check(), which decides
+    // whether to NOTIFY. apply() installed whatever the fetch produced.
+    //
+    // The call SHAPE is pinned, not just the call: `versionAtRef('HEAD')` would
+    // compare the installed tree with itself, always return null, and otherwise
+    // survive every test in this repo. The guard is only a guard when it reads
+    // the same pinned commit the checkout will install from.
+    name: 'apply refuses a target older than the installed version (#3052)',
+    pattern: /const targetVersion = versionAtRef\(targetCommit\);\s*\n\s*const refusal = downgradeRefusal\(local, targetVersion\);\s*\n\s*if \(refusal\) \{\s*\n\s*throw new Error\(/,
+  },
+  {
+    // A guard whose refusal is unreachable is not a guard. Pin the throw.
+    name: 'a refused target aborts apply instead of being logged (#3052)',
+    pattern: /if \(refusal\) \{\s*\n\s*throw new Error\(refusalMessage\(targetCommit, refusal, isReexec\)\);\s*\n\s*\}/,
+  },
+  {
+    // #3052's reported symptom is the banner: `v1.26.0 -> v1.26.0`. Re-reading
+    // VERSION off disk reports the target only when the checkout reached
+    // VERSION; a locally-edited VERSION is preserved and keeps the old value.
+    name: 'the completion banner reports the verified target version (#3052)',
+    pattern: /const remote = targetVersion;/,
+  },
+  {
+    name: 'apply resolves the re-exec checkout closure from the pinned target (#1245, #3052)',
+    pattern: /resolveReexecCheckout\(targetCommit,\s*'update-system\.mjs'\)/,
+  },
+  {
+    name: 'apply checks out the resolved re-exec files from the pinned target (#1245, #3052)',
+    pattern: /git\('checkout',\s*targetCommit,\s*'--',\s*\.\.\.reexecFiles\)/,
   },
   {
     name: 're-exec fallback still covers the skill-entrypoints import (#1245)',
@@ -295,8 +415,8 @@ const twoPassManifestChecks = [
     pattern: /CAREER_OPS_UPDATE_BACKUP_BRANCH/,
   },
   {
-    name: 'apply reads the target updater manifest from FETCH_HEAD',
-    pattern: /git\('show',\s*'FETCH_HEAD:update-system\.mjs'\)/,
+    name: 'apply reads the target updater manifest from the pinned target (#3052)',
+    pattern: /git\('show',\s*`\$\{targetCommit\}:update-system\.mjs`\)/,
   },
   {
     name: 'apply extracts SYSTEM_PATHS from the target updater',
@@ -305,6 +425,49 @@ const twoPassManifestChecks = [
   {
     name: 'apply merges local and target system manifests',
     pattern: /mergePathLists\(SYSTEM_PATHS,\s*remoteSystemPaths[\s\S]*?\)/,
+  },
+  {
+    // The guard must wrap the MERGED manifest. apply() self-bootstraps into the
+    // fetched updater before this runs, so the local SYSTEM_PATHS constant is
+    // upstream's list too — a regression that filters only remoteSystemPaths
+    // reads as protection while the same entry walks in through the other half.
+    name: 'apply filters the MERGED manifest against the user layer, not just the fetched half',
+    pattern: /rejectUserLayerPaths\(\s*mergePathLists\(SYSTEM_PATHS,\s*remoteSystemPaths,\s*BOOTSTRAP_PATHS\),/,
+  },
+  {
+    // The unit suite drives the rule with a synthetic user-path list and synthetic
+    // probes, so THIS is the only assertion tying the guard to the real sources.
+    // Weakening it to a shape-only match would let the rule keep passing while
+    // apply() fed it something other than the user layer and the real checkout.
+    name: 'the guard reads the real user layer, not a local stand-in',
+    pattern: /rejectUserLayerPaths\([\s\S]{0,200}?effectiveUserPaths\(\)/,
+  },
+  {
+    // The probes must be built by manifestProbes() from real git output, INSIDE
+    // the rejectUserLayerPaths() call. A source pattern cannot tell
+    // `trackedFiles.has(path)` from `() => true`, so what the probes DO is
+    // verified behaviourally in tests/updater-remote-manifest-user-paths.test.mjs
+    // against the factory's own exports; this only has to pin that apply() feeds
+    // it `ls-files -z` and `ls-tree -z` rather than something of its own.
+    name: 'the guard is handed probes built by manifestProbes from real git output',
+    pattern: /rejectUserLayerPaths\([\s\S]{0,300}?manifestProbes\(\{\s*trackedOutput:\s*git\('ls-files',\s*'-z'\),\s*upstreamOutput:\s*git\('ls-tree',\s*'-r',\s*'--name-only',\s*'-z',\s*targetCommit\),\s*\}\),/,
+  },
+  {
+    name: 'configured template variants are listed from the pinned target',
+    pattern: /configuredVariantRemoteFiles = git\('ls-tree',\s*'-r',\s*'--name-only',\s*targetCommit,\s*'--',\s*'templates'\)/,
+  },
+  {
+    name: 'configured template variant contents are read from the pinned target',
+    pattern: /readRemoteContent:\s*\(file\) => gitShowRaw\(\x60\$\{targetCommit\}:\$\{file\}\x60\)/,
+  },
+  {
+    // A refused entry was never checked out, so verifying it would report a gap
+    // this run created on purpose, exit 1, and advise a re-run that refuses the
+    // same entry and fails identically — a manifest mistake turned into a
+    // permanently dead updater, which is the opposite of refusing loudly without
+    // aborting. Subtracting the refused set is what keeps that contract.
+    name: 'the completeness check skips entries the guard refused',
+    pattern: /missingFromTargetManifest\(\s*remoteSystemPaths\.filter\(\(path\) => !refusedSet\.has\(path\)\),\s*targetCommit,?\s*\)/,
   },
   {
     name: 'apply checks out the merged manifest instead of only the local manifest',
@@ -331,7 +494,11 @@ const twoPassManifestChecks = [
     // paths, so everything added upstream since is silently absent and apply
     // still printed "Update complete" (#1998).
     name: 'apply verifies the target manifest materialized before claiming success (#1998)',
-    pattern: /missingFromTargetManifest\(remoteSystemPaths\)/,
+    // The TARGET manifest is what must be verified — verifying the local one
+    // would re-introduce #1998, since a client whose manifest predates the
+    // target's is exactly the case this check exists for. Which entries are
+    // subtracted before the comparison is pinned separately below.
+    pattern: /missingFromTargetManifest\(\s*remoteSystemPaths/,
   },
   {
     name: 'an incomplete apply exits non-zero instead of reporting success (#1998)',
@@ -343,13 +510,13 @@ const twoPassManifestChecks = [
     // The trailing spread is the #2337 preserve-exclusions; the property this
     // pins is the runner (gitQuiet, not git) and the ref, not the arity.
     name: 'per-path checkout pipes stderr so expected skips stay quiet (#1998)',
-    pattern: /gitQuiet\('checkout',\s*'FETCH_HEAD',\s*'--',\s*path(?:,\s*\.\.\.\w+)?\)/,
+    pattern: /gitQuiet\('checkout',\s*targetCommit,\s*'--',\s*path(?:,\s*\.\.\.\w+)?\)/,
   },
   {
     // #2337: a system file this install edited must be listed and backed up
     // before the checkout, not overwritten in silence.
     name: 'locally edited system files are detected before checkout (#2337)',
-    pattern: /const atRisk = locallyModifiedSystemFiles\(updatePaths, 'FETCH_HEAD'\)/,
+    pattern: /const atRisk = locallyModifiedSystemFiles\(updatePaths, targetCommit\)/,
   },
   {
     name: 'the local copy is saved as .bak before any overwrite (#2337)',
@@ -374,16 +541,27 @@ const twoPassManifestChecks = [
   {
     // existsSync on a pre-existing directory (docs/) would call it materialized
     // even when the target added files under it — the verification must recurse
-    // into directory entries against FETCH_HEAD (#1998 CodeRabbit review).
+    // into directory entries against the target tree (#1998 CodeRabbit review).
     name: 'manifest verification recurses into directory entries via ls-tree (#1998)',
-    pattern: /ls-tree', '-r', '--name-only', 'FETCH_HEAD'[\s\S]{0,400}?treeFiles\.some\(f => !existsSync/,
+    pattern: /ls-tree', '-r', '--name-only', targetRef[\s\S]{0,400}?treeFiles\.some\(f => !existsSync/,
   },
   {
-    // A checkout failure is only an expected skip when the path is truly absent
-    // from FETCH_HEAD; timeouts/permission errors must rethrow, not report
-    // success (#1998 CodeRabbit review).
-    name: 'a checkout failure only skips when the path is absent upstream, else rethrows (#1998)',
-    pattern: /catch \{ absentUpstream = true; \}\s*if \(!absentUpstream\) throw err;/,
+    // A checkout failure is an expected skip only when `probeAbsentUpstream`
+    // returns true (a SUCCESSFUL empty `ls-tree` — the path is truly gone from
+    // the pinned target), or — for a directory whose upstream content could not be
+    // enumerated (#3824) — when the exclusions cancelled the pathspec out. A
+    // thrown probe, a timeout or a permission error must rethrow, not report
+    // success (#1998). The catch must NOT set `absentUpstream` any other way:
+    // an inline `catch { absentUpstream = true }` is exactly the regression.
+    name: 'the checkout catch derives absentUpstream only from probeAbsentUpstream (#1998, #3824)',
+    pattern: /const absentUpstream = probeAbsentUpstream\(spec, targetCommit\);\s*if \(!checkoutErrorIsBenign\(err, \{ absentUpstream, preservedState \}\)\) throw err;/,
+  },
+  {
+    name: 'the checkout catch never assigns absentUpstream = true directly (#1998 regression)',
+    // The old blanket `catch { absentUpstream = true }` — must not reappear in
+    // the per-path checkout loop.
+    pattern: /absentUpstream = true;?\s*\}/,
+    expectAbsent: true,
   },
   {
     // `git checkout HEAD -- docs/` restores tracked content but never removes
@@ -421,7 +599,9 @@ const twoPassManifestChecks = [
 ];
 
 for (const check of twoPassManifestChecks) {
-  if (check.pattern.test(source)) pass(check.name);
+  const present = check.pattern.test(source);
+  const want = check.expectAbsent ? !present : present;
+  if (want) pass(check.name);
   else fail(check.name);
 }
 
@@ -453,6 +633,14 @@ const allowedSystemUserOverlap = new Set([
   // updater ships the scaffold, never the user's source documents.
   'documents/.gitkeep',
   'documents/README.md',
+  // Exact empty placeholders may ship inside user directories, while the
+  // updater continues to protect every other file below those paths (#4708).
+  'data/.gitkeep',
+  'data/offers/.gitkeep',
+  'data/parser-output/.gitkeep',
+  'jds/.gitkeep',
+  'output/.gitkeep',
+  'reports/.gitkeep',
 ]);
 let hasSystemUserCollision = false;
 for (const systemPath of systemPaths) {

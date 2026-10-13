@@ -31,7 +31,7 @@
  * unlabelled guess is the trade that replaced it (#2607).
  *
  * Idempotency: by default, seeding a given appNum is a NO-OP FOREVER once
- * either a pin or a follow-up table row exists for it (exit 0, seeded:false).
+ * either a pin or a logged follow-up exists for it (exit 0, seeded:false).
  * Pass --force to append a fresh pin anyway.
  *
  * Usage:
@@ -53,6 +53,7 @@
  *   CAREER_OPS_FOLLOWUPS_LOCK_TIMEOUT_MS   lock acquire timeout
  *   CAREER_OPS_FOLLOWUPS_LOCK_RETRY_MS     lock retry interval
  *   CAREER_OPS_FOLLOWUPS_LOCK_STALE_MS     stale-lock recovery threshold
+ *   CAREER_OPS_OWNERLESS_GRACE_MS          ownerless-lock floor (pipeline-lock.mjs; shared, not per-script)
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, statSync, realpathSync } from 'fs';
@@ -76,11 +77,12 @@ import {
   resolveCadenceConfig,
   normalizeStatus,
   parseAppliedDate,
+  parseFollowups,
   parseNextOverrides,
   parseDate,
   addDays,
 } from './followup-cadence.mjs';
-import { getCareerOpsRoot, resolveTrackerPath as sharedResolveTrackerPath } from './path-resolver.mjs';
+import { getCareerOpsRoot, canonicalizeTrackerPath, resolveTrackerPath as sharedResolveTrackerPath } from './path-resolver.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 
 const CAREER_OPS = getCareerOpsRoot();
@@ -226,35 +228,22 @@ function envInt(name, fallback) {
 function readTrackerRows(trackerPath) {
   const content = readFileSync(trackerPath, 'utf-8');
   const lines = content.split('\n');
-  const colmap = resolveColumns(lines);
+  const parseOptions = { allowTabs: true, allowIndentation: true };
+  const colmap = resolveColumns(lines, parseOptions);
   const rows = [];
   for (const line of lines) {
-    const row = parseTrackerRow(line, colmap);
+    const row = parseTrackerRow(line, colmap, parseOptions);
     if (row) rows.push(row);
   }
   return rows;
 }
 
-// --- Idempotency: pin OR follow-up table row already exists for appNum ----
-
-// Mirrors followup-cadence.mjs's parseFollowups: a `|`-delimited row whose 3rd
-// cell (index 2 after split('|').map(trim) — index 0 is the empty cell before
-// the leading pipe, index 1 is the follow-up's own `num`) is the appNum.
-function hasFollowupTableRow(content, appNum) {
-  for (const line of content.split('\n')) {
-    if (!line.startsWith('|')) continue;
-    const parts = line.split('|').map(s => s.trim());
-    if (parts.length < 8) continue;
-    const rowAppNum = parseInt(parts[2], 10);
-    if (!isNaN(rowAppNum) && rowAppNum === appNum) return true;
-  }
-  return false;
-}
+// --- Idempotency: pin OR an existing follow-up for appNum -----------------
 
 function isAlreadySeeded(content, appNum) {
   if (!content) return false;
   if (parseNextOverrides(content).has(appNum)) return true;
-  return hasFollowupTableRow(content, appNum);
+  return parseFollowups(content).some(entry => entry.appNum === appNum);
 }
 
 // --- Locking (mirrors merge-tracker.mjs's tracker lock, scoped to follow-ups) --
@@ -279,7 +268,9 @@ function resolveFollowupsLockDir(envValue, lockKey) {
 
 function resolveLockDir(explicitLockDir, followupsPath) {
   if (explicitLockDir) return explicitLockDir;
-  const lockKey = createHash('sha256').update(followupsPath).digest('hex').slice(0, 16);
+  // Canonicalize the parent so the key stays stable when the file is first created.
+  const lockPath = join(canonicalizeTrackerPath(dirname(followupsPath)), basename(followupsPath));
+  const lockKey = createHash('sha256').update(lockPath).digest('hex').slice(0, 16);
   return resolveFollowupsLockDir(process.env.CAREER_OPS_FOLLOWUPS_LOCK, lockKey);
 }
 
