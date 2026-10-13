@@ -28,6 +28,7 @@ export async function GET(req: Request) {
         metadata: j.metadata ?? null,
         entries,
         cadenceConfig: j.cadenceConfig ?? null,
+        followupsEnabled: j.followupsEnabled !== false,
       });
     }
     // Due now (urgency 'urgent'/'overdue') — 'waiting'/'cold' are NOT due,
@@ -36,7 +37,7 @@ export async function GET(req: Request) {
     // to an unfiltered list.
     const due = selectDueFollowups(entries, 8);
     const nextUpcoming = due.length ? null : pickNextUpcoming(entries);
-    return Response.json({ available: true, metadata: j.metadata ?? null, entries: due, nextUpcoming });
+    return Response.json({ available: true, metadata: j.metadata ?? null, entries: due, nextUpcoming, followupsEnabled: j.followupsEnabled !== false });
   } catch {
     return Response.json({ available: false, metadata: null, entries: [], nextUpcoming: null });
   }

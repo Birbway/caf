@@ -75,6 +75,7 @@ import { resolveColumns, parseTrackerRow } from './tracker-parse.mjs';
 import { localToday } from './lib/local-today.mjs';
 import {
   resolveCadenceConfig,
+  loadFollowupsEnabled,
   normalizeStatus,
   parseAppliedDate,
   parseFollowups,
@@ -539,6 +540,10 @@ export async function seedFollowup(appNum, options = {}) {
     throw new SeedError('INVALID_DATE', `--date must be a real calendar date in YYYY-MM-DD form: ${options.date}`);
   }
 
+  if (!loadFollowupsEnabled(options.profilePath)) {
+    return { seeded: false, appNum, pin: null, nextDate: null, reason: 'disabled', ...(options.dryRun ? { dryRun: true } : {}) };
+  }
+
   const trackerPath = resolveTrackerPath(options.trackerPath);
   const followupsPath = resolveFollowupsPath(options.followupsPath);
 
@@ -605,6 +610,7 @@ export async function seedFollowup(appNum, options = {}) {
  * @returns {Promise<{seeded: object[], skipped: object[]}>}
  */
 export async function seedBackfill(options = {}) {
+  if (!loadFollowupsEnabled(options.profilePath)) return { seeded: [], skipped: [], reason: 'disabled' };
   const trackerPath = resolveTrackerPath(options.trackerPath);
   const followupsPath = resolveFollowupsPath(options.followupsPath);
 
@@ -769,6 +775,10 @@ function reportSingle(result, json) {
     console.log(JSON.stringify(result));
     return;
   }
+  if (result.reason === 'disabled') {
+    console.log('⏭️  Follow-ups are turned off (follow_ups.enabled: false in config/profile.yml); nothing seeded.');
+    return;
+  }
   const dryTag = result.dryRun ? ' [dry-run]' : '';
   if (result.seeded) {
     console.log(`✅ Seeded #${result.appNum}: next follow-up ${result.nextDate} (applied ${result.appliedDate}${appDateNote(result.appDateSource)}, set ${result.setDate})${dryTag}`);
@@ -780,6 +790,10 @@ function reportSingle(result, json) {
 function reportBackfill(result, json) {
   if (json) {
     console.log(JSON.stringify(result));
+    return;
+  }
+  if (result.reason === 'disabled') {
+    console.log('⏭️  Follow-ups are turned off (follow_ups.enabled: false in config/profile.yml); nothing seeded.');
     return;
   }
   const dryTag = result.dryRun ? ' [dry-run]' : '';

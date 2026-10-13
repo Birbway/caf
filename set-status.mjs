@@ -1092,7 +1092,7 @@ if (flags.json) {
   // Only when seeding did NOT happen. The advisory predates the seeding above
   // and asked the user to do by hand what now runs for them; leaving it
   // unconditional would read as a contradiction right under "Follow-up seeded".
-  if (statusChanged && !flags.dryRun && newStatus === 'Applied' && !followupSeeded?.seeded) {
+  if (statusChanged && !flags.dryRun && newStatus === 'Applied' && !followupSeeded?.seeded && followupSeeded?.reason !== 'disabled') {
     console.error('ℹ️  Status is Applied — consider seeding follow-ups in data/follow-ups.md (#1430: node followup-cadence.mjs)');
   }
 }
