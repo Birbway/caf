@@ -891,12 +891,16 @@ try {
     additions: { '002-acme.tsv': '2\t2026-02-01\tAcme\tBackend Engineer, Payments\tEvaluated\t3.9/5\t❌\t[2](reports/002-acme-2026-02-01.md)\tre-eval\n' },
   };
   const goneReevalPresent = pdfCellOf(runManifestMerge({ ...goneReeval, pdfs: ['acme-1.pdf', 'acme-2.pdf'] }), '| 3 ');
-  const goneReevalAbsent = pdfCellOf(runManifestMerge({ ...goneReeval, pdfs: ['acme-1.pdf'] }), '| 3 ');
+  // Only the prior report's file is on disk. The new report is in the manifest
+  // and its file is gone, so the check has to come from the prior PDF.
+  const goneReevalPrior = pdfCellOf(runManifestMerge({ ...goneReeval, pdfs: ['acme-1.pdf'] }), '| 3 ');
+  const goneReevalNeither = pdfCellOf(runManifestMerge({ ...goneReeval, pdfs: [] }), '| 3 ');
   if (/\[2\]/.test(goneReevalPresent.row) && goneReevalPresent.pdf === '✅'
-    && /\[2\]/.test(goneReevalAbsent.row) && goneReevalAbsent.pdf === '❌') {
-    pass('a re-eval does not take ✅ from a manifest row whose new report PDF is gone (#4777)');
+    && /\[2\]/.test(goneReevalPrior.row) && goneReevalPrior.pdf === '✅'
+    && /\[2\]/.test(goneReevalNeither.row) && goneReevalNeither.pdf === '❌') {
+    pass('a re-eval keeps ✅ while the prior report PDF is on disk, and clears it when neither file remains (#4777)');
   } else {
-    fail(`re-eval ignored the new report's PDF on disk: with file "${goneReevalPresent.row}", without "${goneReevalAbsent.row}"`);
+    fail(`re-eval PDF carry failed: both "${goneReevalPresent.row}", prior only "${goneReevalPrior.row}", neither "${goneReevalNeither.row}"`);
   }
 } catch (e) {
   fail(`merge-tracker PDF-flag sync tests crashed: ${e.message}`);

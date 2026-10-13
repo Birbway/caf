@@ -2122,20 +2122,18 @@ export async function mergeTracker(options = {}) {
           `${downgrade ? '🔽' : '🔄'} Update: #${duplicate.num} ${addition.company} — ${addition.role} (${oldScore}→${newScore})`
           + (downgrade ? ' — DOWNGRADE, re-eval scored lower' : ''),
         );
-        // The PDF flag describes THE ROW'S REPORT, and this branch replaces that
-        // report link. Inheriting duplicate.pdf across a report change carried the
-        // superseded report's ✅ onto the new one: the row then claimed a tailored
-        // PDF exists for a report that has none, and the only PDF on disk belonged
-        // to the evaluation that was just superseded. Fall back to the existing
-        // flag only when the report is unchanged; when it changes, the manifest is
-        // the sole authority (#2594).
-        // "different, INCLUDING one-side-absent". Requiring both to be truthy meant
-        // a row whose report cell is `—` had oldReportNum === null, so reportChanged
-        // was falsy and the stale ✅ was inherited exactly as before this fix — and a
-        // `—` row with a ✅ is ordinary, it is what a tracker entry added before its
-        // evaluation looks like. Both absent stays "unchanged", which is correct.
+        // The PDF flag means this application still has a tailored PDF.
+        // The new report's own live index row wins. When that report has none,
+        // keep the check if the prior report's PDF is still in the live index.
+        // loadPdfIndex() only returns a row whose file is on disk (#4777), so
+        // a manifest line for a deleted file does not carry the check.
+        // A row whose report cell is `—` has no prior report to carry from.
+        // A changed report with neither PDF on disk becomes ❌ (#2594).
+        // An unchanged report keeps the cell it already has.
         const reportChanged = String(reportNum ?? '') !== String(oldReportNum ?? '');
-        const pdf = reportNum && pdfIndex.has(String(reportNum))
+        const newPdfReady = Boolean(reportNum && pdfIndex.has(String(reportNum)));
+        const priorPdfReady = Boolean(oldReportNum && pdfIndex.has(String(oldReportNum)));
+        const pdf = (newPdfReady || (reportChanged && priorPdfReady))
           ? '✅'
           : (reportChanged ? '❌' : duplicate.pdf);
         const updatedLine = buildRow({
