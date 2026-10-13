@@ -1494,7 +1494,7 @@ async function generatePDF() {
     if (arg.startsWith('--format=')) {
       format = arg.split('=')[1].toLowerCase();
     } else if (arg.startsWith('--country=')) {
-      country = arg.split('=')[1];
+      country = arg.slice('--country='.length);
     } else if (arg.startsWith('--report=')) {
       reportSupplied = true;
       reportNum = arg.split('=')[1].trim();

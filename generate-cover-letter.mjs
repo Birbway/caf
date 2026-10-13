@@ -21,6 +21,7 @@ import { parseArgs } from "util";
 import { assertFacts, printAdvisoryFacts } from "./verify-cv-facts.mjs";
 import { resolveTemplate } from "./cv-templates.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
+import { PAGE_FORMATS, normalizePageFormat, pageFormatForCountry } from "./lib/page-format.mjs";
 import { getCareerOpsRoot } from "./path-resolver.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -422,6 +423,18 @@ Usage:
   --report    Link the PDF to a tracker report number in data/pdf-index.tsv
 `);
     process.exit(args.help ? 0 : 1);
+  }
+
+  // Supplied flags are validated like generate-pdf.mjs does. A typo that fell
+  // through to the profile or the payload would print a letter on the wrong sheet.
+  // `auto` is a profile or payload value, never a sheet, so --format rejects it.
+  if (args.format !== undefined && !normalizePageFormat(args.format)) {
+    console.error(`Invalid format "${args.format}". Use: ${[...PAGE_FORMATS].join(", ")}`);
+    process.exit(1);
+  }
+  if (args.country !== undefined && !pageFormatForCountry(args.country)) {
+    console.error(`Invalid country "${args.country}". Use a two-letter ISO 3166-1 code, e.g. --country=DE.`);
+    process.exit(1);
   }
 
   const payloadPath = resolve(args.payload);

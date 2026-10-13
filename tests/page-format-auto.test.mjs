@@ -296,3 +296,38 @@ test('generate-cover-letter: the payload country steers auto, and --country outr
     assert.equal(mediaBox(join(dir, 'output', `cover-${i}.pdf`)), box, `${payloadCountry} ${flag}`);
   });
 });
+
+test('generate-pdf: --country keeps everything after the prefix, so DE=US is rejected', () => {
+  const res = runPdf(workspace('auto'), '--country=DE=US');
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /Invalid country "DE=US"/);
+});
+
+function runCover(flags) {
+  const dir = workspace('auto');
+  const payloadPath = join(dir, 'payload.json');
+  writeFileSync(payloadPath, JSON.stringify({
+    candidate: { name: 'A Candidate' },
+    letter: { role_title: 'Head of Marketing', opening: 'Opening line.', profile_intro: 'Profile intro.', company: 'Example Corp', city: 'Berlin', date: 'September 8, 2026' },
+    country: 'DE', output_path: 'output/cover.pdf',
+  }));
+  return spawnSync(NODE, [join(ROOT, 'generate-cover-letter.mjs'), '--payload', payloadPath, ...flags], {
+    env: workspaceEnv(dir), encoding: 'utf-8',
+  });
+}
+
+test('generate-cover-letter: a malformed or empty --country fails loudly', () => {
+  for (const flag of ['--country=Germany', '--country=DE=US', '--country=']) {
+    const res = runCover([flag]);
+    assert.equal(res.status, 1, flag + res.stdout);
+    assert.match(res.stderr, /Invalid country/, flag);
+  }
+});
+
+test('generate-cover-letter: --format takes only a4 or letter, never auto', () => {
+  for (const flag of ['--format=auto', '--format=legal']) {
+    const res = runCover([flag]);
+    assert.equal(res.status, 1, flag + res.stdout);
+    assert.match(res.stderr, /Invalid format/, flag);
+  }
+});
