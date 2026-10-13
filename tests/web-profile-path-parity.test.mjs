@@ -79,7 +79,7 @@ if (!existsSync(MIRROR)) {
   pass('core comparison skipped: path-resolver.mjs has no getProfilePath yet (Part 1 of #5026)');
 } else {
   const { getProfilePath: web } = await import(pathToFileURL(MIRROR).href);
-  const { mkdtempSync, realpathSync, rmSync } = await import('fs');
+  const { mkdirSync, mkdtempSync, realpathSync, rmSync } = await import('fs');
   const { tmpdir } = await import('os');
   const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'web-core-profile-parity-')));
   const elsewhere = join(dataRoot, 'elsewhere', 'me.yml');
@@ -118,6 +118,7 @@ if (!existsSync(MIRROR)) {
     // cwd the core CLI runs in, but the web's own cwd is web/, so it anchors to
     // the root it passes. Both are pinned, so neither drifts unnoticed.
     const cwd = join(dataRoot, 'elsewhere');
+    mkdirSync(cwd, { recursive: true });
     const relCore = withCore('profiles/me.yml', cwd, () => core.getProfilePath());
     const relWeb = web(dataRoot, { env: { CAREER_OPS_PROFILE: 'profiles/me.yml' } });
     if (relCore === join(cwd, 'profiles', 'me.yml') && relWeb === join(dataRoot, 'profiles', 'me.yml')) {
