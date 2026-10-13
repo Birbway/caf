@@ -232,6 +232,18 @@ const NON_CONTENT_MARKERS = [
     re: /(please enable javascript|this site requires javascript|<noscript)/i,
   },
   {
+    category: 'paraphrase',
+    // An evaluator that cannot quote the posting (fetch-tool copyright guard,
+    // quote-length limit) writes a restatement and usually SAYS so in the
+    // section. A restatement is not an archive: it carries the evaluator's
+    // reading of the posting, not the posting (#5179). Matched on the
+    // evaluator's own disclosure phrasing, deliberately not the bare words
+    // "paraphrase" or "restate", which a real JD can use as a duty ("you will
+    // paraphrase source material") or in finance prose ("restated financials").
+    reason: 'says it is a paraphrase or restatement, not the verbatim posting',
+    re: /(\((?:a |an )?(?:(?:close|detailed|faithful) )?paraphras(?:e|ed)\b[^)\n]*\)|\b(?:is|are) (?:a |an )?(?:(?:close|detailed|faithful|complete|non-fabricated|full|accurate)[ ,]+)*(?:paraphrase|restatement)\b|\bthis section restates\b|\bnot (?:a |the )?(?:literal|verbatim)\b|\b(?:could|would|did|can) ?not (?:be )?(?:reproduc|quot|return|captur|copi)\w*[^.\n]{0,40}\b(?:literal|verbatim)\b)/i,
+  },
+  {
     category: 'bot-challenge',
     // Matched on established challenge PHRASES, deliberately not the bare
     // word "captcha" — a real posting can legitimately mention CAPTCHA as a
@@ -286,12 +298,22 @@ export function extractStrippedJdSection(content) {
   return stripped.trim();
 }
 
+// Marker lookup over the whole section, heading line included. The heading is
+// outside extractStrippedJdSection()'s text, and an honest evaluator may retitle
+// it ("## Job Description (paraphrase, not verbatim)") without touching the body.
+export function detectJdSectionMarker(content) {
+  const stripped = extractStrippedJdSection(content);
+  if (stripped === null) return null;
+  const heading = JD_HEADING_RE.exec(String(content ?? ''))[0];
+  return detectNonContentMarker(stripped) ?? detectNonContentMarker(heading);
+}
+
 export function hasEmbeddedJdArchive(content) {
   const stripped = extractStrippedJdSection(content);
   if (stripped === null) return false;
   if (stripped === UNFILLED_TEMPLATE_PLACEHOLDER) return false;
   if (isPathOnlyPointer(stripped)) return false;
-  if (detectNonContentMarker(stripped)) return false;
+  if (detectJdSectionMarker(content)) return false;
   return stripped.length >= MIN_ARCHIVE_CHARS;
 }
 
@@ -487,8 +509,7 @@ export function checkJdArchive(reportsDir, jdsDir, { trackerPath = null, statesP
     // non-content marker, #3829) rather than just being absent or too
     // short — surface it so a user reads "looks like a sign-in wall, not a
     // posting" instead of a generic miss.
-    const strippedSection = extractStrippedJdSection(content);
-    const marker = strippedSection !== null ? detectNonContentMarker(strippedSection) : null;
+    const marker = detectJdSectionMarker(content);
 
     const detail = marker
       ? `"## Job Description" section ${marker.reason} — not credited as an archive, and no jds/ capture found${meta ? ` for report ${meta.reportNum} (company slug "${meta.companySlug}")` : ''}`
@@ -740,6 +761,31 @@ function runSelfTest() {
   check(hasEmbeddedJdArchive(
     '## Job Description (archived verbatim)\n\nOnce hired, you will sign in to our internal LMS daily to manage learner rosters and publish course updates across three regional campuses.\n\n## Machine Summary'),
     'hasEmbeddedJdArchive does not false-positive on real JD prose that merely mentions signing in to an internal system, since it does not match the anchored login-wall phrasing (#3829)');
+
+  // --- Self-declared paraphrase (#5179) ---
+  // An evaluator that cannot quote the posting writes a restatement and says so
+  // in the section. The prose clears MIN_ARCHIVE_CHARS, so without a marker it
+  // is credited as an archive under a heading that promises "verbatim".
+  check(!hasEmbeddedJdArchive(
+    '## Job Description (archived verbatim)\n\nNote: the fetch tool would not return the literal text. What follows is a detailed, close paraphrase of the posting, not a literal copy.\n\nTitle: Director of Marketing. Owns demand generation and reports to the CMO.\n\n## Machine Summary'),
+    'hasEmbeddedJdArchive rejects a section that calls itself a paraphrase while the heading says archived verbatim (#5179)');
+  check(!hasEmbeddedJdArchive(
+    '## Job Description (archived verbatim)\n\n**Mandate (paraphrased):** Own pipeline generation across all online channels and report to the CMO.\n\n## Machine Summary'),
+    'hasEmbeddedJdArchive rejects a section whose body labels its content "(paraphrased)" (#5179)');
+  check(!hasEmbeddedJdArchive(
+    '## Job Description (paraphrase, not verbatim)\n\nTitle: Director of Marketing. Owns demand generation, reports to the CMO, manages a team of eight.\n\n## Machine Summary'),
+    'hasEmbeddedJdArchive does not credit a section whose own heading says it is not verbatim (#5179)');
+  check(!hasEmbeddedJdArchive(
+    '## Job Description (archived verbatim)\n\nThe tool could not reproduce the verbatim text, so this section restates it. Title: Director of Marketing, reports to the CMO.\n\n## Machine Summary'),
+    'hasEmbeddedJdArchive rejects a section that says verbatim reproduction was not possible (#5179)');
+  check(detectNonContentMarker('This is a close paraphrase, not a literal copy of the posting.')?.category === 'paraphrase',
+    'detectNonContentMarker classifies a self-declared paraphrase with the paraphrase category (#5179)');
+  check(hasEmbeddedJdArchive(
+    '## Job Description (archived verbatim)\n\nYou will paraphrase dense source material into plain language for our course catalog and edit copy written by three regional teams.\n\n## Machine Summary'),
+    'hasEmbeddedJdArchive does not false-positive on real JD prose that merely uses the word paraphrase as a duty (#5179)');
+  check(hasEmbeddedJdArchive(
+    '## Job Description (archived verbatim)\n\nWe are hiring a part-time Instructional Design Assistant to support course updates in our LMS, 10 hours/week, remote, $28/hr. Candidates must be able to restate technical content for lay readers.\n\n## Machine Summary'),
+    'hasEmbeddedJdArchive does not false-positive on real JD prose that mentions restating content (#5179)');
 
   // --- Fixture directory tree (mkdtempSync, mirrors the repo's own test convention) ---
   const tmpDir = mkdtempSync(join(tmpdir(), 'check-jd-archive-test-'));
