@@ -215,33 +215,38 @@ export function extractLocales(html) {
   return all.slice(0, CSB_MAX_LOCALES);
 }
 
-// CSB posting dates are rendered in the query locale's short format: US tenants
-// send M/D/YY with slashes ("6/18/26"), European (de_DE) tenants send D.M.YY
-// with dots ("20.11.23"). Infer the field order from the separator, treat a
-// 2-digit year as 20YY, and return epoch ms. Anything unexpected yields
-// undefined so a consumer sees "unknown date" rather than a bogus timestamp.
-/** @param {unknown} raw */
-export function parseCsbDate(raw) {
+// CSB posting dates are rendered in the query locale's short format: en_US
+// sends M/D/YY ("6/18/26"), de_DE D.M.YY ("20.11.23"), fr_FR and pt_BR
+// D/M/YYYY ("05/10/2026"), hu_HU "2025. 07. 03.". Slashes are month-first only
+// for the US locales; with no locale they stay month-first as before. A 2-digit
+// year is 20YY. Anything unexpected yields undefined so a consumer sees
+// "unknown date" rather than a bogus timestamp.
+const CSB_MONTH_FIRST_LOCALES = new Set(['en_US', 'es_US']);
+
+/** @param {unknown} raw @param {string} [locale] */
+export function parseCsbDate(raw, locale) {
   if (typeof raw !== 'string') return undefined;
   const s = raw.trim();
-  let a, b, year;
-  let slash = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
-  let dot = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$/);
+  let month, day, year;
+  const slash = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  const dot = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})$/);
+  const yearFirst = s.match(/^(\d{4})[.\-/]\s*(\d{1,2})[.\-/]\s*(\d{1,2})\.?$/);
   if (slash) {
-    // M/D/Y
-    [, a, b, year] = slash;
+    [, month, day, year] = slash;
+    if (locale && !CSB_MONTH_FIRST_LOCALES.has(locale)) [month, day] = [day, month];
   } else if (dot) {
-    // D.M.Y — swap to month/day
-    [, b, a, year] = dot;
+    [, day, month, year] = dot;
+  } else if (yearFirst) {
+    [, year, month, day] = yearFirst;
   } else {
     return undefined;
   }
-  const month = Number(a);
-  const day = Number(b);
+  const m = Number(month);
+  const d = Number(day);
   let y = Number(year);
   if (y < 100) y += 2000;
-  if (month < 1 || month > 12 || day < 1 || day > 31) return undefined;
-  const ms = Date.UTC(y, month - 1, day);
+  if (m < 1 || m > 12 || d < 1 || d > 31) return undefined;
+  const ms = Date.UTC(y, m - 1, d);
   return Number.isFinite(ms) ? ms : undefined;
 }
 
@@ -288,7 +293,7 @@ export function parseCsbJobs(json, cfg, locale) {
       title,
       url,
       location: cleanCsbLocation(r.jobLocationShort),
-      postedAt: parseCsbDate(r.unifiedStandardStart),
+      postedAt: parseCsbDate(r.unifiedStandardStart, locale),
     });
   }
   return out;
