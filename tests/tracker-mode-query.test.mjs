@@ -28,5 +28,6 @@ test('every tracker.mjs query filter the tracker mode tells agents to use works'
     });
     assert.equal(result.status, 0, `${args.join(' ')}: ${result.stdout}${result.stderr}`);
     if (args[0] !== '--json') assert.match(result.stdout, /\| 42 \| 2026-09-10 \| Acme/, args.join(' '));
+    if (!['--json', '--limit'].includes(args[0])) assert.doesNotMatch(result.stdout, /\| 43 \|/, args.join(' '));
   }
 });
