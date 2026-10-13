@@ -20,7 +20,16 @@ export function postNdjsonXhr(url, body, onEvent) {
     let seen = 0;
     let carry = "";
 
+    const readEvent = (line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return undefined;
+      }
+    };
+
     const consume = (finished) => {
+      if (xhr.status >= 400) return;
       const text = xhr.responseText || "";
       const fresh = text.slice(seen);
       seen = text.length;
@@ -29,18 +38,12 @@ export function postNdjsonXhr(url, body, onEvent) {
       for (const raw of parts) {
         const line = raw.trim();
         if (!line) continue;
-        try {
-          onEvent(JSON.parse(line));
-        } catch {
-          /* incomplete JSON or a non-NDJSON 4xx body — handled on load */
-        }
+        const ev = readEvent(line);
+        if (ev !== undefined) onEvent(ev);
       }
       if (finished && carry.trim()) {
-        try {
-          onEvent(JSON.parse(carry.trim()));
-        } catch {
-          /* ignore */
-        }
+        const ev = readEvent(carry.trim());
+        if (ev !== undefined) onEvent(ev);
         carry = "";
       }
     };

@@ -20,6 +20,7 @@ import { MAX_OFFER_LIMIT } from "@/lib/whats-new.mjs";
 import { isAbortError, isScannerMissing } from "@/lib/explore-error.mjs";
 import { postNdjsonXhr } from "@/lib/post-ndjson-xhr.mjs";
 import { settledExploreUrl } from "@/lib/explore-url.mjs";
+import { createRunOwner } from "@/lib/explore-run.mjs";
 
 export type Phase =
   | "idle"
@@ -149,6 +150,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   const [aiTrace, setAiTrace] = useState<AiTraceChunk[]>([]);
   const [aiCost, setAiCost] = useState<AiCost>({ searches: 0, candidates: 0, fetches: 0 });
   const runningRef = useRef(false);
+  const runs = useRef(createRunOwner());
   const aiIntentRef = useRef(aiIntent);
   aiIntentRef.current = aiIntent;
   const filtersRef = useRef(filters);
@@ -168,6 +170,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   const discover = useCallback(async () => {
     if (runningRef.current) return;
     const f = filtersRef.current;
+    const run = runs.current.start();
     runningRef.current = true;
     setPhase("casting");
     setOffers([]);
@@ -196,6 +199,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     let datasetIssueAcc = false; // some ATS dataset was stale/empty/unreachable
     let droppedNoDateAcc = 0; // postings dropped for lacking a publish date
     const handleEvent = (raw: object) => {
+      if (!runs.current.owns(run)) return;
       const ev = raw as ScanEvent;
       switch (ev.kind) {
         case "atsStart":
@@ -277,6 +281,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
 
     // The run has settled, so the URL can carry the search again (shareable, and
     // a reload no longer replays an onboarding ?run=1).
+    if (!runs.current.owns(run)) return;
     writeSearchUrl(filtersToParams(f));
 
     // Mark any still-active sources as swept (stream ended).
@@ -298,7 +303,9 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       setMatchCount(acc.length);
       setPhase("revealing");
       setStatus(`${acc.length} fresh role${acc.length === 1 ? "" : "s"} found — free.`);
-      window.setTimeout(() => setPhase("results"), 850);
+      window.setTimeout(() => {
+        if (runs.current.owns(run)) setPhase("results");
+      }, 850);
     } else if (sawError) {
       setError(sawError);
       setScannerMissing(sawScannerMissing);
@@ -320,6 +327,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   // — no scan, so it never touches sources/companiesScanned like discover() does.
   const loadFresh = useCallback(async () => {
     if (runningRef.current) return;
+    const run = runs.current.start();
     runningRef.current = true;
     setPhase("casting");
     setStatus("Loading fresh matches…");
@@ -337,12 +345,14 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       // so an unbounded list would be an unbounded DOM. `count` below stays the
       // complete total, which is what the header actually reports.
       const r = await fetch(`/api/whats-new?limit=${MAX_OFFER_LIMIT}`);
+      if (!runs.current.owns(run)) return;
       if (!r.ok) {
         setError(`Couldn't load fresh matches (${r.status}).`);
         setPhase("failed");
         return;
       }
       const d = await r.json().catch(() => null);
+      if (!runs.current.owns(run)) return;
       if (!d || !Array.isArray(d.offers)) {
         setError("Couldn't load fresh matches — unexpected response.");
         setPhase("failed");
@@ -354,10 +364,11 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       setMatchCount(Number.isFinite(count) ? Math.max(0, Math.trunc(count)) : list.length);
       setPhase(list.length > 0 ? "results" : "empty-current");
     } catch (e) {
+      if (!runs.current.owns(run)) return;
       setError(e instanceof Error ? e.message : "Couldn't load fresh matches.");
       setPhase("failed");
     } finally {
-      runningRef.current = false;
+      if (runs.current.owns(run)) runningRef.current = false;
     }
   }, []);
 
@@ -403,6 +414,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   }, [discover]);
 
   const reset = useCallback(() => {
+    runs.current.invalidate();
     runningRef.current = false;
     setPhase("idle");
     setOffers([]);
@@ -437,6 +449,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       setPhase("blocked");
       return;
     }
+    const run = runs.current.start();
     runningRef.current = true;
     setPhase("casting");
     setOffers([]);
@@ -456,6 +469,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     } catch {
       /* best-effort dedup */
     }
+    if (!runs.current.owns(run)) return;
     const parser = makeAiStreamParser({ knownUrls });
 
     const acc: DiscoveredOffer[] = [];
@@ -463,6 +477,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     let aborted = false;
     let sawScannerMissing = false; // the structured 400 (capability absent from this checkout), not a runtime error
     const handle = (chunks: AiTraceChunk[]) => {
+      if (!runs.current.owns(run)) return;
       for (const ch of chunks) {
         if (ch.kind === "offer") {
           acc.push(ch.offer);
@@ -489,6 +504,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({ query: intent, cliId }),
       });
       if (r.status === 404) {
+        if (!runs.current.owns(run)) return;
         writeSearchUrl(aiToParams(intent));
         runningRef.current = false;
         setPhase("blocked");
@@ -520,13 +536,16 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       if (!aborted) sawError = e instanceof Error ? e.message : "stream error";
     }
 
+    if (!runs.current.owns(run)) return;
     writeSearchUrl(aiToParams(intent));
     runningRef.current = false;
     if (acc.length > 0) {
       setMatchCount(acc.length);
       setPhase("revealing");
       setStatus(`${acc.length} candidate${acc.length === 1 ? "" : "s"} found.`);
-      window.setTimeout(() => setPhase("results"), 850);
+      window.setTimeout(() => {
+        if (runs.current.owns(run)) setPhase("results");
+      }, 850);
     } else if (aborted) {
       setPhase("idle");
       setStatus("");
@@ -543,7 +562,14 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
   // not throw away a completed search (disc#5). A new search (discover/discoverAI)
   // clears + repopulates; an explicit reset() clears. Just stop any half-run.
   const setMode = useCallback((m: ExploreMode) => {
+    runs.current.invalidate();
     runningRef.current = false;
+    // The retired run will not publish, so a running phase would spin forever.
+    setPhase((p) => {
+      if (p === "revealing") return "results";
+      if (p === "casting" || p === "scanning" || p === "hunting") return "idle";
+      return p;
+    });
     setModeState(m);
   }, []);
 
