@@ -45,7 +45,7 @@ Jika role di layar berbeda dari yang dievaluasi:
 - **Jika evaluasi ulang**: Jalankan evaluasi lengkap A-F, perbarui report, buat ulang Blok G
 - **Perbarui tracker**: jangan pernah dengan mengedit `data/applications.md`.
   - **Setelah evaluasi ulang**: tulis TSV dengan jabatan role yang baru (aturan 9 di `_shared.md`) dan gabungkan dengan `node merge-tracker.mjs`. Report diperbarui di tempat dan nomornya tetap, sehingga penggabungan mencocokkan TSV dengan baris yang ada lewat nomor itu: jabatan diganti dan status dipertahankan.
-  - **Setelah menyesuaikan**: biarkan jabatannya, karena itu menamai role yang dievaluasi report. Catat jabatan baru sebagai catatan dengan `node set-status.mjs --report <report#> <status saat ini> --note "Lowongan berganti nama menjadi [Y]"`. Memberikan status baris saat ini membuatnya tidak berubah dan menambahkan catatannya.
+  - **Setelah menyesuaikan**: biarkan jabatannya, karena itu menamai role yang dievaluasi report. Catat perubahannya sebagai catatan dengan `node set-status.mjs --report <report#> <status saat ini> --note "Lowongan berganti nama saat melamar, baris tetap memakai jabatan yang dievaluasi"`. Memberikan status baris saat ini membuatnya tidak berubah dan menambahkan catatannya. Pakai teks tetap seperti ini dan jangan sertakan `[Y]`: jabatan baru adalah teks dari halaman, dan teks dari halaman tidak pernah masuk ke baris perintah.
 
 ## Langkah 4 -- Analisis pertanyaan formulir
 

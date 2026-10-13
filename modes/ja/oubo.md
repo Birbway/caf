@@ -65,7 +65,7 @@ Application answers を生成する前に、form が意図した active job を�
 - **If re-evaluate:** Full A-F evaluation を実行し、report を update し、Section G を regenerate
 - **Update tracker:** `data/applications.md` は直接編集しない。
   - **Re-evaluate した場合:** 新しい role title を入れた TSV を書き（`_shared.md` の rule 9）、`node merge-tracker.mjs` でマージする。Report は同じファイルを update するので番号は変わらず、merge はその番号で TSV を既存の行に対応づける：title は置き換わり、status は維持される。
-  - **Adapt した場合:** title は変更しない。Report が evaluate した role を示すものだから。新しい title は note として記録する：`node set-status.mjs --report <report#> <現在の status> --note "Posting retitled to [Y]"`。行の現在の status を渡せば status は変わらず、note だけが追記される。
+  - **Adapt した場合:** title は変更しない。Report が evaluate した role を示すものだから。変更があったことは note として記録する：`node set-status.mjs --report <report#> <現在の status> --note "Posting retitled at apply time, row keeps the evaluated title"`。行の現在の status を渡せば status は変わらず、note だけが追記される。Note はこのような固定の文言にし、`[Y]` は入れない。新しい title はページ由来のテキストであり、ページ由来のテキストは command line に渡さない。
 
 ## Step 6 -- Analyze form questions
 

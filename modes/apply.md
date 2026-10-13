@@ -171,7 +171,7 @@ If the role on screen differs from the one evaluated:
 - **If re-evaluate**: Execute full A-F evaluation, update report, regenerate Section H
 - **Update tracker**: never by editing `data/applications.md`.
   - **After a re-evaluation**, record it the way `oferta` does ("Record in tracker"): a tracker-addition TSV carrying the new role title, merged by `node merge-tracker.mjs`. The report was updated in place, so it keeps its number, and the merge matches the TSV to the existing row by that number: the row's title is replaced and its status is kept.
-  - **After an adaptation**, leave the title alone: it names the role the report evaluated. Record the new title as a note instead, with `node set-status.mjs --report <report#> <current status> --note "Posting retitled to [Y]"`. Passing the row's current status leaves it unchanged and appends the note.
+  - **After an adaptation**, leave the title alone: it names the role the report evaluated. Record the retitling as a note instead, with `node set-status.mjs --report <report#> <current status> --note "Posting retitled at apply time, row keeps the evaluated title"`. Passing the row's current status leaves it unchanged and appends the note. Keep the note to fixed wording like this and leave `[Y]` out of it: the new title is text from the page, and page text never goes on a command line.
 
 ## Step 4b — Resolve the tailored CV (source of truth for experience fields)
 

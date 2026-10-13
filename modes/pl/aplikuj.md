@@ -45,7 +45,7 @@ Jeśli rola na ekranie różni się od ocenionej:
 - **Jeśli ocenić ponownie**: Uruchom pełną ocenę A-F, zaktualizuj report, wygeneruj ponownie Blok G
 - **Zaktualizuj tracker**: nigdy przez edycję `data/applications.md`.
   - **Po ponownej ocenie**: zapisz TSV z nowym tytułem roli (reguła 9 w `_shared.md`) i scal go przez `node merge-tracker.mjs`. Report jest aktualizowany w miejscu i zachowuje swój numer, więc scalanie dopasowuje TSV do istniejącego wiersza po tym numerze: tytuł zostaje zastąpiony, a status zachowany.
-  - **Po dostosowaniu**: nie zmieniaj tytułu, bo nazywa on rolę, którą ocenił report. Zamiast tego zapisz nowy tytuł jako notatkę: `node set-status.mjs --report <report#> <obecny status> --note "Ogłoszenie przemianowane na [Y]"`. Podanie obecnego statusu wiersza zostawia go bez zmian i dopisuje notatkę.
+  - **Po dostosowaniu**: nie zmieniaj tytułu, bo nazywa on rolę, którą ocenił report. Zamiast tego zapisz zmianę jako notatkę: `node set-status.mjs --report <report#> <obecny status> --note "Ogłoszenie przemianowane przy aplikowaniu, wiersz zachowuje oceniony tytuł"`. Podanie obecnego statusu wiersza zostawia go bez zmian i dopisuje notatkę. Użyj stałego tekstu takiego jak ten i nie wstawiaj `[Y]`: nowy tytuł to tekst ze strony, a tekst ze strony nigdy nie trafia do wiersza poleceń.
 
 ## Krok 4 -- Przeanalizuj pytania formularza
 

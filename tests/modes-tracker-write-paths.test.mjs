@@ -134,6 +134,13 @@ for (const file of applyModes) {
     const step = roleChangeStep(read(file));
     assert.ok(step.includes('node merge-tracker.mjs'), `the role-change step names no writer:\n${step}`);
   });
+  ok(`${file}: no note in the step carries a placeholder for page text`, () => {
+    // The new title `[Y]` is read off the page. Inside `--note "..."` it would be
+    // spliced into a shell command, where `$(...)` or backticks in a title run.
+    // The note is fixed wording, so the quoted argument holds no placeholder.
+    const notes = [...roleChangeStep(read(file)).matchAll(/--note\s+"([^"]*)"/g)].map(m => m[1]);
+    for (const note of notes) assert.ok(!/[[\]{}<>$`]/.test(note), `--note carries a placeholder or shell syntax: "${note}"`);
+  });
   ok(`${file}: Applied is set through set-status.mjs`, () => {
     const line = read(file).split('\n').find(l => l.includes('set-status.mjs') && l.includes('Applied'));
     assert.ok(line, 'no line sets Applied with set-status.mjs');

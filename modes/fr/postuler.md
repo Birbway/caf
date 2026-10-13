@@ -45,7 +45,7 @@ Si le role a l'ecran differe de celui evalue :
 - **Si reevaluer** : Lancer l'evaluation complete A-F, mettre a jour le report, regenerer le Bloc G
 - **Mettre a jour le tracker** : jamais en editant `data/applications.md`.
   - **Apres une reevaluation** : ecrire un TSV avec le nouveau titre du role (regle 9 de `_shared.md`) et le fusionner avec `node merge-tracker.mjs`. Le report est mis a jour sur place et garde son numero, donc la fusion associe le TSV a la ligne existante par ce numero : le titre est remplace et le statut conserve.
-  - **Apres une adaptation** : ne pas changer le titre, car il designe le role que le report a evalue. Noter le nouveau titre avec `node set-status.mjs --report <report#> <statut actuel> --note "Offre renommee en [Y]"`. Passer le statut actuel de la ligne le laisse inchange et ajoute la note.
+  - **Apres une adaptation** : ne pas changer le titre, car il designe le role que le report a evalue. Noter le changement avec `node set-status.mjs --report <report#> <statut actuel> --note "Offre renommee au moment de postuler, la ligne garde le titre evalue"`. Passer le statut actuel de la ligne le laisse inchange et ajoute la note. Garder un texte fixe comme celui-ci et ne pas y mettre `[Y]` : le nouveau titre est un texte venu de la page, et un texte de la page ne va jamais sur une ligne de commande.
 
 ## Etape 4 -- Analyser les questions du formulaire
 

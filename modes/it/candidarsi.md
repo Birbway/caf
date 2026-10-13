@@ -45,7 +45,7 @@ Se il ruolo a schermo differisce da quello valutato:
 - **Se rivalutare:** Avviare la valutazione completa A-F, aggiornare il report e rigenerare il Blocco G.
 - **Aggiornare il tracker:** mai modificando `data/applications.md`.
   - **Dopo una rivalutazione:** scrivere un TSV con il nuovo titolo del ruolo (regola 9 di `_shared.md`) e unirlo con `node merge-tracker.mjs`. Il report viene aggiornato sul posto e conserva il suo numero, quindi l'unione abbina il TSV alla riga esistente tramite quel numero: il titolo viene sostituito e lo stato resta invariato.
-  - **Dopo un adattamento:** non cambiare il titolo, perché indica il ruolo valutato dal report. Annotare invece il nuovo titolo con `node set-status.mjs --report <report#> <stato attuale> --note "Annuncio rinominato in [Y]"`. Passare lo stato attuale della riga lo lascia invariato e aggiunge la nota.
+  - **Dopo un adattamento:** non cambiare il titolo, perché indica il ruolo valutato dal report. Annotare invece la rinomina con `node set-status.mjs --report <report#> <stato attuale> --note "Annuncio rinominato al momento della candidatura, la riga conserva il titolo valutato"`. Passare lo stato attuale della riga lo lascia invariato e aggiunge la nota. Usare un testo fisso come questo e non inserire `[Y]`: il nuovo titolo è testo proveniente dalla pagina, e il testo della pagina non va mai su una riga di comando.
 
 ## Fase 4 -- Analizzare le domande del modulo
 

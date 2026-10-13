@@ -45,7 +45,7 @@ Interactive mode जब candidate Chrome में application form भर र�
 - **यदि reevaluate करें**: Complete A-F evaluation launch करें, report update करें, Block G regenerate करें
 - **Tracker update करें**: `data/applications.md` को edit करके कभी नहीं।
   - **Reevaluate करने के बाद**: नए role title के साथ एक TSV लिखें (`_shared.md` का rule 9) और उसे `node merge-tracker.mjs` से merge करें। Report उसी file में update होती है और अपना number रखती है, इसलिए merge उसी number से TSV को existing row से match करता है: title replace होता है और status वही रहता है।
-  - **Adapt करने के बाद**: title न बदलें, क्योंकि वह उस role का नाम है जिसे report ने evaluate किया। नया title note के रूप में record करें: `node set-status.mjs --report <report#> <current status> --note "Posting retitled to [Y]"`। Row का current status पास करने से status नहीं बदलता और note जुड़ जाता है।
+  - **Adapt करने के बाद**: title न बदलें, क्योंकि वह उस role का नाम है जिसे report ने evaluate किया। इस बदलाव को note के रूप में record करें: `node set-status.mjs --report <report#> <current status> --note "Posting retitled at apply time, row keeps the evaluated title"`। Row का current status पास करने से status नहीं बदलता और note जुड़ जाता है। Note में ऐसा ही fixed text रखें और `[Y]` न डालें: नया title page से आया text है, और page का text कभी command line में नहीं जाता।
 
 ## Step 4 -- Form Questions Analyze करें
 
