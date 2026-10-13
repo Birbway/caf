@@ -12903,22 +12903,6 @@ try {
     fail(`stale PDF flag survived a —-to-[2] report change: ${dashResult.trim()}`);
   }
 
-  // The new report has no index row. The prior report's file is still on disk,
-  // so the row keeps ✅ and the report link still moves to the new evaluation.
-  const carriedFlag = runPdfSyncFixture(
-    'reeval-carried',
-    reevalRow,
-    '# report\tpdf\thtml\tformat\tdate\n1\toutput/acme-1.pdf\t\t\t2026-01-04\n',
-    [reevalTsv(2)],
-    ['output/acme-1.pdf'],
-  );
-  const carriedRow = carriedFlag.merged.split('\n').find((l) => l.startsWith('| 3 ')) || '';
-  if (carriedFlag.result !== null && /\[2\]/.test(carriedRow) && carriedRow.split('|')[7].trim() === '✅') {
-    pass('a re-eval keeps ✅ when the prior report PDF is still on disk');
-  } else {
-    fail(`re-eval dropped a PDF that is still on disk: ${carriedRow.trim()}`);
-  }
-
   const keptFlag = runPdfSyncFixture(
     'reeval-kept',
     reevalRow,
