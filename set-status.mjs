@@ -902,14 +902,13 @@ if ((statusChanged || flags.repairFollowup) && newStatus === 'Applied') {
     const seed = await seedFollowup(target.num, {
       trackerPath: APPS_FILE,
       followupsPath: join(dirname(APPS_FILE), 'follow-ups.md'),
-      // --on is the day the transition REALLY happened, and for a transition
-      // into Applied that day is the day the application was sent. Nothing
-      // else carries it here: the tracker's date column is the evaluation
-      // date and this script never rewrites it, so without passing it on,
-      // seedFollowup falls back to that column or to today. Backdating a
-      // week-old application would then schedule its first follow-up a week
-      // late — from the wrong anchor, silently.
-      date: flags.on,
+      // The day the application was sent: --on, or today, the same day the
+      // status log records. Left unset, seedFollowup falls back to the
+      // tracker's date column, which is the evaluation date, so a row
+      // evaluated weeks ago got a follow-up that was already overdue. A repair
+      // retry keeps the seeder's own fallback because the apply happened on
+      // an earlier run.
+      date: flags.on ?? (statusChanged ? localToday() : undefined),
       dryRun: flags.dryRun,
       // assumeApplied on a DRY RUN only, and deliberately not `force`.
       // seedFollowup refuses a row that is not Applied, and on a dry run the
