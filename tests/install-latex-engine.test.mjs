@@ -4,14 +4,14 @@
 //
 // No test here touches the network: fetch and engine detection are injected,
 // and the CLI cases exit in validateFlags before any download could start. The
-// real download is exercised by hand (`npm run latex:install`), not in CI.
+// real download is exercised by hand (`node install-latex-engine.mjs`), not in CI.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   TECTONIC_VERSION, TECTONIC_ASSETS, tectonicAsset, verifySha256, installTectonic,
@@ -142,6 +142,48 @@ test('--force skips the already-available short-circuit', async () => {
   assert.equal(calls.length, 1);
 });
 
+// A real archive holding a fake binary, served under its own digest, so the
+// extract → stage → probe → rename path runs end to end on this host.
+function fakeRelease(root) {
+  const binName = process.platform === 'win32' ? 'tectonic.exe' : 'tectonic';
+  const src = join(root, 'src');
+  mkdirSync(src);
+  writeFileSync(join(src, binName), 'new');
+  const file = process.platform === 'win32' ? 'fake.zip' : 'fake.tar.gz';
+  const archive = join(root, file);
+  const tar = process.platform === 'win32' ? join(process.env.SystemRoot, 'System32', 'tar.exe') : 'tar';
+  const args = process.platform === 'win32' ? ['-a', '-cf', archive, '-C', src, binName] : ['-czf', archive, '-C', src, binName];
+  execFileSync(tar, args, { stdio: 'pipe' });
+  const buf = readFileSync(archive);
+  rmSync(src, { recursive: true, force: true });
+  rmSync(archive);
+  const asset = { file, url: 'https://example.invalid/fake', sha256: createHash('sha256').update(buf).digest('hex') };
+  return { buf, resolveAsset: () => asset };
+}
+
+for (const [name, probeResult] of [['a binary that does not run', null], ['a binary that runs', 'tectonic 0.17.0']]) {
+  test(`--force with ${name} never leaves the target missing or a .part behind`, async () => {
+    const root = mkdtempSync(join(tmpdir(), 'latex-engine-root-'));
+    try {
+      const { buf, resolveAsset } = fakeRelease(root);
+      const target = localTectonicPath(root);
+      writeFileSync(target, 'old');
+      const probed = [];
+      const result = await installTectonic({
+        root, force: true, fetchImpl: fakeFetch(buf).impl, resolveAsset,
+        probe: (bin) => { probed.push(bin); return probeResult; },
+      });
+      assert.equal(probed.length, 1);
+      assert.notEqual(probed[0], target, 'the probe ran against the live target, not a staged copy');
+      assert.equal(result.status, probeResult ? 'installed' : 'failed');
+      assert.equal(readFileSync(target, 'utf-8'), probeResult ? 'new' : 'old');
+      assert.deepEqual(readdirSync(root), [basename(target)]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 test('install-latex-engine --help prints usage and exits 0', () => {
   for (const flag of ['--help', '-h']) {
     const result = run(SCRIPT, [flag]);
@@ -171,8 +213,8 @@ test('generate-latex reports installHint when no LaTeX engine is found', { skip:
     const report = JSON.parse(result.stdout);
     if (report.engine) return; // a tectonic/pdflatex lives beside node; nothing to assert
     assert.equal(report.compiled, false);
-    assert.equal(report.installHint, 'npm run latex:install');
-    assert.match(report.compileError, /npm run latex:install/);
+    assert.equal(report.installHint, 'node install-latex-engine.mjs');
+    assert.match(report.compileError, /node install-latex-engine.mjs/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

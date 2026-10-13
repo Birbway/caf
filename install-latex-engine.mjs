@@ -28,7 +28,7 @@
 
 import { createHash } from 'crypto';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync,writeFileSync, copyFileSync, chmodSync, rmSync, readdirSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync,writeFileSync, copyFileSync, chmodSync, rmSync, readdirSync, renameSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -119,6 +119,8 @@ function binaryWorks(bin) {
  * @param {typeof fetch} [opts.fetchImpl] - injectable for tests
  * @param {() => string|null} [opts.detectEngine] - injectable for tests
  * @param {(asset: object) => void} [opts.onDownload] - called once, right before the download starts
+ * @param {typeof tectonicAsset} [opts.resolveAsset] - injectable for tests
+ * @param {(bin: string) => string|null} [opts.probe] - runs the staged binary, returns its version or null; injectable for tests
  * @returns {Promise<{status: string, engine?: string, path?: string, version?: string, error?: string}>}
  *   status: 'installed' | 'already-available' | 'unsupported-platform' | 'checksum-mismatch' | 'failed'
  */
@@ -130,13 +132,15 @@ export async function installTectonic({
   fetchImpl = globalThis.fetch,
   detectEngine = resolveLatexEngine,
   onDownload = () => {},
+  resolveAsset = tectonicAsset,
+  probe = binaryWorks,
 } = {}) {
   if (!force) {
     const engine = detectEngine();
     if (engine) return { status: 'already-available', engine };
   }
 
-  const asset = tectonicAsset(platform, arch);
+  const asset = resolveAsset(platform, arch);
   if (!asset) {
     return {
       status: 'unsupported-platform',
@@ -163,6 +167,8 @@ export async function installTectonic({
 
   const target = localTectonicPath(root, platform);
   const work = mkdtempSync(join(tmpdir(), 'career-ops-tectonic-'));
+  let staged = null;
+  let version;
   try {
     const archive = join(work, asset.file);
     writeFileSync(archive, buf);
@@ -175,19 +181,25 @@ export async function installTectonic({
     if (!readdirSync(extractDir).includes(binName)) {
       return { status: 'failed', error: `${asset.file} did not contain ${binName}` };
     }
-    copyFileSync(join(extractDir, binName), target);
-    if (platform !== 'win32') chmodSync(target, 0o755);
+    // Stage beside the target and probe it there, so a --force reinstall that
+    // is interrupted or produces a binary that won't run never replaces a
+    // working one. Keep .exe last on Windows so the staged file still runs.
+    staged = target.replace(/(\.exe)?$/, '.part$1');
+    copyFileSync(join(extractDir, binName), staged);
+    if (platform !== 'win32') chmodSync(staged, 0o755);
+    version = probe(staged);
+    if (!version) {
+      return { status: 'failed', error: `Downloaded binary did not run; ${target} was left untouched.` };
+    }
+    renameSync(staged, target);
+    staged = null;
   } catch (err) {
     return { status: 'failed', error: `Install failed: ${err.message}` };
   } finally {
+    if (staged) rmSync(staged, { force: true });
     rmSync(work, { recursive: true, force: true });
   }
 
-  const version = binaryWorks(target);
-  if (!version) {
-    rmSync(target, { force: true });
-    return { status: 'failed', error: `Installed binary at ${target} did not run; removed it.` };
-  }
   return { status: 'installed', engine: 'tectonic', path: target, version };
 }
 
@@ -215,7 +227,7 @@ async function main() {
     const engine = resolveLatexEngine();
     const local = localTectonicPath();
     result = { status: engine ? 'available' : 'missing', engine, localBinary: existsSync(local) ? local : null };
-    if (!engine) result.installHint = 'npm run latex:install';
+    if (!engine) result.installHint = 'node install-latex-engine.mjs';
   } else {
     result = await installTectonic({
       force: args.includes('--force'),
@@ -234,7 +246,7 @@ async function main() {
   } else if (result.status === 'available') {
     console.log(`LaTeX engine: ${result.engine}${result.localBinary ? ` (${result.localBinary})` : ''}`);
   } else {
-    console.log('No LaTeX engine found. Run: npm run latex:install');
+    console.log('No LaTeX engine found. Run: node install-latex-engine.mjs');
   }
 
   const ok = ['installed', 'already-available', 'available'].includes(result.status);

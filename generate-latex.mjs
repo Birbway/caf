@@ -10,7 +10,7 @@
  * Default: validates career-ops template structure (from templates/cv-template.tex).
  * --compile-only: skip template validation; compile any user-owned .tex (latex-tex mode).
  *
- * Requires: a repo-local tectonic (`npm run latex:install`, see
+ * Requires: a repo-local tectonic (`node install-latex-engine.mjs`, see
  * install-latex-engine.mjs), or tectonic / pdflatex on PATH.
  */
 
@@ -24,7 +24,7 @@ import { validateFlags } from './lib/cli-flags.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 
-const INSTALL_HINT = 'npm run latex:install';
+const INSTALL_HINT = 'node install-latex-engine.mjs';
 
 const MIN_SECTIONS = 4;
 
