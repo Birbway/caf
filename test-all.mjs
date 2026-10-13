@@ -768,7 +768,18 @@ try {
       // Directories are materialised even when empty, which the old recursion
       // did by mkdir-ing before it read.
       onDir: (abs) => mkdirSync(mirror(abs), { recursive: true }),
-      onFile: (abs) => copyFileSync(abs, mirror(abs)),
+      // A file that is gone by the time it is copied was never part of the
+      // tree under test: the discovered suites run during this copy (#5146),
+      // and some keep a lock, a probe or a fixture in the checkout for a
+      // moment. The walk already passes over a directory that vanishes under
+      // it; anything else that goes wrong with a copy still stops the run.
+      onFile: (abs) => {
+        try {
+          copyFileSync(abs, mirror(abs));
+        } catch (err) {
+          if (err?.code !== 'ENOENT' || existsSync(abs)) throw err;
+        }
+      },
     });
   };
 
@@ -2190,9 +2201,11 @@ for (const f of skillEntrypoints) {
 // This asserts the opposite behaviour directly: invoked where git sees nothing,
 // the guard must exit non-zero.
 {
-  const probeDir = join(ROOT, '.tmp-coverage-guard-probe');
+  // Inside the repository, because the point is a directory git knows nothing
+  // about; under the scratch prefix, so that no walker reads the two scripts
+  // copied into it as part of the tree (#5146).
+  const probeDir = mkdtempSync(join(ROOT, `${SCRATCH_PREFIX}coverage-guard-probe-`));
   try {
-    mkdirSync(probeDir, { recursive: true });
     copyFileSync(join(ROOT, 'validate-system-paths-coverage.mjs'), join(probeDir, 'validate-system-paths-coverage.mjs'));
     copyFileSync(join(ROOT, 'update-system.mjs'), join(probeDir, 'update-system.mjs'));
     const probe = spawnSync(process.execPath, [join(probeDir, 'validate-system-paths-coverage.mjs')], {
@@ -2845,9 +2858,11 @@ if (/language:\s*\n(?:\s*#.*\n)*\s*output:\s*["']?en["']?/.test(profileExample))
 // (Windows core.autocrlf=true). Exercises the real read path: a CRLF fixture
 // is written to disk and read back through readTextLF, so stripping the
 // normalization out of readTextLF fails this check on every platform. The
-// fixture lives under ROOT because readFile resolves ROOT-relative paths.
+// fixture lives under ROOT because readFile resolves ROOT-relative paths, and
+// under the scratch prefix so that nothing walking the tree meanwhile reads it
+// (#5146).
 try {
-  const crlfGuardTmp = mkdtempSync(join(ROOT, 'crlf-guard-'));
+  const crlfGuardTmp = mkdtempSync(join(ROOT, `${SCRATCH_PREFIX}crlf-guard-`));
   try {
     writeFileSync(
       join(crlfGuardTmp, 'crlf-fixture.md'),
@@ -14530,7 +14545,10 @@ try {
 
   // Chromium blocks file:// subresources from setContent() pages (the page
   // stays at about:blank), so ./fonts refs must become data: URLs (#951).
-  const fontFile = readdirSync(join(ROOT, 'fonts')).find(f => f.endsWith('.woff2'));
+  // Not a `__…` name: tests/generate-pdf-font-cache.test.mjs keeps probe
+  // files called that in fonts/ while it runs, which can be during this
+  // section (#5146), and one of those is gone again a moment later.
+  const fontFile = readdirSync(join(ROOT, 'fonts')).find(f => f.endsWith('.woff2') && !f.startsWith('__'));
   const inlined = await inlineLocalFonts(
     `<style>@font-face { src: url('./fonts/${fontFile}') format('woff2'); }</style>`
   );
@@ -17535,7 +17553,7 @@ try {
   }
 
   // 4. Test doctor.mjs respects target directory or target override when CAREER_OPS_ROOT is set
-  const tempTarget = mkdtempSync(join(ROOT, 'co-temp-target-'));
+  const tempTarget = mkdtempSync(join(ROOT, `${SCRATCH_PREFIX}co-temp-target-`));
   // The override goes in the child's env, here and below, not in this
   // process's: nothing then has to be put back.
   try {
@@ -17562,7 +17580,7 @@ try {
   }
 
   // 5. Test normalize-statuses respects CAREER_OPS_ROOT and does not touch main repo tracker
-  const tempRoot = mkdtempSync(join(ROOT, 'co-temp-root-'));
+  const tempRoot = mkdtempSync(join(ROOT, `${SCRATCH_PREFIX}co-temp-root-`));
   const tempTrackerDir = join(tempRoot, 'data');
   mkdirSync(tempTrackerDir, { recursive: true });
   const tempTracker = join(tempTrackerDir, 'applications.md');
@@ -19419,7 +19437,7 @@ console.log('\n73. Gemini evaluator and encoding');
 
 let geminiTmp = null;
 try {
-  geminiTmp = mkdtempSync(join(ROOT, 'co-gemini-'));
+  geminiTmp = mkdtempSync(join(ROOT, `${SCRATCH_PREFIX}co-gemini-`));
   const configDir = join(geminiTmp, 'config');
   const modesDir = join(geminiTmp, 'modes', 'tr');
   mkdirSync(configDir, { recursive: true });
