@@ -210,8 +210,8 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
               acc.push(o);
             }
             setOffers([...acc]);
-            if ((ev.saved ?? 0) > 0) {
-              setAdded(new Set(acc.map((o) => o.url)));
+            if (ev.savedUrls && ev.savedUrls.length > 0) {
+              setAdded(new Set(ev.savedUrls));
             }
           }
           break;
@@ -260,7 +260,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     } catch (e) {
       aborted = isAbortError(e);
       sawError = aborted
-        ? "Discover was interrupted before the scan finished. Click Discover again."
+        ? "Discover was interrupted. Check Pipeline for saved matches before trying again."
         : e instanceof Error
           ? e.message
           : "stream error";

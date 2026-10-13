@@ -6,6 +6,7 @@ import { addOffersToPipeline } from "@/lib/core/pipeline";
 import { rootScript } from "@/lib/career-ops";
 import { parseExplorePatch, DEFAULT_FILTERS, type DiscoveredOffer, type ScanEvent } from "@/lib/explore";
 import { scannerMissingBody, SCANNER_MISSING_STATUS } from "@/lib/explore-error.mjs";
+import { urlsWritten } from "@/lib/explore-save.mjs";
 
 // Discovery is HTTP-bound across many ATS boards; give it room. It is FREE —
 // zero LLM tokens. The scanner child is --dry-run; this route persists matches
@@ -36,12 +37,13 @@ export async function POST(req: NextRequest) {
     else queued.push(obj);
   };
 
-  let persisted = false;
-  const persist = async (offers: DiscoveredOffer[]) => {
-    if (persisted || offers.length === 0) return 0;
-    persisted = true;
-    const result = await addOffersToPipeline(offers);
-    return result.added ?? 0;
+  let persistTask: Promise<string[]> | null = null;
+  const persist = (offers: DiscoveredOffer[]): Promise<string[]> => {
+    if (offers.length === 0) return Promise.resolve([]);
+    if (!persistTask) {
+      persistTask = addOffersToPipeline(offers).then((result) => urlsWritten(offers, result));
+    }
+    return persistTask;
   };
 
   // Start the scanner when the POST arrives, not when the stream is pulled.
@@ -63,13 +65,13 @@ export async function POST(req: NextRequest) {
       queued.length = 0;
       void offersPromise
         .then(async (offers) => {
-          let saved = 0;
+          let savedUrls: string[] = [];
           try {
-            saved = await persist(offers);
+            savedUrls = await persist(offers);
           } catch (err) {
             send({ kind: "error", message: err instanceof Error ? err.message : "could not save matches" } satisfies ScanEvent);
           }
-          send({ kind: "done", count: offers.length, offers, saved, cost: { tokens: 0, usd: 0 } } satisfies ScanEvent);
+          send({ kind: "done", count: offers.length, offers, saved: savedUrls.length, savedUrls, cost: { tokens: 0, usd: 0 } } satisfies ScanEvent);
           try {
             controller.close();
           } catch {
