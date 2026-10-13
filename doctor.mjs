@@ -713,6 +713,8 @@ const USER_LAYER_PREREQS = [
   },
 ];
 
+const CLI_NAMES = 'claude, codex, gemini, opencode, qwen, agy or grok';
+
 // The lane variables (CAREER_OPS_PORTALS, CAREER_OPS_PIPELINE) move one file
 // out of the data root, and the scanner reads them (path-resolver.mjs), so
 // doctor has to look where a scan would.
@@ -1037,7 +1039,14 @@ async function main() {
     process.exit(1);
   } else {
     const warnNote = warnings > 0 ? ` (${warnings} warning${warnings === 1 ? '' : 's'} — see above)` : '';
-    console.log(`Result: All checks passed${warnNote}. You're ready to go! Run \`claude\` (or \`opencode\`) to start.`);
+    const setupMissing = USER_LAYER_PREREQS.filter((prereq) => !prereqPresent(projectRoot, prereq));
+    if (setupMissing.length > 0) {
+      const n = setupMissing.length;
+      console.log(`Result: Your tools are ready, but setup is not finished (${n} file${n === 1 ? '' : 's'} missing: ${setupMissing.map(({ path }) => path).join(', ')}).`);
+      console.log(`Open your AI CLI in this folder (${CLI_NAMES}) and it walks you through setup by chatting.`);
+    } else {
+      console.log(`Result: All checks passed${warnNote}. You're ready to go! Open your AI CLI in this folder (${CLI_NAMES}) to start.`);
+    }
     console.log('');
     console.log('Join the community: https://discord.gg/8pRpHETxa4');
     console.log('Read the manifesto: `npm run manifesto` — a new way of job searching is taking shape, and you are now part of it.');
@@ -1108,6 +1117,8 @@ function unpersonalizedFiles(root) {
 }
 
 function checkPersonalization(root) {
+  const absent = PERSONALIZATION_FILES.filter(({ path }) => !existsSync(join(root, ...path.split('/'))));
+  if (absent.length === PERSONALIZATION_FILES.length) return null;
   const stale = unpersonalizedFiles(root);
   if (stale.length === 0) {
     return { label: 'Personalization files customized', pass: true };
