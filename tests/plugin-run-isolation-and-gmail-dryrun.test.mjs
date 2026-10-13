@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -74,18 +74,20 @@ test('gmail plugin gates saveProcessedIds behind !ctx.dryRun (#2354)', async () 
     log: () => {},
   };
   
-  // Create a known state file with a non-empty cursor
-  const statePath = join(ROOT, 'data', 'gmail-state.json');
-  const oldState = existsSync(statePath) ? readFileSync(statePath) : null;
-  mkdirSync(join(ROOT, 'data'), { recursive: true });
+  // Create a known state file with a non-empty cursor, under a data root of its
+  // own: the plugin resolves the cursor against ctx.dataRoot, and the checkout's
+  // data/ is the developer's real state.
+  const dataRoot = mkdtempSync(join(tmpdir(), 'co-gmail-dryrun-'));
+  const statePath = join(dataRoot, 'data', 'gmail-state.json');
+  mkdirSync(join(dataRoot, 'data'), { recursive: true });
   const preTestContent = JSON.stringify(['existing-123']);
   writeFileSync(statePath, preTestContent);
-  
+
   const origWarn = console.warn;
   try {
     // Run the ingest logic (suppress expected spoof warning)
     console.warn = () => {};
-    await gmailMod.default.ingest(mockCtx);
+    await gmailMod.default.ingest({ ...mockCtx, dataRoot });
     
     const newState = readFileSync(statePath, 'utf8');
     if (newState === preTestContent) {
@@ -95,9 +97,8 @@ test('gmail plugin gates saveProcessedIds behind !ctx.dryRun (#2354)', async () 
       assert.fail('gmail plugin calls saveProcessedIds unconditionally — dry-run mutates cursor state (#2354)');
     }
   } finally {
-    // Always restore console and file state
+    // Always restore console and remove the fixture
     console.warn = origWarn;
-    if (oldState !== null) writeFileSync(statePath, oldState);
-    else rmSync(statePath, { force: true });
+    try { rmSync(dataRoot, { recursive: true, force: true }); } catch {}
   }
 });
