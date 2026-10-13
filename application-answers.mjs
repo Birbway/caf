@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { localToday } from './lib/local-today.mjs';
-
+import { validateFlags } from './lib/cli-flags.mjs';
 export const APPLICATION_ANSWERS_HEADING = '## Application Answers';
 
 const VALID_STATES = new Set(['filled', 'submitted']);
@@ -477,7 +477,21 @@ export function upsertApplicationAnswersSection(reportText, snapshot = {}) {
   return [before, section, after].filter(Boolean).join('\n\n') + '\n';
 }
 
+const KNOWN_FLAGS = [
+  '--help',
+  '-h',
+  '--read',
+  '--read-draft',
+  '--strict',
+  '--report',
+  '--input',
+  '--state',
+  '--date',
+];
+
 function parseArgs(argv) {
+  validateFlags(argv, KNOWN_FLAGS, usage());
+
   const args = {};
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
