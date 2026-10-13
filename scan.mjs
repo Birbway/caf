@@ -2291,6 +2291,10 @@ function isRoleLocationSuffix(tag) {
   return false;
 }
 
+// "(m/w/d)", "(f/m/x)", "(H/F)", "(all genders)": the letter order differs by
+// board, and the tag never tells two roles apart.
+const ROLE_GENDER_TAG_RE = /^(?:[mwfdxh](?:\s*\/\s*(?:[mwfdxh]|div|divers)){1,3}|all genders?)$/;
+
 /**
  * Normalize a role title for stable scan-time duplicate identity.
  *
@@ -2325,7 +2329,7 @@ export function normalizeRoleForDedup(role) {
   while (true) {
     // Bracketed: "Engineering Manager (Remote)", "… [US]".
     const bracketed = title.match(/\s*[\[(]([^[\]()]+)[\])]\s*$/);
-    if (bracketed && isRoleLocationSuffix(bracketed[1])) {
+    if (bracketed && (isRoleLocationSuffix(bracketed[1]) || ROLE_GENDER_TAG_RE.test(bracketed[1].trim()))) {
       title = title.slice(0, bracketed.index).trimEnd();
       continue;
     }
