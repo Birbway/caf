@@ -21,6 +21,7 @@
     "merge": "node merge-tracker.mjs",
     "reconcile": "node reconcile-pipeline.mjs",
     "pdf": "node generate-pdf.mjs",
+    "latex:install": "node install-latex-engine.mjs",
     "jd:similarity": "node jd-similarity.mjs",
     "img-to-pdf": "node img-to-pdf.mjs",
     "cover-letter": "node generate-cover-letter.mjs --payload",

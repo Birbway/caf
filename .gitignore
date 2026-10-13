@@ -266,3 +266,7 @@ data/jds/
 data/output/
 data/documents/
 data/interview-prep/
+
+# Repo-local LaTeX engine placed by install-latex-engine.mjs (npm run latex:install)
+/tectonic
+/tectonic.exe
