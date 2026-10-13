@@ -1785,18 +1785,26 @@ describe('#3516: tracker URL cell as a markdown link', () => {
       ['backslash', 'https://example.com/jobs/a\\b', false],
       ['balanced parens', 'https://example.com/jobs/eng(remote)', true],
     ];
-    for (const [name, url, shouldLink] of cases) {
-      const sb = makeSandbox(trackerWith(SEED_ACME), { '2-globex.tsv': tsvRow(2, 'Globex', 'Manager', '4.5/5', name, url) });
-      try {
-        const res = await merge(sb);
-        const written = urlCellOf(sb, 'Globex');
-        assert.equal(res.code, 0, `${name}: ${res.stdout}`);
+    const additions = {};
+    for (let i = 0; i < cases.length; i++) {
+      const [name, url] = cases[i];
+      const comp = `Globex${i}`;
+      additions[`${i + 2}-${comp.toLowerCase()}.tsv`] = tsvRow(i + 2, comp, 'Manager', '4.5/5', name, url);
+    }
+    const sb = makeSandbox(trackerWith(SEED_ACME), additions);
+    try {
+      const res = await merge(sb);
+      assert.equal(res.code, 0, res.stdout);
+      for (let i = 0; i < cases.length; i++) {
+        const [name, url, shouldLink] = cases[i];
+        const comp = `Globex${i}`;
+        const written = urlCellOf(sb, comp);
         assert.notEqual(normalizeUrl(url), '', name);
         assert.equal(keyOf(written), normalizeUrl(url), `${name}: wrote ${JSON.stringify(written)}`);
         assert.equal(/^\[[^\]]*\]\(/.test(written), shouldLink, `${name}: wrote ${JSON.stringify(written)}`);
-      } finally {
-        removeSandbox(sb);
       }
+    } finally {
+      removeSandbox(sb);
     }
   });
 

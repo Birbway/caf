@@ -27,10 +27,10 @@
  * Run: node invite-match.mjs < invite.txt          (JSON to stdout)
  *      node invite-match.mjs --file invite.txt
  *      echo "..." | node invite-match.mjs --summary
- *      node invite-match.mjs --apply [--id N]      (rejection-classified matches only; advances status to Rejected)
+ *      node invite-match.mjs --apply [--id N]      (advances status to Interview or Rejected based on classification)
  *      node invite-match.mjs --self-test
  *
- * Issue #1495, #2098 — github.com/career-ops-hq/career-ops
+ * Issue #1495, #1960, #2098 — github.com/career-ops-hq/career-ops
  */
 
 import { readFileSync, existsSync } from 'fs';
@@ -66,7 +66,7 @@ const USAGE = `Usage:
   node invite-match.mjs < invite.txt          # JSON to stdout
   node invite-match.mjs --file invite.txt     # read invite text from a file
   node invite-match.mjs --summary             # human-readable summary instead of JSON
-  node invite-match.mjs --apply [--id N]      # rejection-classified matches only; advances status to Rejected
+  node invite-match.mjs --apply [--id N]      # advances status to Interview or Rejected based on classification
   node invite-match.mjs --self-test           # run the built-in self-test suite
   node invite-match.mjs --help                # print this usage block and exit
   node invite-match.mjs -h                    # same as --help`;
@@ -304,28 +304,117 @@ export function extractCompany(text) {
   return null;
 }
 
+const SCHEDULE_DATE_PATTERNS = [
+  /(?:interview|round|screen|session|call|chat|meeting)\s+(?:scheduled\s+)?(?:for|on|at|is\s+on)\s+([^\n\r;]{1,60})/i,
+  /scheduled\s+(?:our\s+)?(?:interview|call|conversation|meeting|chat\s+)?(?:for|on)\s+([^\n\r;]{1,60})/i,
+  /see\s+you\s+(?:on\s+)?([^\n\r;]{1,60})/i,
+  /(?:speaking|meeting|chatting)\s+(?:with\s+[^\n,;]+\s+)?(?:on\s+)([^\n\r;]{1,60})/i,
+  /confirmed\s+for\s+([^\n\r;]{1,60})/i,
+  /(?:interview|appointment)\s+date\s*[:\-]\s*([^\n\r;]{1,60})/i,
+  /(?:date\s+(?:and|&)\s+time|time\s+(?:and|&)\s+date)\s*[:\-]\s*([^\n\r;]{1,60})/i,
+  /(?:taking\s+place|holding)\s+on\s+([^\n\r;]{1,60})/i,
+  /look(?:ing)?\s+forward\s+to\s+(?:meeting|speaking|interviewing|seeing\s+you)\s+(?:on\s+)?([^\n\r;]{1,60})/i,
+];
+
+function parseIsoOrNamedDate(str) {
+  if (!str) return null;
+  const iso = str.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  if (iso) return iso[0];
+
+  const months = 'January|February|March|April|May|June|July|August|September|October|November|December';
+  const named1 = str.match(new RegExp(`\\b(${months})\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(\\d{4})\\b`, 'i'));
+  if (named1) {
+    const monthIdx = new Date(`${named1[1]} 1, 2000`).getMonth() + 1;
+    const day = String(named1[2]).padStart(2, '0');
+    const month = String(monthIdx).padStart(2, '0');
+    return `${named1[3]}-${month}-${day}`;
+  }
+  const named2 = str.match(new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${months}),?\\s+(\\d{4})\\b`, 'i'));
+  if (named2) {
+    const monthIdx = new Date(`${named2[2]} 1, 2000`).getMonth() + 1;
+    const day = String(named2[1]).padStart(2, '0');
+    const month = String(monthIdx).padStart(2, '0');
+    return `${named2[3]}-${month}-${day}`;
+  }
+  return null;
+}
+
 /**
- * Best-effort extraction of a date mentioned in the invite (interview date,
- * not necessarily the email send date). Only matches unambiguous ISO or
- * "Month D, YYYY" forms — anything else is left for the human to read.
+ * Best-effort extraction of an interview date from raw pasted invite text (#1960).
+ * Strips email header lines (`Sent:`, `Date:`, `From:`, `Subject:`, etc.) and
+ * requires the date to be anchored to an interview or scheduling phrase — never
+ * captures the email's sent date or arbitrary application dates.
+ * Accepts ISO YYYY-MM-DD or Month D, YYYY forms. Returns null when absent or ambiguous.
  *
  * @param {string} text
  * @returns {string|null} YYYY-MM-DD or null.
  */
 export function extractDate(text) {
   if (!text) return null;
-  const iso = text.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
-  if (iso) return iso[0];
+  const stripped = text
+    .replace(/^(?:sent|date|received|from|to|subject|cc|bcc)\s*:[^\n]*/gim, '')
+    .replace(/^on\s+[^\n]+wrote:\s*$/gim, '');
 
-  const months = 'January|February|March|April|May|June|July|August|September|October|November|December';
-  const named = text.match(new RegExp(`\\b(${months})\\s+(\\d{1,2}),?\\s+(\\d{4})\\b`, 'i'));
-  if (named) {
-    const monthIdx = new Date(`${named[1]} 1, 2000`).getMonth() + 1;
-    const day = String(named[2]).padStart(2, '0');
-    const month = String(monthIdx).padStart(2, '0');
-    return `${named[3]}-${month}-${day}`;
+  for (const pat of SCHEDULE_DATE_PATTERNS) {
+    const m = stripped.match(pat);
+    if (m && m[1]) {
+      const d = parseIsoOrNamedDate(m[1]);
+      if (d) return d;
+    }
   }
   return null;
+}
+
+const INTERVIEWER_PATTERNS = [
+  /(?:^|\n)\s*interviewers?(?:\(s\))?\s*[:\-]\s*([^\n\r;]+)/i,
+  /(?:^|\n)\s*(?:speaking|meeting|chatting)\s+with\s*[:\-]\s*([^\n\r;]+)/i,
+  /\b(?:you(?:'ll| will)? be )?(?:speaking|meeting|chatting)\s+with\s+([\p{Lu}\p{Lo}][\p{L}\p{M}' -]{1,40}?)(?:[.,\n\r]|\s+(?:from|at|on|via|regarding|about|to)\s|$)/iu,
+  /\binterview(?:ing)?\s+with\s+([\p{Lu}\p{Lo}][\p{L}\p{M}' -]{1,40}?)\s+(?:at|from)\s+[\p{Lu}\p{Lo}]/iu,
+];
+
+const NON_INTERVIEWER_WORDS = new Set([
+  'us', 'me', 'our team', 'the team', 'the hiring team', 'the interview panel',
+  'the recruiter', 'a recruiter', 'someone', 'everyone', 'hr', 'talent acquisition',
+]);
+
+/**
+ * Best-effort extraction of an interviewer name from raw invite email text (#1960).
+ * Only returns plausible person names; returns null if nothing plausible is found.
+ *
+ * @param {string} text - Raw pasted invite email text.
+ * @param {string|null} [company] - Extracted company name to prevent false matches.
+ * @returns {string|null}
+ */
+export function extractInterviewer(text, company = null) {
+  if (!text) return null;
+  const compNorm = company ? company.toLowerCase().trim() : null;
+  for (const pattern of INTERVIEWER_PATTERNS) {
+    const m = text.match(pattern);
+    if (m && m[1]) {
+      const candidate = m[1].trim().replace(/[.,;:]+$/, '');
+      if (candidate.length >= 2 && candidate.length <= 50) {
+        const lower = candidate.toLowerCase();
+        if (NON_INTERVIEWER_WORDS.has(lower)) continue;
+        if (compNorm && (lower === compNorm || lower.includes(compNorm))) continue;
+        return candidate;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Format the note text to record in the tracker row for an Interview transition (#1960).
+ *
+ * @param {{date?: string|null, interviewer?: string|null}} [signals]
+ * @returns {string}
+ */
+export function formatInviteNote(signals = {}) {
+  const { date, interviewer } = signals;
+  if (date && interviewer) return `Interview: ${date} with ${interviewer}`;
+  if (date) return `Interview: ${date}`;
+  if (interviewer) return `Interview with ${interviewer}`;
+  return 'Interview scheduled';
 }
 
 // The req branch's optional `id` carries its own leading `\s*` INSIDE the
@@ -597,20 +686,25 @@ const REJECTION_PHRASES_WEAK = [
   'unable to offer you',
 ];
 
-// Phrasings that suggest an interview invite. Mirrors the rejection phrase
-// lists above for
-// the opposite case; extractCompany's own patterns already do the real work
-// of the invite path, so this list exists purely for classification.
-const INVITE_PHRASES = [
+// Strong-tier interview invite phrasings: unambiguous ATS or recruiter
+// invite language that clearly indicates an interview invitation.
+const INVITE_PHRASES_STRONG = [
   'schedule your phone screen',
   'schedule your interview',
-  'phone screen',
-  'interviewing with',
-  'interview with',
-  'would like to invite you',
   'invite you to interview',
+  'would like to invite you',
+  'invite you to schedule',
+  'invitation to interview',
   'next steps in the interview process',
   'move you forward to the next round',
+  'interviewing with',
+  'interview with',
+];
+
+// Weak / generic scheduling phrasings: plausible in coffee chats, sales calls,
+// or generic calendar bookings. Only classifies as weak invite.
+const INVITE_PHRASES_WEAK = [
+  'phone screen',
   'like to set up a time',
   'like to set up a call',
   'book a time',
@@ -619,8 +713,7 @@ const INVITE_PHRASES = [
 /**
  * Classify pasted email text as `invite`, `rejection`, or `unknown`, and
  * report which phrase(s) drove the call — so a human/agent can sanity-check
- * a `rejection` classification before `--apply` performs its irreversible
- * tracker write (#2098, CodeRabbit review on PR #2100).
+ * a classification before `--apply` performs its tracker write (#2098, #1960).
  *
  * Rejection requires either a strong phrase (unambiguous on its own) or two
  * distinct corroborating-only phrases together — a single corroborating-only
@@ -634,11 +727,11 @@ const INVITE_PHRASES = [
  * classified `rejection`: that language is the more decisive signal of the
  * two, and it is also the only classification the --apply path acts on.
  *
- * `phraseStrength` reports whether a `rejection` classification was driven by
- * a strong (unambiguous-on-its-own) phrase or only by weak corroborating
- * phrases — the `--apply` confidence gate on a sole fuzzy-matched candidate
- * requires `'strong'` before auto-writing Rejected (#2100 CodeRabbit review,
- * see selectApplyTarget()). `null` for non-`rejection` classifications.
+ * `phraseStrength` reports whether a `rejection` or `invite` classification was
+ * driven by a strong (unambiguous-on-its-own) phrase or only by weak
+ * corroborating phrases — the `--apply` confidence gate on a sole candidate
+ * requires `'strong'` before auto-writing (#2100 CodeRabbit review, see
+ * selectApplyTarget()). `null` for `unknown` classifications.
  *
  * @param {string} text - Raw pasted email text.
  * @returns {{classification: 'invite'|'rejection'|'unknown', matchedPhrases: string[], phraseStrength: 'strong'|'weak'|null}}
@@ -658,8 +751,17 @@ export function classifyEmail(text) {
     };
   }
 
-  const inviteMatches = INVITE_PHRASES.filter(p => lower.includes(p));
-  if (inviteMatches.length > 0) return { classification: 'invite', matchedPhrases: inviteMatches, phraseStrength: null };
+  const strongInviteMatches = INVITE_PHRASES_STRONG.filter(p => new RegExp(`\\b${p}\\b`, 'i').test(text));
+  const weakInviteMatches = INVITE_PHRASES_WEAK.filter(p => new RegExp(`\\b${p}\\b`, 'i').test(text));
+  const isStrongInvite = strongInviteMatches.length > 0;
+  const isInvite = isStrongInvite || weakInviteMatches.length > 0;
+  if (isInvite) {
+    return {
+      classification: 'invite',
+      matchedPhrases: [...strongInviteMatches, ...weakInviteMatches],
+      phraseStrength: isStrongInvite ? 'strong' : 'weak',
+    };
+  }
 
   return { classification: 'unknown', matchedPhrases: [], phraseStrength: null };
 }
@@ -758,9 +860,11 @@ export function matchInvite(signals, trackerRows) {
  * @returns {{signals: object, classification: 'invite'|'rejection'|'unknown', matchedPhrases: string[], phraseStrength: 'strong'|'weak'|null, candidates: Array<object>}}
  */
 export function analyzeInvite(text, trackerRows = null) {
+  const company = extractCompany(text);
   const signals = {
-    company: extractCompany(text),
+    company,
     date: extractDate(text),
+    interviewer: extractInterviewer(text, company),
     reqId: extractReqId(text),
     platform: extractPlatform(text),
     // Additive field (#2673) — does not change the shape of any existing
@@ -775,24 +879,29 @@ export function analyzeInvite(text, trackerRows = null) {
 }
 
 /**
- * Advance a single tracker row's status to Rejected, reusing set-status.mjs
- * as a subprocess — the canonical, locked, atomic write path (#2098) — rather
- * than duplicating its row-rewrite/locking logic here. set-status.mjs already
- * imports its atomic-write and locking primitives from tracker-utils.mjs.
+ * Advance a single tracker row's status via set-status.mjs as a subprocess
+ * — the canonical, locked, atomic write path (#2098, #1960).
  *
  * Never call this on an ambiguous match — the CLI layer below is responsible
  * for confirming a single confident candidate (or an explicit --id) before
  * reaching this function.
  *
  * @param {number} appNumber - Tracker # to update (must be unambiguous).
- * @param {{appsFile?: string}} [options] - appsFile overrides CAREER_OPS_TRACKER for the child process (tests only).
+ * @param {string} newStatus - Target status ('Rejected', 'Interview', etc.).
+ * @param {{appsFile?: string, note?: string}} [options] - appsFile overrides CAREER_OPS_TRACKER for the child process (tests only).
  * @returns {object} set-status.mjs's own --json result (or its structured error).
  */
-export function applyRejectionStatus(appNumber, options = {}) {
+export function applyStatusUpdate(appNumber, newStatus, options = {}) {
   const scriptPath = join(CAREER_OPS_CODE_ROOT, 'set-status.mjs');
   const env = options.appsFile ? { ...process.env, CAREER_OPS_TRACKER: options.appsFile } : process.env;
+  const cmdArgs = [scriptPath, String(appNumber), newStatus];
+  if (options.note !== undefined && options.note !== null && options.note !== '') {
+    cmdArgs.push('--note', options.note);
+  }
+  cmdArgs.push('--json');
+
   try {
-    const out = execFileSync(process.execPath, [scriptPath, String(appNumber), 'Rejected', '--json'], {
+    const out = execFileSync(process.execPath, cmdArgs, {
       encoding: 'utf-8', env,
       // Capture the child's stderr instead of letting execFileSync's default
       // inherit it. set-status.mjs's failWith writes the machine payload to
@@ -822,25 +931,53 @@ export function applyRejectionStatus(appNumber, options = {}) {
 }
 
 /**
+ * Advance a single tracker row's status to Rejected, reusing set-status.mjs
+ * via applyStatusUpdate() — the canonical, locked, atomic write path (#2098).
+ *
+ * @param {number} appNumber - Tracker # to update (must be unambiguous).
+ * @param {{appsFile?: string}} [options] - appsFile overrides CAREER_OPS_TRACKER for the child process (tests only).
+ * @returns {object} set-status.mjs's own --json result (or its structured error).
+ */
+export function applyRejectionStatus(appNumber, options = {}) {
+  return applyStatusUpdate(appNumber, 'Rejected', options);
+}
+
+/**
+ * Advance a single tracker row's status to Interview, recording the interview
+ * date and interviewer in the notes column via applyStatusUpdate() (#2098, #1960).
+ *
+ * @param {number} appNumber - Tracker # to update (must be unambiguous).
+ * @param {object} [signals] - Extracted signals {date, interviewer, ...}.
+ * @param {{appsFile?: string, note?: string}} [options] - appsFile overrides CAREER_OPS_TRACKER for the child process (tests only).
+ * @returns {object} set-status.mjs's own --json result (or its structured error).
+ */
+export function applyInviteStatus(appNumber, signals = {}, options = {}) {
+  const note = options.note !== undefined ? options.note : formatInviteNote(signals);
+  return applyStatusUpdate(appNumber, 'Interview', { ...options, note });
+}
+
+const CLOSED_STATUSES = new Set(['rejected', 'discarded', 'skip']);
+
+/**
  * Decide which (if any) candidate `--apply` should act on, given an
  * `analyzeInvite()` result and an optional `--id` override. Pure decision
  * logic, no I/O — pulled out of the CLI block so tests can drive every
  * branch directly (#2100 CodeRabbit review nitpick: this branch logic had no
  * direct test coverage).
  *
- * The single-candidate auto-select branch additionally requires a confidence
- * gate: the sole candidate is only auto-applied when it is an exact/confirmed
- * company-name match (`nameScore === 1`) AND the classification is backed by
- * a strong rejection phrase (`phraseStrength === 'strong'`), not just a weak
- * corroborating one. `matchInvite`'s fuzzy token-overlap scoring can return a
- * single low-confidence candidate for a loosely-worded company name — a
- * false auto-apply off a match that weak is the unsafe direction, since
- * `--apply` performs an irreversible tracker write (#2100 CodeRabbit review,
- * major finding on the old line 768-769 unconditional sole-candidate
- * selection). A sole candidate that clears "one row matched" but not this
- * confidence bar falls back to requiring an explicit `--id`.
+ * The single-candidate auto-select branch additionally requires confidence
+ * and safety gates:
+ *   - For rejection: requires exact company match (`nameScore === 1`) AND strong
+ *     rejection phrase (`phraseStrength === 'strong'`).
+ *   - For invite: requires exact company match (`nameScore === 1`) AND strong
+ *     invite phrase (`phraseStrength === 'strong'`) AND an actionable (non-closed)
+ *     status — closed rows (`Rejected`, `Discarded`, `Skip`) must not be reopened
+ *     automatically, requiring an explicit `--id` override (#5016).
  *
- * @param {{candidates: Array<object>, phraseStrength: 'strong'|'weak'|null}} result - analyzeInvite() output.
+ * A sole candidate that clears "one row matched" but not these confidence bars
+ * falls back to requiring an explicit `--id`.
+ *
+ * @param {{candidates: Array<object>, phraseStrength: 'strong'|'weak'|null, classification?: string}} result - analyzeInvite() output.
  * @param {number|null} idArg - Parsed --id value, or null if not passed.
  * @returns {{target: object}|{error: string, code: number, candidate?: object, candidates?: Array<object>}}
  */
@@ -863,6 +1000,21 @@ export function selectApplyTarget(result, idArg) {
   if (result.candidates.length === 1) {
     const sole = result.candidates[0];
     const isExactCompanyMatch = sole.nameScore === 1;
+    if (result.classification === 'invite') {
+      const isStrongInvite = result.phraseStrength === 'strong';
+      const isClosed = typeof sole.status === 'string' && CLOSED_STATUSES.has(sole.status.toLowerCase().trim());
+      const isActionable = Boolean(sole.status && !isClosed);
+      if (isExactCompanyMatch && isStrongInvite && isActionable) {
+        return { target: sole };
+      }
+      return {
+        error: `invite-match: sole candidate #${sole.appNumber} did not meet the confidence bar for auto-apply `
+          + `(exact company match: ${isExactCompanyMatch}, strong invite phrase: ${isStrongInvite}, actionable status: ${isActionable}) — `
+          + `re-run with --id ${sole.appNumber} to confirm explicitly.`,
+        code: 2,
+        candidate: sole,
+      };
+    }
     const isStrongRejection = result.phraseStrength === 'strong';
     if (isExactCompanyMatch && isStrongRejection) {
       return { target: sole };
@@ -894,6 +1046,7 @@ function printSummary(result) {
   console.log(`  Matched phrase(s):  ${result.matchedPhrases && result.matchedPhrases.length ? result.matchedPhrases.join(', ') : '(none)'}`);
   console.log(`  Extracted company:  ${result.signals.company || '(not found)'}`);
   console.log(`  Extracted date:     ${result.signals.date || '(not found)'}`);
+  console.log(`  Extracted interviewer: ${result.signals.interviewer || '(not found)'}`);
   console.log(`  Extracted req ID:   ${result.signals.reqId || '(not found)'}`);
   console.log(`  Extracted platform: ${result.signals.platform || '(not found)'}\n`);
 
@@ -981,6 +1134,9 @@ function runSelfTest() {
   check(extractDate('Interview scheduled for 2026-07-09 at 4pm') === '2026-07-09', 'extracts ISO date');
   check(extractDate('See you on July 9, 2026') === '2026-07-09', 'extracts named-month date');
   check(extractDate('no date mentioned') === null, 'returns null when no date is present');
+  check(extractDate('Sent: 2026-06-01\nDate: 2026-06-01\nInterview scheduled for 2026-06-20') === '2026-06-20', 'extracts interview date ignoring email Sent/Date headers');
+  check(extractDate('Sent: 2026-06-01\nPlease use the link to schedule your call: https://example.com') === null, 'returns null for date-less invite with email header');
+  check(extractDate('Thank you for applying on 2026-05-15. Would love to chat!') === null, 'application date is not misidentified as interview schedule date');
 
   // --- extractReqId ---
   check(extractReqId('Req ID: R260013984') === 'R260013984', 'extracts "Req ID:" token');
@@ -1139,7 +1295,8 @@ function runSelfTest() {
 
   // --- classifyEmail phraseStrength (#2100 CodeRabbit major finding follow-up) ---
   check(classifyEmail('We are sorry to inform you that we have decided not to move forward with your application.').phraseStrength === 'strong', 'a strong rejection phrase reports phraseStrength "strong"');
-  check(classifyEmail('We would like to invite you to schedule your phone screen.').phraseStrength === null, 'an invite classification reports phraseStrength null');
+  check(classifyEmail('We would like to invite you to schedule your phone screen.').phraseStrength === 'strong', 'a strong invite phrase reports phraseStrength "strong"');
+  check(classifyEmail('Please book a time to speak with our team.').phraseStrength === 'weak', 'a weak invite phrase reports phraseStrength "weak"');
   check(classifyEmail('Thanks for your recent purchase.').phraseStrength === null, 'an unknown classification reports phraseStrength null');
 
   // --- maintainer finding, PR #2100 review comment 2026-08-07: strong-tier
@@ -1233,6 +1390,59 @@ function runSelfTest() {
   check(!!ambiguousSelection.error && ambiguousSelection.code === 3, 'selectApplyTarget refuses with code 3 when multiple candidates matched');
   check(Array.isArray(ambiguousSelection.candidates) && ambiguousSelection.candidates.length === 2, 'selectApplyTarget exposes the ranked candidate list on an ambiguous refusal');
 
+  // --- extractInterviewer & formatInviteNote (#1960) ---
+  check(extractInterviewer('Interviewer: Jane Doe') === 'Jane Doe', 'extractInterviewer parses "Interviewer: Name"');
+  check(extractInterviewer('Speaking with: Bob Smith') === 'Bob Smith', 'extractInterviewer parses "Speaking with: Name"');
+  check(extractInterviewer('You will be speaking with Sarah Connor on Tuesday') === 'Sarah Connor', 'extractInterviewer parses conversational "speaking with Name"');
+  check(extractInterviewer('Interviewer: René Descartes') === 'René Descartes', 'extractInterviewer preserves accented characters in names');
+  check(extractInterviewer('Your interview with Acme Corp on Monday', 'Acme Corp') === null, 'extractInterviewer avoids matching the company name');
+  check(extractInterviewer('Looking forward to speaking with the team') === null, 'extractInterviewer filters out generic non-person phrases');
+
+  check(formatInviteNote({ date: '2026-06-15', interviewer: 'Jane Doe' }) === 'Interview: 2026-06-15 with Jane Doe', 'formatInviteNote combines date and interviewer');
+  check(formatInviteNote({ date: '2026-06-15', interviewer: null }) === 'Interview: 2026-06-15', 'formatInviteNote formats date-only note');
+  check(formatInviteNote({ date: null, interviewer: 'Jane Doe' }) === 'Interview with Jane Doe', 'formatInviteNote formats interviewer-only note');
+  check(formatInviteNote({}) === 'Interview scheduled', 'formatInviteNote fallback when neither date nor interviewer present');
+
+  // --- selectApplyTarget invite branch (#1960, #5016) ---
+  const inviteExactSelection = selectApplyTarget(
+    { candidates: [{ appNumber: 701, nameScore: 1, status: 'Applied' }], classification: 'invite', phraseStrength: 'strong' },
+    null
+  );
+  check(!inviteExactSelection.error && inviteExactSelection.target.appNumber === 701, 'selectApplyTarget auto-applies a sole exact-company candidate for invite classification');
+
+  // Closed status refusal (#5016)
+  const inviteClosedSelection = selectApplyTarget(
+    { candidates: [{ appNumber: 701, nameScore: 1, status: 'Rejected' }], classification: 'invite', phraseStrength: 'strong' },
+    null
+  );
+  check(!!inviteClosedSelection.error && inviteClosedSelection.code === 2, 'selectApplyTarget refuses to auto-apply an invite to a closed (Rejected) tracker row');
+
+  const inviteDiscardedSelection = selectApplyTarget(
+    { candidates: [{ appNumber: 701, nameScore: 1, status: 'Discarded' }], classification: 'invite', phraseStrength: 'strong' },
+    null
+  );
+  check(!!inviteDiscardedSelection.error && inviteDiscardedSelection.code === 2, 'selectApplyTarget refuses to auto-apply an invite to a Discarded tracker row');
+
+  // Weak phrase strength refusal (#5016)
+  const inviteWeakSelection = selectApplyTarget(
+    { candidates: [{ appNumber: 701, nameScore: 1, status: 'Applied' }], classification: 'invite', phraseStrength: 'weak' },
+    null
+  );
+  check(!!inviteWeakSelection.error && inviteWeakSelection.code === 2, 'selectApplyTarget refuses to auto-apply an invite with only weak phrase strength');
+
+  const inviteFuzzySelection = selectApplyTarget(
+    { candidates: [{ appNumber: 702, nameScore: 0.5, status: 'Applied' }], classification: 'invite', phraseStrength: 'strong' },
+    null
+  );
+  check(!!inviteFuzzySelection.error && inviteFuzzySelection.code === 2, 'selectApplyTarget refuses to auto-apply a sole fuzzy candidate for invite classification');
+  check(inviteFuzzySelection.candidate && inviteFuzzySelection.candidate.appNumber === 702, 'selectApplyTarget exposes candidate on fuzzy invite refusal');
+
+  const inviteIdSelection = selectApplyTarget(
+    { candidates: [{ appNumber: 702, nameScore: 0.5, status: 'Rejected' }], classification: 'invite', phraseStrength: 'weak' },
+    702
+  );
+  check(!inviteIdSelection.error && inviteIdSelection.target.appNumber === 702, 'selectApplyTarget honors explicit --id for invite classification even on closed row with weak phrase');
+
   console.log(`\n  invite-match self-test: ${pass} passed, ${fail} failed\n`);
   process.exit(fail > 0 ? 1 : 0);
 }
@@ -1256,11 +1466,11 @@ if (isMainModule(import.meta.url)) {
     const result = analyzeInvite(text);
 
     if (applyMode) {
-      // Scoped strictly to the Rejected transition (#2098) — never applies
-      // for an invite/unknown classification, and never for an ambiguous
+      // Scoped to Interview (for invites) and Rejected (for rejections) (#2098, #1960).
+      // Never applies for unknown classification, and never for an ambiguous
       // match unless the caller disambiguates with --id.
-      if (result.classification !== 'rejection') {
-        console.error(`invite-match: --apply only applies the Rejected transition, but this text classified as "${result.classification}" — not applying.`);
+      if (result.classification !== 'rejection' && result.classification !== 'invite') {
+        console.error(`invite-match: --apply only applies to invite or rejection classifications, but this text classified as "${result.classification}" — not applying.`);
         if (summaryMode) printSummary(result); else console.log(JSON.stringify(result, null, 2));
         process.exit(1);
       }
@@ -1285,7 +1495,9 @@ if (isMainModule(import.meta.url)) {
       }
       const target = selection.target;
 
-      const applyResult = applyRejectionStatus(target.appNumber);
+      const applyResult = result.classification === 'invite'
+        ? applyInviteStatus(target.appNumber, result.signals)
+        : applyRejectionStatus(target.appNumber);
       const output = { ...result, applied: applyResult };
       if (summaryMode) {
         printSummary(result);
