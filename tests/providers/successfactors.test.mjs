@@ -213,6 +213,21 @@ try {
   if (extractLocales('<p>no locales here</p>').length === 0) pass('extractLocales returns [] when the page carries none');
   else fail('extractLocales should return [] for a page with no locale links');
 
+  // The date format follows the query locale: BMW's fr_FR and pt_BR pages send
+  // D/M/YYYY with slashes, and hu_HU sends "YYYY. MM. DD.".
+  {
+    const rec = (id, d) => ({ response: { id, unifiedStandardTitle: `Role ${id}`, unifiedStandardStart: d } });
+    const posted = (d, locale) => parseCsbJobs({ jobSearchResult: [rec('1', d)] }, { origin: 'https://jobs.example.com' }, locale)[0].postedAt;
+    const got = [
+      posted('05/10/2026', 'fr_FR'),
+      posted('13/10/2026', 'pt_BR'),
+      posted('2025. 07. 03.', 'hu_HU'),
+      posted('6/18/26', 'en_US'),
+    ];
+    const want = [Date.UTC(2026, 9, 5), Date.UTC(2026, 9, 13), Date.UTC(2025, 6, 3), Date.UTC(2026, 5, 18)];
+    if (JSON.stringify(got) === JSON.stringify(want)) pass('parseCsbJobs reads the posting date in the query locale order');
+    else fail(`parseCsbJobs locale dates wrong: ${JSON.stringify(got.map((t) => (t ? new Date(t).toISOString().slice(0, 10) : t)))}`);
+  }
   // parseCsbDate — locale-dependent short date; separator infers field order.
   if (parseCsbDate('6/18/26') === Date.UTC(2026, 5, 18)) pass('parseCsbDate reads US M/D/YY');
   else fail(`parseCsbDate US wrong: ${parseCsbDate('6/18/26')}`);
