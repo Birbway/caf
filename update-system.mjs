@@ -4183,14 +4183,6 @@ async function apply() {
     // later fetch can move it. A re-exec inherits its parent's commit, so it
     // re-pairs the same one.
     git('update-ref', pairedTargetRef, targetCommit);
-    if (!isReexec) {
-      try {
-        pruneStaleTargetRefs();
-      } catch (err) {
-        // Retention housekeeping must not prevent an otherwise safe update.
-        console.error(`Updater warning: could not prune stale backup target refs (${err.message}).`);
-      }
-    }
 
     // 2b. Verify the target before touching a single file, on both axes.
     //
@@ -4217,6 +4209,14 @@ async function apply() {
     const refusal = downgradeRefusal(local, targetVersion);
     if (refusal) {
       throw new Error(refusalMessage(targetCommit, refusal, isReexec));
+    }
+    if (!isReexec) {
+      try {
+        pruneStaleTargetRefs();
+      } catch (err) {
+        // Retention housekeeping must not prevent an otherwise safe update.
+        console.error(`Updater warning: could not prune stale backup target refs (${err.message}).`);
+      }
     }
 
     // The fetched manifest is trusted updater code, but its paths still reach
