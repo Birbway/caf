@@ -58,6 +58,21 @@ test("AI hunt writes its URL after the stream has settled, not before", () => {
   assert.ok(body.indexOf("writeSearchUrl(aiToParams(intent))", body.indexOf("} catch (e) {", request)) > 0);
 });
 
+test("a settled run publishes its URL only while it still owns the generation", () => {
+  for (const name of ["discover", "discoverAI"]) {
+    const body = callbackBody(name);
+    let at = body.indexOf("writeSearchUrl(");
+    assert.ok(at >= 0, `${name} writes its URL when the run settles`);
+    for (; at >= 0; at = body.indexOf("writeSearchUrl(", at + 1)) {
+      const guard = body.lastIndexOf(".owns(", at);
+      assert.ok(guard >= 0 && at - guard < 220, `${name} checks ownership on this write`);
+    }
+  }
+  const setMode = provider.slice(provider.indexOf("const setMode = useCallback"));
+  assert.match(setMode, /invalidate\(\)/);
+  assert.match(provider, /createRunOwner/);
+});
+
 test("AbortError is classified as interrupted, not assigned as a scan failure", () => {
   assert.match(provider, /isAbortError/);
   assert.match(provider, /postNdjsonXhr/);

@@ -102,8 +102,10 @@ test("a failed response hands back its JSON body instead of scan events", () =>
     const x = xhr();
     x.responseText = '{"error":"The scanner isn\'t available.","code":"SCANNER_MISSING"}';
     x.status = 400;
+    x.onprogress();
     x.onload();
     const { status, errorBody } = await pending;
     assert.equal(status, 400);
     assert.equal(errorBody.code, "SCANNER_MISSING");
+    assert.deepEqual(seen, []);
   }));
