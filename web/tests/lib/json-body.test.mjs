@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { listTree } from "../../../lib/walk-tree.mjs";
 import { readJsonObject } from "../../src/lib/json-body.ts";
 
 const post = (body) => new Request("http://127.0.0.1/api/x", { method: "POST", body });
@@ -19,10 +20,9 @@ test("readJsonObject returns null for bodies a route cannot read fields from", a
 
 test("every API route reads its JSON body through readJsonObject", () => {
   const apiDir = fileURLToPath(new URL("../../src/app/api", import.meta.url));
-  const direct = fs
-    .readdirSync(apiDir, { recursive: true })
-    .filter((f) => f.endsWith("route.ts"))
-    .filter((f) => fs.readFileSync(path.join(apiDir, f), "utf8").includes("req.json()"))
+  const direct = listTree(apiDir, { match: /route\.ts$/ })
+    .filter((f) => fs.readFileSync(f, "utf8").includes("req.json()"))
+    .map((f) => path.relative(apiDir, f).split(path.sep).join("/"))
     .sort();
   assert.deepEqual(direct, ["cv/ingest/route.ts", "explore/add/route.ts", "profile/route.ts", "scheduled-jobs/[id]/route.ts", "scheduled-jobs/route.ts"]);
 });
