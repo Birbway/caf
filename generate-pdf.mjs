@@ -11,7 +11,8 @@
  * {input, output, format?, reportNum?}) through ONE shared Chromium instead of
  * relaunching per document. One failing document is isolated and recorded; the
  * rest still render. Results are written to <manifest>.results.json and the
- * process exits non-zero if any document failed (#2384).
+ * process exits non-zero if any document failed (#2384). Relative input and
+ * output paths resolve against the manifest's folder, not process.cwd().
  *
  * --report links the generated PDF to its tracker/report number and records
  * the linkage in data/pdf-index.tsv so downstream tools (e.g. the TUI
@@ -1603,6 +1604,8 @@ async function generatePDF() {
     console.error('Batch mode renders every document in the JSON manifest (an array of');
     console.error('{input, output, format?, reportNum?, kind?}) through one shared Chromium and writes');
     console.error('<manifest>.results.json; it exits non-zero if any document fails.');
+    console.error('Relative input and output paths in the manifest resolve against the');
+    console.error("manifest's own folder, not the current directory.");
     console.error('');
     console.error('This script only converts an already-built HTML file to PDF.');
     console.error('The input HTML is produced by the pdf mode: the agent fills cv-template.html');
