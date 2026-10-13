@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import {
   DEFAULT_FILTERS,
   ATS_LABEL,
+  filtersToParams,
+  aiToParams,
   isBroadSearch,
   parseExplorePatch,
   type AtsSource,
@@ -17,6 +19,7 @@ import { makeAiStreamParser, type AiTraceChunk } from "@/lib/explore-ai";
 import { MAX_OFFER_LIMIT } from "@/lib/whats-new.mjs";
 import { isAbortError, isScannerMissing } from "@/lib/explore-error.mjs";
 import { postNdjsonXhr } from "@/lib/post-ndjson-xhr.mjs";
+import { settledExploreUrl } from "@/lib/explore-url.mjs";
 
 export type Phase =
   | "idle"
@@ -112,6 +115,15 @@ type ResultSnapshot = {
   aiIntent: string;
 };
 
+// The shareable search URL. Only ever called after a run has settled: writing
+// it mid-run is what cut Discover short. A long scan can outlive the visit to
+// /explore (the provider lives in the app shell), so it is skipped elsewhere.
+function writeSearchUrl(qs: string) {
+  if (typeof window === "undefined") return;
+  const url = settledExploreUrl(window.location.pathname, qs);
+  if (url) window.history.replaceState(null, "", url);
+}
+
 export function ExploreProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [filters, setFiltersState] = useState<ExploreFilters>({ ...DEFAULT_FILTERS, ats: [...DEFAULT_FILTERS.ats] });
@@ -173,7 +185,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     setSources(init);
     // Do not write the filter URL here. Next.js patches history.replaceState and
     // treats it as a navigation, which aborts this fetch — Discover flashed
-    // empty and returned to the form.
+    // empty and returned to the form. It is written once the run has settled.
 
     const acc: DiscoveredOffer[] = [];
     let sawError = "";
@@ -210,9 +222,6 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
               acc.push(o);
             }
             setOffers([...acc]);
-            if (ev.savedUrls && ev.savedUrls.length > 0) {
-              setAdded(new Set(ev.savedUrls));
-            }
           }
           break;
         case "summary": {
@@ -260,11 +269,15 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     } catch (e) {
       aborted = isAbortError(e);
       sawError = aborted
-        ? "Discover was interrupted. Check Pipeline for saved matches before trying again."
+        ? "Discover was interrupted before it finished. Run it again."
         : e instanceof Error
           ? e.message
           : "stream error";
     }
+
+    // The run has settled, so the URL can carry the search again (shareable, and
+    // a reload no longer replays an onboarding ?run=1).
+    writeSearchUrl(filtersToParams(f));
 
     // Mark any still-active sources as swept (stream ended).
     setSources((s) => {
@@ -433,7 +446,8 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
     setError("");
     setScannerMissing(false);
     setStatus("Casting across the open web…");
-    // Same as the scan path: do not replaceState while /api/explore/ai is in flight.
+    // Same as the scan path: do not replaceState while /api/explore/ai is in
+    // flight. The URL is written once the hunt has settled.
 
     let knownUrls = new Set<string>();
     try {
@@ -475,6 +489,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({ query: intent, cliId }),
       });
       if (r.status === 404) {
+        writeSearchUrl(aiToParams(intent));
         runningRef.current = false;
         setPhase("blocked");
         return;
@@ -505,6 +520,7 @@ export function ExploreProvider({ children }: { children: React.ReactNode }) {
       if (!aborted) sawError = e instanceof Error ? e.message : "stream error";
     }
 
+    writeSearchUrl(aiToParams(intent));
     runningRef.current = false;
     if (acc.length > 0) {
       setMatchCount(acc.length);

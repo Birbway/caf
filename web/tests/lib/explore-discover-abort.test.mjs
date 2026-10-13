@@ -16,15 +16,49 @@ const provider = readFileSync(join(ROOT, "components/explore/explore-provider.ts
 const scan = readFileSync(join(ROOT, "lib/core/scan.ts"), "utf8");
 const route = readFileSync(join(ROOT, "app/api/explore/route.ts"), "utf8");
 
-test("Discover and AI hunt do not replaceState while the fetch is in flight", () => {
-  assert.doesNotMatch(
-    provider,
-    /history\.replaceState\s*\(/,
-    "replaceState during Discover/AI hunt aborts the in-flight POST — leave the URL alone until the stream settles, or skip it",
-  );
+// The body of one `const <name> = useCallback(async () => { ... }, [...])`.
+// Self-checking: a rename fails here instead of matching nothing below.
+function callbackBody(name) {
+  const head = `const ${name} = useCallback(async`;
+  const start = provider.indexOf(head);
+  assert.ok(start >= 0, `explore-provider.tsx: could not find the ${name} callback. Update this extractor.`);
+  const next = provider.indexOf("= useCallback(", start + head.length);
+  const body = provider.slice(start, next < 0 ? undefined : next);
+  assert.ok(body.length > 500, `explore-provider.tsx: the ${name} callback came back nearly empty. Update this extractor.`);
+  return body;
+}
+
+test("the filter URL is written once, in a helper, never inline in a run", () => {
+  const writes = provider.match(/history\.replaceState\s*\(/g) ?? [];
+  assert.equal(writes.length, 1, "exactly one replaceState: the writeSearchUrl helper");
+  assert.doesNotMatch(callbackBody("discover"), /replaceState\s*\(/);
+  assert.doesNotMatch(callbackBody("discoverAI"), /replaceState\s*\(/);
 });
 
-test("AbortError is classified, not assigned as sawError", () => {
+test("Discover writes the filter URL after the stream has settled, not before", () => {
+  const body = callbackBody("discover");
+  const request = body.indexOf('postNdjsonXhr("/api/explore"');
+  const settled = body.indexOf("} catch (e) {", request);
+  const write = body.indexOf("writeSearchUrl(filtersToParams(f))");
+  assert.ok(request >= 0 && settled > request, "the stream is read inside a try/catch");
+  assert.ok(write >= 0, "the filter URL is written (a finished search stays shareable)");
+  assert.ok(write > settled, "writing the URL while the request is in flight aborts it");
+  assert.equal(body.split("writeSearchUrl(").length - 1, 1, "written once per run");
+});
+
+test("AI hunt writes its URL after the stream has settled, not before", () => {
+  const body = callbackBody("discoverAI");
+  const request = body.indexOf('fetch("/api/explore/ai"');
+  assert.ok(request >= 0, "the hunt request is found");
+  let at = body.indexOf("writeSearchUrl(");
+  assert.ok(at >= 0, "the AI search URL is written");
+  for (; at >= 0; at = body.indexOf("writeSearchUrl(", at + 1)) {
+    assert.ok(at > request, "no URL write before the hunt request is sent");
+  }
+  assert.ok(body.indexOf("writeSearchUrl(aiToParams(intent))", body.indexOf("} catch (e) {", request)) > 0);
+});
+
+test("AbortError is classified as interrupted, not assigned as a scan failure", () => {
   assert.match(provider, /isAbortError/);
   assert.match(provider, /postNdjsonXhr/);
   assert.doesNotMatch(
@@ -32,24 +66,29 @@ test("AbortError is classified, not assigned as sawError", () => {
     /catch \(e\) \{\s*sawError = e instanceof Error/,
     "the catch must not treat AbortError as a failed scan",
   );
+  assert.match(callbackBody("discover"), /aborted\s*\?\s*"Discover was interrupted/);
+  assert.doesNotMatch(provider, /saved matches/i, "an interrupted Discover saved nothing: do not send the user to look for it");
 });
 
-test("the scanner killer outlives a Workday sweep so --json can flush", () => {
-  assert.match(scan, /12\s*\*\s*60\s*\*\s*1000/);
-  assert.doesNotMatch(scan, /230_000/);
+test("Discover writes nothing to pipeline.md: only the offers the user picks are added", () => {
+  // The scan route streams what it found and stops there.
+  assert.doesNotMatch(route, /addOffersToPipeline|core\/pipeline|appendToPipeline|appendToScanHistory/);
+  assert.doesNotMatch(route, /\bafter\s*\(/, "no work after the response: a dropped client must not turn into a silent save");
+  assert.doesNotMatch(scan, /addOffersToPipeline|core\/pipeline|appendToPipeline|appendToScanHistory/);
+  assert.match(scan, /"--dry-run"/, "the scanner child stays a dry run");
+
+  // The writer is the explicit "Add to pipeline" route, fed by the user's pick.
+  const addRoute = readFileSync(join(ROOT, "app/api/explore/add/route.ts"), "utf8");
+  assert.match(addRoute, /addOffersToPipeline\(offers\)/);
+
+  // And the client never marks an offer as added from a scan event.
+  assert.doesNotMatch(provider, /savedUrls/);
+  assert.doesNotMatch(callbackBody("discover"), /setAdded\(/);
+  assert.equal(provider.split('fetch("/api/explore/add"').length - 1, 1, "addToPipeline is the only caller of the add route");
+});
+
+test("the scanner budget is the configured one, with no floor over it", () => {
+  assert.match(scan, /const timeoutMs = readScanTimeoutMs\(\);/);
+  assert.doesNotMatch(scan, /Math\.max\(\s*readScanTimeoutMs/, "a scan.timeout_seconds below a floor would be silently ignored");
   assert.match(scan, /parseScanJsonStdout/);
-});
-
-test("the explore route outlives the killer and keeps the scan after the client drops", () => {
-  const m = route.match(/export const maxDuration = (\d+)/);
-  assert.ok(m, "maxDuration is set");
-  assert.ok(Number(m[1]) >= 720, `maxDuration ${m[1]}s must outlive the 12-minute scanner killer`);
-  assert.match(route, /from "next\/server"/);
-  assert.match(route, /\bafter\s*\(/);
-  assert.match(
-    route,
-    /addOffersToPipeline/,
-    "Next.js aborts the HTTP stream on Explore remount; matches must still be written to pipeline.md",
-  );
-  assert.match(provider, /XMLHttpRequest|postNdjsonXhr/);
 });
