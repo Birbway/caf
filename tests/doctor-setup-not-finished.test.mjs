@@ -4,10 +4,11 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, copyFileSync, symlinkSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DOCTOR = join(ROOT, 'doctor.mjs');
+const PLAYWRIGHT_STUB = join(ROOT, 'tests', 'fixtures', 'playwright-stub.mjs');
 
 function checkout({ withSetup }) {
   const dir = mkdtempSync(join(tmpdir(), 'doctor-setup-'));
@@ -25,7 +26,7 @@ function checkout({ withSetup }) {
 }
 
 function runDoctor(dir) {
-  const r = spawnSync(process.execPath, [DOCTOR, '--target', dir], {
+  const r = spawnSync(process.execPath, ['--import', pathToFileURL(PLAYWRIGHT_STUB).href, DOCTOR, '--target', dir], {
     cwd: dir, encoding: 'utf-8', timeout: 60_000, env: { ...process.env, NO_COLOR: '1' },
   });
   return { status: r.status, out: `${r.stdout}${r.stderr}` };
