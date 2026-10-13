@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -18,20 +18,44 @@ import {
   trackerTsvLine,
   persistEvaluation,
 } from "../../src/lib/report-persist.mjs";
+import { writeEvaluationArtifacts } from "../../../persist-evaluation-report.mjs";
 import { resolveTsvColumns, TSV_ADDITION_HEADER } from "../../../tracker-parse.mjs";
 
-function fakeChild({ stdout = "", stderr = "", exitCode = 0, spawnError = null } = {}) {
+function fakeChild({ stdout = "", stderr = "", exitCode = 0, spawnError = null, onStdin = null } = {}) {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
+  let stdinBuf = "";
+  child.stdin = {
+    write(chunk) {
+      stdinBuf += typeof chunk === "string" ? chunk : chunk.toString();
+      return true;
+    },
+    end() {},
+  };
   queueMicrotask(() => {
     if (spawnError) {
       child.emit("error", spawnError);
       return;
     }
-    if (stdout) child.stdout.emit("data", Buffer.from(stdout));
-    if (stderr) child.stderr.emit("data", Buffer.from(stderr));
-    child.emit("close", exitCode);
+    let out = stdout;
+    let err = stderr;
+    let code = exitCode;
+    if (onStdin) {
+      try {
+        const produced = onStdin(stdinBuf) || {};
+        if (produced.stdout != null) out = produced.stdout;
+        if (produced.stderr != null) err = produced.stderr;
+        if (produced.exitCode != null) code = produced.exitCode;
+      } catch (e) {
+        out = "";
+        err = e instanceof Error ? e.message : String(e);
+        code = 1;
+      }
+    }
+    if (out) child.stdout.emit("data", Buffer.from(out));
+    if (err) child.stderr.emit("data", Buffer.from(err));
+    child.emit("close", code);
   });
   return child;
 }
@@ -39,14 +63,37 @@ function fakeChild({ stdout = "", stderr = "", exitCode = 0, spawnError = null }
 function makeRouterSpawn(routes) {
   const calls = [];
   const spawnFn = (execPath, args, opts) => {
-    calls.push({ execPath, args, opts });
+    const call = { execPath, args, opts, stdin: "" };
+    calls.push(call);
     const scriptPath = args[0];
     const route = Object.entries(routes).find(([suffix]) => scriptPath.endsWith(suffix));
     if (!route) throw new Error(`no fake route for ${scriptPath}`);
-    const spec = typeof route[1] === "function" ? route[1](args) : route[1];
-    return fakeChild(spec);
+    const spec = typeof route[1] === "function" ? route[1](args, opts) : route[1];
+    const child = fakeChild(spec);
+    const write = child.stdin.write.bind(child.stdin);
+    child.stdin.write = (chunk) => {
+      call.stdin += typeof chunk === "string" ? chunk : chunk.toString();
+      return write(chunk);
+    };
+    return child;
   };
   return { spawnFn, calls };
+}
+
+function writerSpec(fsImpl) {
+  return (_args, opts) => ({
+    onStdin(raw) {
+      let payload;
+      try {
+        payload = JSON.parse(raw);
+      } catch {
+        return { exitCode: 1, stderr: "stdin is not JSON" };
+      }
+      const result = writeEvaluationArtifacts(opts.cwd, payload, fsImpl);
+      if (!result.ok) return { exitCode: 1, stderr: result.error };
+      return { exitCode: 0, stdout: "{\"ok\":true}\n" };
+    },
+  });
 }
 
 const REPORT = `# Evaluation: Acme AI — Senior Engineer
@@ -203,6 +250,7 @@ test("persistEvaluation: writes report + TSV, reserves, merges, releases", async
     "reserve-report-num.mjs": (args) => args.includes("--release")
       ? { exitCode: 0 }
       : { exitCode: 0, stdout: "035\n" },
+    "persist-evaluation-report.mjs": writerSpec(),
     "merge-tracker.mjs": { exitCode: 0 },
   });
 
@@ -227,7 +275,17 @@ test("persistEvaluation: writes report + TSV, reserves, merges, releases", async
     assert.equal(fields[map.url], "https://acme.com/jobs/7");
 
     const scripts = calls.map((c) => basename(c.args[0]) + (c.args.includes("--release") ? " --release" : ""));
-    assert.deepEqual(scripts, ["reserve-report-num.mjs", "merge-tracker.mjs", "reserve-report-num.mjs --release"]);
+    assert.deepEqual(scripts, [
+      "reserve-report-num.mjs",
+      "persist-evaluation-report.mjs",
+      "merge-tracker.mjs",
+      "reserve-report-num.mjs --release",
+    ]);
+    const writer = calls.find((c) => basename(c.args[0]) === "persist-evaluation-report.mjs");
+    const payload = JSON.parse(writer.stdin);
+    assert.equal(payload.company, "Acme AI");
+    assert.equal(payload.reportFile, "035-acme-ai-2026-08-04.md");
+    assert.equal(payload.url, "https://acme.com/jobs/7");
     assert.ok(calls.every((c) => c.opts.cwd === root));
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -280,6 +338,7 @@ test("persistEvaluation: merge failure still releases the sentinel", async () =>
     "reserve-report-num.mjs": (args) => args.includes("--release")
       ? { exitCode: 0 }
       : { exitCode: 0, stdout: "036\n" },
+    "persist-evaluation-report.mjs": writerSpec(),
     "merge-tracker.mjs": { exitCode: 1, stderr: "status not canonical" },
   });
   try {
@@ -301,6 +360,7 @@ test("persistEvaluation: a failed release after a saved report is not success", 
     "reserve-report-num.mjs": (args) => args.includes("--release")
       ? { exitCode: 1, stderr: "sentinel stuck" }
       : { exitCode: 0, stdout: "035\n" },
+    "persist-evaluation-report.mjs": writerSpec(),
     "merge-tracker.mjs": { exitCode: 0 },
   });
   try {
@@ -322,6 +382,7 @@ test("persistEvaluation: merge failure and release failure are both reported", a
     "reserve-report-num.mjs": (args) => args.includes("--release")
       ? { exitCode: 1, stderr: "sentinel stuck" }
       : { exitCode: 0, stdout: "036\n" },
+    "persist-evaluation-report.mjs": writerSpec(),
     "merge-tracker.mjs": { exitCode: 1, stderr: "status not canonical" },
   });
   try {
@@ -354,6 +415,44 @@ test("persistEvaluation: a tab in the posting URL releases the number and writes
     assert.match(result.error, /tab or newline/i);
     assert.equal(existsSync(join(root, "reports")), false);
     assert.equal(existsSync(join(root, "batch", "tracker-additions")), false);
+    assert.ok(calls.some((c) => c.args.includes("--release")));
+    assert.equal(calls.some((c) => basename(c.args[0]) === "merge-tracker.mjs"), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("persistEvaluation: a failed addition write removes the new report and releases", async () => {
+  const root = mkdtempSync(join(tmpdir(), "co-evalpersist-"));
+  const reportPath = join(root, "reports", "035-acme-ai-2026-08-04.md");
+  const fsImpl = {
+    mkdirSync,
+    existsSync,
+    unlinkSync,
+    writeFileSync(file, data, enc) {
+      if (String(file).endsWith(".tsv")) {
+        const err = new Error("tracker additions dir is not writable");
+        err.code = "EACCES";
+        throw err;
+      }
+      writeFileSync(file, data, enc);
+    },
+  };
+  const { spawnFn, calls } = makeRouterSpawn({
+    "reserve-report-num.mjs": (args) => args.includes("--release")
+      ? { exitCode: 0 }
+      : { exitCode: 0, stdout: "035\n" },
+    "persist-evaluation-report.mjs": writerSpec(fsImpl),
+    "merge-tracker.mjs": { exitCode: 0 },
+  });
+  try {
+    const result = await persistEvaluation({
+      spawnFn, execPath: "node", root, markdown: REPORT,
+      url: "https://acme.com/jobs/7", today: "2026-08-04",
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /not writable/);
+    assert.equal(existsSync(reportPath), false);
     assert.ok(calls.some((c) => c.args.includes("--release")));
     assert.equal(calls.some((c) => basename(c.args[0]) === "merge-tracker.mjs"), false);
   } finally {

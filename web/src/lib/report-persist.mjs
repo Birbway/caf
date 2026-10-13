@@ -1,17 +1,16 @@
 /**
- * report-persist.mjs — persist a web evaluate run's report + tracker row.
+ * report-persist.mjs: persist a web evaluate run's report and tracker row.
  *
- * The evaluate agent used to hold Write + Bash so it could run
+ * The evaluate agent used to hold Write and Bash so it could run
  * reserve-report-num.mjs, write reports/, write a TSV, and merge-tracker.mjs.
  * Those tools are unscoped, so a posting in its context could aim them anywhere.
- * The agent now emits the report in a <<report-md>> envelope; this module (a
- * plain Node process, no CLI sandbox) is the only writer — same split #2185
- * used for pdf.
+ * The agent now emits the report in a <<report-md>> envelope. This module
+ * reserves a number, asks persist-evaluation-report.mjs to write the report
+ * and the headed addition, merges, then releases the sentinel.
  *
  * spawnFn / execPath / root are injected so tests substitute a fake child
  * process and never touch the real allocator or tracker.
  */
-import fs from "node:fs";
 import path from "node:path";
 import { slugify } from "./pdf-paths.mjs";
 
@@ -130,6 +129,10 @@ export function reportSlug(company, via) {
  * `TSV_ADDITION_HEADER` in tracker-parse.mjs. merge-tracker resolves a headed
  * addition by name, so a cell with no label is dropped and a cell under the
  * wrong label is stored as that column.
+ *
+ * The file bytes are written by persist-evaluation-report.mjs, which builds
+ * the same row from lib/tracker-addition.mjs. This copy stays here because
+ * the Next bundle cannot import that file. The parity test locks them.
  */
 const ADDITION_LABELS = ["num", "date", "company", "role", "status", "score", "pdf", "report", "notes"];
 
@@ -159,7 +162,7 @@ export function trackerTsvLine({ num, today, company, role, score, reportFile, n
   return `${labels.join("\t")}\n${fields.join("\t")}\n`;
 }
 
-function spawnScript({ spawnFn, execPath, root, script, args = [] }) {
+function spawnScript({ spawnFn, execPath, root, script, args = [], input = null }) {
   return new Promise((resolve) => {
     const child = spawnFn(execPath, [path.join(root, script), ...args], { cwd: root });
     let stdout = "";
@@ -168,6 +171,10 @@ function spawnScript({ spawnFn, execPath, root, script, args = [] }) {
     child.stderr?.on("data", (d) => { stderr += d.toString(); });
     child.on("close", (code) => resolve({ ok: code === 0, stdout: stdout.trim(), stderr: stderr.trim() }));
     child.on("error", (e) => resolve({ ok: false, stdout: "", stderr: `${script} failed to start: ${e.message}` }));
+    if (input != null) {
+      child.stdin?.write(input);
+      child.stdin?.end();
+    }
   });
 }
 
@@ -246,16 +253,24 @@ export async function persistEvaluation({ spawnFn, execPath, root, markdown, url
   const postingUrl = /^https?:\/\//i.test(String(url ?? "")) ? String(url) : "";
   const notes = ISO_DATE_RE.test(String(postedAt ?? "")) ? `; posted: ${postedAt}` : "";
 
-  try {
-    fs.mkdirSync(reportsDir, { recursive: true });
-    fs.mkdirSync(additionsDir, { recursive: true });
-    fs.writeFileSync(reportPath, markdown, "utf8");
-    fs.writeFileSync(tsvPath, trackerTsvLine({
-      num, today, company: meta.company, role: meta.role, score: meta.score,
-      reportFile, notes, via: meta.via, url: postingUrl,
-    }), "utf8");
-  } catch (err) {
-    return finish(`Could not save the evaluation report: ${err.message}`);
+  const written = await spawnScript({
+    spawnFn, execPath, root,
+    script: "persist-evaluation-report.mjs",
+    input: JSON.stringify({
+      markdown,
+      num,
+      today,
+      company: meta.company,
+      role: meta.role,
+      score: meta.score,
+      via: meta.via,
+      url: postingUrl,
+      notes,
+      reportFile,
+    }),
+  });
+  if (!written.ok) {
+    return finish(written.stderr || "Could not save the evaluation report: persist-evaluation-report.mjs failed.");
   }
 
   const merged = await spawnScript({
