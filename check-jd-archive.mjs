@@ -241,7 +241,7 @@ const NON_CONTENT_MARKERS = [
     // "paraphrase" or "restate", which a real JD can use as a duty ("you will
     // paraphrase source material") or in finance prose ("restated financials").
     reason: 'says it is a paraphrase or restatement, not the verbatim posting',
-    re: /(\((?:a |an )?(?:(?:close|detailed|faithful) )?paraphras(?:e|ed)\b[^)\n]*\)|\b(?:is|are) (?:a |an )?(?:(?:close|detailed|faithful|complete|non-fabricated|full|accurate)[ ,]+)*(?:paraphrase|restatement)\b|\bthis section restates\b|\bparaphrased (?:from|version)\b|[—–-]\s*paraphras(?:e|ed)\s*$|\bnot (?:a |the )?(?:literal|verbatim) (?:copy|quote|text|reproduction|archive|posting)\b|\b(?:could|would|did|can) ?not (?:be )?(?:reproduc|quot|return|captur|copi)\w*[^.\n]{0,40}\b(?:literal|verbatim)\b)/im,
+    re: /(\((?:a |an )?(?:(?:close|detailed|faithful) )?paraphras(?:e|ed)\b[^)\n]*\)|\b(?:is|are) (?:a |an )?(?:(?:close|detailed|faithful|complete|non-fabricated|full|accurate)[ ,]+)*(?:paraphrase|restatement)\b|\bthis section restates\b|^[\s*_>#-]*paraphrased (?:from|version)\b|[—–-]\s*paraphras(?:e|ed)\s*$|\bnot (?:a |the )?(?:literal|verbatim) (?:copy|quote|text|reproduction|archive|posting)\b|\b(?:could|would|did|can) ?not (?:be )?(?:reproduc|quot|return|captur|copi)\w*[^.\n]{0,40}\b(?:literal|verbatim)\b)/im,
   },
   {
     category: 'bot-challenge',
@@ -796,6 +796,9 @@ function runSelfTest() {
   check(!hasEmbeddedJdArchive(
     '## Job Description \u2014 paraphrased\n\nDirector of Marketing. Owns demand generation, reports to the CMO, manages a team of eight.\n\n## Machine Summary'),
     'hasEmbeddedJdArchive rejects a heading that ends in an em dash and "paraphrased" (#5179 review)');
+  check(hasEmbeddedJdArchive(
+    '## Job Description (archived verbatim)\n\nIn this role you will produce a paraphrased version of source material for our course catalog, working from drafts supplied by three regional teams.\n\n## Machine Summary'),
+    'hasEmbeddedJdArchive does not false-positive on a JD duty that asks for a paraphrased version of source material (#5179 review)');
   check(hasEmbeddedJdArchive(
     '## Job Description (archived verbatim)\n\nCandidates need not verbatim-copy source text. Survey answers are not literal quotes, and you will review them for tone across three regional teams.\n\n## Machine Summary'),
     'hasEmbeddedJdArchive does not false-positive on real JD prose that says "not literal" or "verbatim" as a duty (#5179 review)');
