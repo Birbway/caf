@@ -2428,7 +2428,11 @@ export function locallyModifiedSystemFiles(paths, upstreamRef = 'FETCH_HEAD', ct
     }
     for (const [commit, files] of byCommit) {
       try {
-        const stat = runGit('diff', '--ignore-cr-at-eol', '--numstat', commit, '--', ...files);
+        // Batched: one update commit can deliver over a thousand files, and
+        // naming them all in one call overflows a Windows command line (#5103).
+        const stat = argvBatches(files)
+          .map((batch) => runGit('diff', '--ignore-cr-at-eol', '--numstat', commit, '--', ...batch))
+          .join('\n');
         const stillDiffers = new Set(
           stat.split('\n').map((l) => l.trim()).filter(Boolean)
             .map((l) => l.split('\t')[2]).filter(Boolean),
@@ -2469,15 +2473,20 @@ export function locallyModifiedSystemFiles(paths, upstreamRef = 'FETCH_HEAD', ct
       };
       let worktreeShas = null;
       let publishedShas = null;
+      // Both dumps are batched for the same reason as the numstat above
+      // (#5103); rawShas accumulates per path, so joined output parses whole.
+      const batches = argvBatches(undelivered);
       try {
-        worktreeShas = rawShas(runGit('diff', '--raw', '--no-abbrev', '--no-renames', upstreamRef, '--', ...undelivered));
+        worktreeShas = rawShas(batches.map((batch) => runGit(
+          'diff', '--raw', '--no-abbrev', '--no-renames', upstreamRef, '--', ...batch,
+        )).join('\n'));
       } catch {
         worktreeShas = null;
       }
       try {
-        publishedShas = rawShas(runGit(
-          'log', '--raw', '--no-abbrev', '--no-renames', '--format=%x1e%H', publishedRange, '--', ...undelivered,
-        ));
+        publishedShas = rawShas(batches.map((batch) => runGit(
+          'log', '--raw', '--no-abbrev', '--no-renames', '--format=%x1e%H', publishedRange, '--', ...batch,
+        )).join('\n'));
       } catch {
         publishedShas = null;
       }
@@ -2866,7 +2875,7 @@ export function expandToShippedFiles(paths, ref = 'FETCH_HEAD', ctx = {}) {
 }
 
 /**
- * Cap on the argv bytes handed to one `git add`.
+ * Cap on the argv bytes of file paths handed to one git call.
  *
  * Expanding directories multiplies the pathspec count (283 manifest entries →
  * 817 files, ~22 KB of argv today), and Windows caps a whole command line at
@@ -2875,7 +2884,32 @@ export function expandToShippedFiles(paths, ref = 'FETCH_HEAD', ctx = {}) {
  * release — failing, eventually, inside the one tool a user cannot easily
  * repair by hand. Batching is a consequence of the expansion, not a flourish.
  */
-const ADD_ARGV_BUDGET = 8000;
+const ARGV_BUDGET = 8000;
+
+/**
+ * Split file paths into runs whose joined length stays within ARGV_BUDGET, for
+ * any git call that names files one by one. A single path wider than the
+ * budget still goes out on its own.
+ *
+ * @param {string[]} paths
+ * @returns {string[][]}
+ */
+function argvBatches(paths) {
+  const batches = [];
+  let batch = [];
+  let budget = 0;
+  for (const path of paths) {
+    if (batch.length > 0 && budget + path.length + 1 > ARGV_BUDGET) {
+      batches.push(batch);
+      batch = [];
+      budget = 0;
+    }
+    batch.push(path);
+    budget += path.length + 1;
+  }
+  if (batch.length > 0) batches.push(batch);
+  return batches;
+}
 
 /**
  * Stage the update's own system-layer files.
@@ -2913,24 +2947,12 @@ export function addPaths(paths, ctx = {}) {
   // committed to.
   rejectDirectories(paths, ctx.root || ROOT);
   const runGit = ctx.git || git;
-  let batch = [];
-  let budget = 0;
   // --literal-pathspecs: these are filenames, and a name like `docs/[x].env`
   // read as a glob would force-add an ignored sibling `docs/x.env`. `--` ends
   // option parsing but does not stop pathspec interpretation.
-  const flush = () => {
-    if (batch.length === 0) return;
+  for (const batch of argvBatches(paths)) {
     runGit('--literal-pathspecs', 'add', '-f', '--', ...batch);
-    batch = [];
-    budget = 0;
-  };
-  for (const path of paths) {
-    // A single path wider than the budget still goes out on its own.
-    if (batch.length > 0 && budget + path.length + 1 > ADD_ARGV_BUDGET) flush();
-    batch.push(path);
-    budget += path.length + 1;
   }
-  flush();
 }
 
 /**
