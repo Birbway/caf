@@ -93,6 +93,8 @@ test('a tracker capture link cannot escape the data root', () => {
     const header = '| # | Date | Company | Role | Score | Status | PDF | Report | Notes |\n|---|---|---|---|---|---|---|---|---|\n';
     writeFileSync(tracker, `${header}| 42 | 2026-01-15 | Acme | Director | 4.0/5 | Applied | no | [42](jds/../../outside.pdf) | |\n`);
     assert.equal(mapTrackerCaptureLinks(tracker, join(root, 'jds')).size, 0);
+    writeFileSync(join(root, 'jds', 'outside.pdf'), 'same-named capture in jds/');
+    assert.equal(mapTrackerCaptureLinks(tracker, join(root, 'jds')).size, 0);
     writeFileSync(join(root, 'jds', 'inside.pdf'), 'capture');
     writeFileSync(tracker, `${header}| 42 | 2026-01-15 | Acme | Director | 4.0/5 | Applied | no | [42](jds/inside.pdf) | |\n`);
     assert.equal(mapTrackerCaptureLinks(tracker, join(root, 'jds')).size, 1);

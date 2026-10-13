@@ -436,8 +436,11 @@ export function mapTrackerCaptureLinks(trackerPath, jdsDir) {
       const rel = relative(base, candidate);
       return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
     };
+    // Reject an escaping link outright, so the basename fallback cannot credit
+    // an unrelated in-root file that happens to share its name.
+    if (!within(dataRoot, join(dataRoot, match[0]))) continue;
     const abs = [join(dataRoot, match[0]), join(jdsDir, basename(match[0]))]
-      .find((candidate) => (within(dataRoot, candidate) || within(jdsDir, candidate)) && existsSync(candidate));
+      .find((candidate) => existsSync(candidate));
     if (!abs) continue; // dangling link is not an archive
     // extractTrackerReportNumbers only recognizes `reports/` links, so a row
     // whose Report cell points straight at a capture — `[276](jds/foo.md)` —
