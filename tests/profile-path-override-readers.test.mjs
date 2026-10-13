@@ -237,6 +237,23 @@ try {
     ? pass('fallbacks: scripts/export-ats-text.mjs reads cv.md from the data root along with the profile, from any cwd')
     : failOnce(`fallbacks: scripts/export-ats-text.mjs run outside the data root exited ${ats.status} and printed ${JSON.stringify(ats.stdout.slice(0, 120))} without the CV's experience (stderr: ${JSON.stringify(ats.stderr.slice(0, 120))})`);
 
+  // 5c. export-ats-text names the file it looked for, and its help text says where
+  // the defaults live. "config/profile.yml not found" is a lie about a typo'd
+  // CAREER_OPS_PROFILE, and "config/profile.yml" in --help hides the data root.
+  const typo = join(scratch, 'ats-typo-profile.yml');
+  const atsMissing = spawnSync(NODE, [join(ROOT, 'scripts', 'export-ats-text.mjs')], {
+    cwd: decoyCwd, encoding: 'utf-8', timeout: 60_000,
+    env: { ...process.env, CAREER_OPS_ROOT: cvRoot, CAREER_OPS_DATA_DIR: '', CAREER_OPS_PROFILE: typo },
+  });
+  const atsMissingOut = `${atsMissing.stdout}${atsMissing.stderr}`;
+  atsMissing.status !== 0 && atsMissingOut.includes(typo) && /CAREER_OPS_PROFILE/.test(atsMissingOut)
+    ? pass('fallbacks: scripts/export-ats-text.mjs names CAREER_OPS_PROFILE and the file it looked for when that file is missing')
+    : failOnce(`fallbacks: scripts/export-ats-text.mjs gave ${JSON.stringify(atsMissingOut.slice(0, 200))} for a missing override target (exit ${atsMissing.status})`);
+  const atsHelp = spawnSync(NODE, [join(ROOT, 'scripts', 'export-ats-text.mjs'), '--help'], { cwd: decoyCwd, encoding: 'utf-8', timeout: 60_000 });
+  /--profile[^\n]*data root/i.test(atsHelp.stdout) && /--cv[^\n]*data root/i.test(atsHelp.stdout)
+    ? pass('fallbacks: scripts/export-ats-text.mjs --help says the profile and CV defaults live in the data root')
+    : failOnce(`fallbacks: scripts/export-ats-text.mjs --help does not mention the data root for --profile and --cv: ${JSON.stringify(atsHelp.stdout.slice(0, 400))}`);
+
   // 3b. generate-pdf renders in the tracker workspace, which CAREER_OPS_TRACKER can
   // move off the data root. With no override it reads that workspace's profile; an
   // override that is set wins even when it names the data-root profile itself, so
@@ -264,16 +281,16 @@ try {
 
   // 4b. apply() is not exported, so, as updater-apply-target-verification.test.mjs
   // does for the properties that only exist in its body, the wiring is asserted on
-  // its source: apply() must take the profile in force from getProfilePath() and
-  // hand it to the snapshot. Without it the updater protects the template variants
-  // the DATA-ROOT profile chooses while the override selects others.
+  // its source: apply() must hand the snapshot BOTH the profile in force
+  // (getProfilePath()) and the data root's own. The templates directory is the data
+  // root's, so reading only one profile leaves the other's variants unprotected.
   const updaterSource = readFileSync(join(ROOT, 'update-system.mjs'), 'utf-8').split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
-  const takesProfile = /profilePath = getProfilePath\(\);/.test(updaterSource);
-  const callAt = updaterSource.indexOf('await snapshotConfiguredTemplateVariants({');
+  const takesProfile = /profilePaths = \[getProfilePath\(\), getProfilePath\(dataRoot\)\];/.test(updaterSource);
+  const callAt = updaterSource.indexOf('await snapshotConfiguredTemplateVariantsAcrossProfiles({');
   const snapshotCall = callAt === -1 ? null : [updaterSource.slice(callAt, updaterSource.indexOf('readRemoteContent', callAt))];
-  takesProfile && snapshotCall && /\bprofilePath,/.test(snapshotCall[0])
-    ? pass('updater: apply() hands the profile CAREER_OPS_PROFILE selects to the template-variant snapshot (source check)')
-    : failOnce(`updater: apply() does not pass getProfilePath() into snapshotConfiguredTemplateVariants (takesProfile=${takesProfile}, call=${snapshotCall ? 'found' : 'missing'})`);
+  takesProfile && snapshotCall && /\bprofilePaths,/.test(snapshotCall[0])
+    ? pass('updater: apply() hands both the override profile and the data-root profile to the template-variant snapshot (source check)')
+    : failOnce(`updater: apply() does not pass [getProfilePath(), getProfilePath(dataRoot)] into the snapshot (takesProfile=${takesProfile}, call=${snapshotCall ? 'found' : 'missing'})`);
 
   // 3c. cv-sync-check's advice for a missing profile. With an override that names a
   // file that is not there, "copy the example into config/profile.yml" changes

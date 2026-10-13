@@ -233,7 +233,8 @@ export function loadProfile(customProfilePath = null, customCvPath = null) {
     }
   } else {
     if (!existsSync(profileSource)) {
-      throw new Error('config/profile.yml not found: fill it in first');
+      const via = process.env.CAREER_OPS_PROFILE?.trim() ? ' (named by CAREER_OPS_PROFILE)' : '';
+      throw new Error(`Profile not found at ${profileSource}${via}: fill it in first`);
     }
     try {
       const content = readFileSync(profileSource, 'utf8');
@@ -378,8 +379,8 @@ Export profile and CV sections as plain text for ATS forms.
 Options:
   --section <name>  Export personal, summary, skills, experience or education only
   --out <path>      Write to a file instead of stdout
-  --profile <path>  Profile YAML (default: CAREER_OPS_PROFILE or config/profile.yml)
-  --cv <path>       CV Markdown (default: CAREER_OPS_CV or cv.md, when present)
+  --profile <path>  Profile YAML (default: CAREER_OPS_PROFILE, else config/profile.yml in the data root)
+  --cv <path>       CV Markdown (default: CAREER_OPS_CV, else cv.md in the data root, when present)
   --help, -h        Show help without reading the profile/CV or writing output
 `, { valueFlags: ['--section', '--out', '--profile', '--cv'], requireOperand: true });
 
