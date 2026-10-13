@@ -28,21 +28,9 @@ export function splitLines(text) {
   return text.split(/\r?\n/);
 }
 
-/** A pipeline-row segment like `posted: 2026-07-14`, `trust: 62 stale` or
- *  `note: …` — the core appends these LABELED segments after whatever
- *  positional shape a row has (3/4/5 columns), so a naive positional reader
- *  would misread them as location/compensation on short rows. Any
- *  `word:`-prefixed segment is treated as labeled (forward-compatible with
- *  labels the core hasn't invented yet). */
-const LABELED_SEGMENT = /^([a-z][a-z_-]*):\s*(.*)$/i;
+const LABELED_SEGMENT = /^(posted|trust|note|rank):\s(.*)$/i;
 
-/** Parse data/pipeline.md — `- [ ] URL | Company | Role [| Location [| Compensation]] [| label: …]*`.
- *  Positional split for the first columns (the optional 4th `location` #1015
- *  and 5th `compensation` #1017 must NOT bleed into `role`); labeled segments
- *  (posted:/trust:/note:/…) are filtered out of positional assignment wherever
- *  they appear and surfaced when useful (posted: → postedAt). Unknown labels
- *  and further trailing columns are ignored gracefully.
- *  @param {string} md - content of data/pipeline.md.
+/** @param {string} md - content of data/pipeline.md.
  *  @returns {{url: string, company: string, role: string, location?: string, compensation?: string, done: boolean, postedAt?: string}[]}
  */
 export function parseInbox(md) {

@@ -5,6 +5,7 @@ import { Bookmark, BookmarkCheck, Loader2, X } from "lucide-react";
 import type { InboxJob } from "@/lib/career-ops";
 import type { AtsSource } from "@/lib/explore";
 import { ATS_LABEL } from "@/lib/explore";
+import { unscoredInboxHref } from "@/lib/posting-url.mjs";
 import { Badge } from "@/components/ui/badge";
 import { CompanyLogo } from "@/components/company-logo";
 import { cn } from "@/lib/cn";
@@ -46,6 +47,13 @@ export function TriageRow({
 }) {
   const ago = agoLabel(age);
   const evaluated = !!scored && (scored.running || scored.score != null);
+  const postingHref = unscoredInboxHref(job.url, evaluated);
+  const title = (
+    <>
+      <span className="font-medium text-foreground">{job.company}</span>
+      <span className="text-muted"> · {job.role}</span>
+    </>
+  );
 
   return (
     <li
@@ -68,8 +76,13 @@ export function TriageRow({
 
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm">
-          <span className="font-medium text-foreground">{job.company}</span>
-          <span className="text-muted"> · {job.role}</span>
+          {postingHref ? (
+            <a href={postingHref} target="_blank" rel="noreferrer" className="hover:text-brand">
+              {title}
+            </a>
+          ) : (
+            title
+          )}
         </p>
         <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-faint">
           {job.location && <span className="truncate">{job.location}</span>}

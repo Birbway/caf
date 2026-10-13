@@ -60,6 +60,19 @@ const PROSE_FRAGMENTS = new Set(['building', 'i']);
 // TOOL_PROSE_WORDS it cannot turn into a list that grows by one word per bug
 // report (#4004).
 const DETERMINER_LEAD_RE = /^(?:the|that|this|these|those|our|your|their|its|his|her|my)(?:\s+|$)/i;
+// "a" or "an" before a word opens a noun phrase, and it is a name only inside
+// the phrase: "a Kubernetes cluster" claims Kubernetes, not the cluster. Unlike
+// the determiners above it does not mark the clause as prose, because "using
+// React and an ASP.NET backend" is a list whose second item opens with one.
+const ARTICLE_LEAD_RE = /^an?\s+/i;
+// The ending a name takes from the phrase around it, not from itself: a
+// possessive ("Elasticsearch's index") and a lowercase hyphenated suffix
+// ("Kubernetes-based"). A version or a capital after the hyphen ("GPT-4",
+// "T-Mobile") is part of the name. A single letter before the suffix
+// ("C-suite", "E-commerce", "X-ray") is the start of an ordinary word, so the
+// word is not a name at all.
+const POSSESSIVE_SUFFIX_RE = /['\u2019]s$/i;
+const LOWERCASE_SEGMENT_RE = /^\p{Ll}+$/u;
 const DECLARED_TOOL_TRIGGER_RE = /^(?:technologies?|tech stack)\s*:/i;
 // What separates the names in a tool list. Beside the comma (Arabic and
 // ideographic ones too) and the three connector words: a double quote, a
@@ -552,6 +565,13 @@ function isLikelyTool(value, sourceNormalized) {
 // "70:20:10"), or a number with a unit of at most two letters ("3x", "12M",
 // "99.9ms", "40%").
 const QUANTITY_WORD_RE = /^(?:\P{L}*|\d[\d.,]*\p{L}{0,2}%?)$/u;
+// What the same test accepts as a measure when a digit-led word may be a name.
+// A measure is a number alone, or a number with one suffix letter from k, m, b
+// or x in either case: the suffixes the metric patterns read on a number
+// ("50k users", "1.5M users", "10x"). Any other letters make the word a name,
+// lowercase or not: "3CX", "4d", "3cx", "4me" and "12MB". The suffix cannot
+// tell a product from a unit, so "4K" and "3M" read as measures.
+const MEASURE_WORD_RE = /^(?:\P{L}*|\d[\d.,]*[kKmMbBxX]?)$/u;
 // A word of single letters joined by dots or slashes: "U.S.", "A/B", "I/O".
 const ABBREVIATION_WORD_RE = /^\p{L}(?:[./]\p{L})+\.?$/u;
 
@@ -563,9 +583,12 @@ const ABBREVIATION_WORD_RE = /^\p{L}(?:[./]\p{L})+\.?$/u;
  * out: "CAC 30%" checks CAC, and "A/B" checks nothing. A word joined by a
  * slash to a dotted name is two names, so "Node.js/Express" checks both.
  * `skipLoneLetter` drops a run of one letter, which is what a capture that
- * stopped at the dot in "U.S." leaves behind.
+ * stopped at the dot in "U.S." leaves behind. `digitNames` reads a digit-led
+ * word as a name unless it is a measure (`MEASURE_WORD_RE`), where the
+ * default also drops any word with one or two letters after its digits.
  */
-function toolNameRuns(fragment, { skipLoneLetter = false } = {}) {
+function toolNameRuns(fragment, { skipLoneLetter = false, digitNames = false } = {}) {
+  const quantity = digitNames ? MEASURE_WORD_RE : QUANTITY_WORD_RE;
   const runs = [];
   let run = [];
   const flush = () => {
@@ -577,7 +600,7 @@ function toolNameRuns(fragment, { skipLoneLetter = false } = {}) {
     parts.forEach((part, index) => {
       if (index > 0) flush();
       const named = looksToolShaped(part) || /\p{Ll}\p{Lu}/u.test(part) || isDottedName(part);
-      if (named && !QUANTITY_WORD_RE.test(part) && !ABBREVIATION_WORD_RE.test(part)) run.push(part);
+      if (named && !quantity.test(part) && !ABBREVIATION_WORD_RE.test(part)) run.push(part);
       else flush();
     });
   }
@@ -706,6 +729,39 @@ function toolNameBeforeConnector(value) {
 }
 
 /**
+ * The values one tool fragment claims, and whether `isLikelyTool` accepted the
+ * fragment whole: the claim is then the whole fragment. When it did not, the
+ * claims are the names `dottedNamesBeforeConnector` and, with `useConnector`,
+ * `toolNameBeforeConnector` recover from it.
+ */
+function toolFragmentClaims(fragment, sourceNormalized, useConnector) {
+  const value = normalizeFact(fragment);
+  if (!value) return { whole: false, values: [] };
+  if (isLikelyTool(fragment, sourceNormalized)) return { whole: true, values: [value] };
+  const names = dottedNamesBeforeConnector(fragment);
+  if (useConnector) names.push(toolNameBeforeConnector(fragment));
+  return { whole: false, values: names.filter(Boolean).map(normalizeFact) };
+}
+
+/**
+ * A name run read out of a phrase, without the ending the phrase gave it: the
+ * quotes around it, a possessive and a lowercase hyphenated suffix. Returns ''
+ * when nothing is left that names a tool, as for "C-suite".
+ *
+ * The suffix is found by splitting at hyphens and dropping trailing
+ * all-lowercase segments, one pass over the word. An end-anchored pattern
+ * would rescan a long run of hyphens from every one of them.
+ */
+function tidyToolName(name) {
+  const parts = name.replace(POSSESSIVE_SUFFIX_RE, '').split('-');
+  let end = parts.length;
+  while (end > 1 && LOWERCASE_SEGMENT_RE.test(parts[end - 1])) end--;
+  if (end === parts.length) return trimToolFragment(parts.join('-'));
+  const stem = trimToolFragment(parts.slice(0, end).join('-'));
+  return Array.from(stem).length < 2 ? '' : stem;
+}
+
+/**
  * Extract explicitly asserted employer, title, and tool claims from text.
  *
  * `sourceNormalized` (from `normalizeFact(stripMarkup(sourceText))`, as
@@ -794,14 +850,33 @@ export function factClaims(text, sourceNormalized = null) {
         const afterTrigger = kind === 'tool' ? raw.replace(INNER_TOOL_TRIGGER_RE, '') : raw;
         const innerTrigger = afterTrigger !== raw && !DETERMINER_LEAD_RE.test(afterTrigger.trim());
         const fragment = innerTrigger ? afterTrigger : raw;
-        const value = normalizeFact(fragment);
-        if (!value) continue;
-        if (kind !== 'tool' || isLikelyTool(fragment, sourceNormalized)) claims.push({ kind, value });
-        else {
-          const names = dottedNamesBeforeConnector(fragment);
-          if (connectorRule || innerTrigger) names.push(toolNameBeforeConnector(fragment));
-          for (const name of names) if (name) claims.push({ kind, value: normalizeFact(name) });
+        if (kind !== 'tool') {
+          const value = normalizeFact(fragment);
+          if (value) claims.push({ kind, value });
+          continue;
         }
+        // A leading "a" or "an" changes nothing about whether the fragment is
+        // a tool claim. It is stripped and the rest goes through the decision a
+        // fragment with no article gets. Only when that decision claims the
+        // whole fragment does the article matter: the names in it are claimed
+        // instead, each alone, so "a Kubernetes cluster" checks "kubernetes"
+        // where the source says "Kubernetes". The names are the ones
+        // `toolNameRuns` reads: capitalised words, words with an inner
+        // capital, words with a digit that are not a measure ("3CX", "n8n"),
+        // and dotted names such as "node.js". A fragment with none of them ("a
+        // small team", "a 2024 roadmap") then claims nothing, and neither does
+        // a word that is only ever prose (`PROSE_FRAGMENTS`).
+        const trimmed = fragment.trim();
+        const article = ARTICLE_LEAD_RE.exec(trimmed);
+        const subject = article ? trimToolFragment(trimmed.slice(article[0].length)) : fragment;
+        const decision = toolFragmentClaims(subject, sourceNormalized, connectorRule || innerTrigger);
+        // One letter left from a capture that stopped at the dot of an
+        // abbreviation ("a U.S. agency" reaches here as "a U") names nothing.
+        const values = article && decision.whole
+          ? (/^\p{L}$/u.test(subject) ? [] : toolNameRuns(subject, { digitNames: true })
+            .map(tidyToolName).filter(Boolean).map(normalizeFact).filter(name => !PROSE_FRAGMENTS.has(name)))
+          : decision.values;
+        for (const value of values) claims.push({ kind, value });
       }
     }
   }
