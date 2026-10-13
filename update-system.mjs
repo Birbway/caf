@@ -1773,11 +1773,12 @@ export function isUserConfiguredTemplateVariant(file, configuredVariants = {}) {
   if (!match) return false;
   const kind = TEMPLATE_VARIANT_KIND[match[1]];
   const name = match[2];
-  const configured = configuredVariants?.[kind];
+  // One name per kind, or a list of them when several profiles are in play.
+  const configured = [configuredVariants?.[kind]].flat();
   // "standard" resolves to the base template (without a named suffix), so
   // a leftover cv-template.standard.* / cover-letter-template.standard.* is
   // inactive and must remain eligible for stale-file pruning.
-  return Boolean(configured) && configured !== 'standard' && configured === name;
+  return configured.some((candidate) => Boolean(candidate) && candidate !== 'standard' && candidate === name);
 }
 
 /**
@@ -2042,6 +2043,32 @@ export async function snapshotConfiguredTemplateVariants({
       localFiles, remoteFiles, configuredVariants, localContents, remoteContents,
     ),
   };
+}
+
+/**
+ * snapshotConfiguredTemplateVariants() for every profile that can choose a
+ * variant. The templates directory belongs to the data root, but the profile in
+ * force may be one CAREER_OPS_PROFILE names elsewhere while the data root keeps
+ * its own, so a variant either of them selects has to survive the checkout.
+ *
+ * @param {{profilePaths: string[]}} options profile files to read, in order;
+ *   the rest is snapshotConfiguredTemplateVariants()'s options
+ * @returns {Promise<{configuredVariants: {cv?: string[], cover?: string[]}, localFiles: string[], localContents: object, remoteContents: object, preservedPaths: string[]}>}
+ */
+export async function snapshotConfiguredTemplateVariantsAcrossProfiles({ profilePaths = [], ...options } = {}) {
+  const merged = { configuredVariants: {}, localFiles: [], localContents: {}, remoteContents: {}, preservedPaths: [] };
+  // No paths (path-resolver.mjs absent in an old target): one pass, the historical default.
+  for (const profilePath of new Set(profilePaths.length ? profilePaths : [undefined])) {
+    const snapshot = await snapshotConfiguredTemplateVariants({ ...options, profilePath });
+    for (const [kind, name] of Object.entries(snapshot.configuredVariants)) {
+      merged.configuredVariants[kind] = [...new Set([...(merged.configuredVariants[kind] ?? []), name])];
+    }
+    merged.localFiles = [...new Set([...merged.localFiles, ...snapshot.localFiles])];
+    Object.assign(merged.localContents, snapshot.localContents);
+    Object.assign(merged.remoteContents, snapshot.remoteContents);
+    merged.preservedPaths = [...new Set([...merged.preservedPaths, ...snapshot.preservedPaths])].sort();
+  }
+  return merged;
 }
 
 export function staleSystemFiles(localFiles, remoteFiles, systemPaths, userPaths = USER_PATHS, configuredVariants = {}) {
@@ -4145,11 +4172,13 @@ async function apply() {
     // generic locallyModifiedSystemFiles() baseline check may no longer flag
     // it, but checkout would still overwrite the user's local content.
     let dataRoot = ROOT;
-    let profilePath;
+    let profilePaths = [];
     try {
       const { getCareerOpsRoot, getProfilePath } = await import('./path-resolver.mjs');
       dataRoot = getCareerOpsRoot();
-      profilePath = getProfilePath();
+      // The override's profile and the data root's own: the templates directory
+      // is the data root's, so a variant either one selects must survive.
+      profilePaths = [getProfilePath(), getProfilePath(dataRoot)];
     } catch {
       // Very old targets may not have path-resolver.mjs yet; ROOT is the
       // historical data root and remains the safe compatibility fallback.
@@ -4162,9 +4191,9 @@ async function apply() {
       // If the upstream tree cannot be read, the checkout below reports the
       // real failure; do not infer a preservation decision from an empty tree.
     }
-    const configuredSnapshot = await snapshotConfiguredTemplateVariants({
+    const configuredSnapshot = await snapshotConfiguredTemplateVariantsAcrossProfiles({
       dataRoot,
-      profilePath,
+      profilePaths,
       remoteFiles: configuredVariantRemoteFiles,
       readRemoteContent: (file) => gitShowRaw(`${targetCommit}:${file}`),
     });
