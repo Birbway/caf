@@ -886,9 +886,6 @@ try {
     fail(`new-row merge ignored the PDF on disk: with file "${goneAdditionPresent.row}", without "${goneAdditionAbsent.row}"`);
   }
 
-  // Reader 3: a re-eval replaces the report link. The PDF cell describes the
-  // report that row links to (#2594, #2595). A live file still keyed to the
-  // previous report moves with the link. A file that is not on disk does not.
   const INDEX_HEADER = '# report\tpdf\thtml\tformat\tdate\n';
   const goneReeval = {
     rows: '| 3 | 2026-01-04 | Acme | Backend Engineer, Payments | 4.5/5 | Evaluated | ✅ | [1](reports/001-acme-2026-01-04.md) | first |\n',

@@ -30,7 +30,7 @@ import { execFileSync } from 'child_process';
 import { normalizeReportLink as normalizeLink } from './tracker-links.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 import { roleFuzzyMatch } from './role-matcher.mjs';
-import { parsePdfIndex, livePdfIndex } from './find.mjs';
+import { parsePdfIndex, livePdfIndex, normNum } from './find.mjs';
 import { LEGACY_COLMAP, TSV_REQUIRED_FIELDS, detectColumns, isHeaderRow, resolveScoreStatus, looksLikeTsvHeaderRow, resolveTsvColumns, looksLikeScoreCell, normalizeVia, normalizeTextKey, SEPARATOR_ROW_RE, extractReqNumber, extractCellUrl, parseMarkdownLinks } from './tracker-parse.mjs';
 // The ATS vendor table shared with analyze-patterns.mjs and the scanners, so
 // the URL cell's label and the per-vendor analysis name a board identically.
@@ -721,6 +721,50 @@ export async function mergeTracker(options = {}) {
       DATA_ROOT,
       (message) => console.warn(`⚠️  ${message}`),
     );
+  }
+
+  function rekeyLivePdf(pdfIndex, oldReportNum, newReportNum) {
+    const kindOf = (fields) => ((fields[5] ?? '').trim() === 'cover' ? 'cover' : 'cv');
+    const oldKey = normNum(oldReportNum);
+    const newKey = normNum(newReportNum);
+    if (!oldKey || !newKey || oldKey === newKey) return;
+    if (!pdfIndex.has(oldKey) || pdfIndex.has(newKey)) return;
+    const pdfPath = pdfIndex.get(oldKey);
+
+    if (!DRY_RUN) {
+      if (!existsSync(PDF_INDEX_FILE)) return;
+      const lines = readFileSync(PDF_INDEX_FILE, 'utf-8').split(/\r?\n/);
+      if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+      let moved = null;
+      for (const line of lines) {
+        if (!line.trim() || line.startsWith('#')) continue;
+        const fields = line.split('\t');
+        if (normNum(fields[0]) === oldKey && fields[1] === pdfPath) {
+          moved = fields;
+          break;
+        }
+      }
+      if (!moved) return;
+      const movedKind = kindOf(moved);
+      const kept = [];
+      for (const line of lines) {
+        if (!line.trim() || line.startsWith('#')) {
+          kept.push(line);
+          continue;
+        }
+        const fields = line.split('\t');
+        const key = normNum(fields[0]);
+        if ((key === oldKey || key === newKey) && kindOf(fields) === movedKind) continue;
+        kept.push(line);
+      }
+      const rewritten = moved.slice();
+      rewritten[0] = newKey;
+      kept.push(rewritten.join('\t'));
+      writeFileAtomic(PDF_INDEX_FILE, `${kept.join('\n')}\n`);
+    }
+
+    pdfIndex.delete(oldKey);
+    pdfIndex.set(newKey, pdfPath);
   }
 
   /**
@@ -2122,18 +2166,21 @@ export async function mergeTracker(options = {}) {
           `${downgrade ? '🔽' : '🔄'} Update: #${duplicate.num} ${addition.company} — ${addition.role} (${oldScore}→${newScore})`
           + (downgrade ? ' — DOWNGRADE, re-eval scored lower' : ''),
         );
-        // The PDF flag means this application still has a tailored PDF.
-        // The new report's own live index row wins. When that report has none,
-        // keep the check if the prior report's PDF is still in the live index.
-        // loadPdfIndex() only returns a row whose file is on disk (#4777), so
-        // a manifest line for a deleted file does not carry the check.
-        // A row whose report cell is `—` has no prior report to carry from.
-        // A changed report with neither PDF on disk becomes ❌ (#2594).
-        // An unchanged report keeps the cell it already has.
+        // The PDF flag describes the row's report, and this branch replaces that
+        // report link. Inheriting duplicate.pdf across a report change carried the
+        // superseded report's check onto the new one: the row claimed a tailored
+        // PDF for a report that has none (#2594). A live PDF still filed under the
+        // previous report is re-keyed onto the new report first, so the formula
+        // below still means the linked report is in the index. Fall back to the
+        // existing flag only when the report is unchanged.
+        // reportChanged is "different, including one side absent". Requiring both
+        // sides to be set left a row whose report cell is `—` looking unchanged,
+        // because oldReportNum was null, and the stale check survived. A `—` row
+        // with a check is what an entry looks like before it is evaluated. Both
+        // absent stays unchanged.
         const reportChanged = String(reportNum ?? '') !== String(oldReportNum ?? '');
-        const newPdfReady = Boolean(reportNum && pdfIndex.has(String(reportNum)));
-        const priorPdfReady = Boolean(oldReportNum && pdfIndex.has(String(oldReportNum)));
-        const pdf = (newPdfReady || (reportChanged && priorPdfReady))
+        if (reportChanged) rekeyLivePdf(pdfIndex, oldReportNum, reportNum);
+        const pdf = reportNum && pdfIndex.has(String(reportNum))
           ? '✅'
           : (reportChanged ? '❌' : duplicate.pdf);
         const updatedLine = buildRow({
