@@ -34,11 +34,15 @@ import { appendToScanHistory, normalizeUrlForDedup, SCAN_HISTORY_PATH } from './
 import { withPipelineLock } from './pipeline-lock.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { localToday } from './lib/local-today.mjs';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
+import { join } from 'path';
+import { getCareerOpsRoot, resolveTrackerPath } from './path-resolver.mjs';
+import { trackerLivenessTargets, DEFAULT_TRACKER_STATUSES } from './lib/tracker-liveness.mjs';
 
 const USAGE = `Usage:
   node check-liveness.mjs [--no-fallback] [--throttle[=ms]] [--no-record] <url1> [url2] ...
   node check-liveness.mjs [--no-fallback] [--throttle[=ms]] [--no-record] --file urls.txt
+  node check-liveness.mjs --tracker [--status=Evaluated,Applied]   # postings of tracker rows in these statuses
   node check-liveness.mjs --no-record             # check only; write nothing to scan-history
   node check-liveness.mjs --help                  # print this usage block and exit
   node check-liveness.mjs -h                      # alias for --help`;
@@ -120,16 +124,39 @@ async function main() {
   const throttleArg = args.find((a) => a === '--throttle' || a.startsWith('--throttle='));
   const throttleBaseMs = throttleArg ? (Number(throttleArg.split('=')[1]) || 5000) : 0;
   const record = recordingEnabled(args);
-  const positional = args.filter((a) => a !== '--no-fallback' && a !== '--no-record' && a !== throttleArg);
+  const statusArg = args.find((a) => a.startsWith('--status='));
+  const fromTracker = args.includes('--tracker');
+  const positional = args.filter((a) => a !== '--no-fallback' && a !== '--no-record' && a !== throttleArg
+    && a !== '--tracker' && a !== statusArg);
 
-  if (positional.length === 0) {
+  if (positional.length === 0 && !fromTracker) {
     console.error(USAGE);
     process.exitCode = 1;
     return;
   }
 
   let urls;
-  if (positional[0] === '--file') {
+  const labels = new Map();
+  if (fromTracker) {
+    const root = getCareerOpsRoot();
+    const trackerPath = resolveTrackerPath(root);
+    if (!existsSync(trackerPath)) {
+      console.error(`No tracker at ${trackerPath}. Evaluate a role first.`);
+      process.exitCode = 1;
+      return;
+    }
+    const statuses = statusArg ? statusArg.slice('--status='.length).split(',') : DEFAULT_TRACKER_STATUSES;
+    const reportsDir = join(root, 'reports');
+    const reportFiles = existsSync(reportsDir) ? readdirSync(reportsDir) : [];
+    const readReport = (n) => {
+      const name = reportFiles.find((f) => f.endsWith('.md') && new RegExp(`^0*${n}-`).test(f));
+      return name ? readFileSync(join(reportsDir, name), 'utf-8') : null;
+    };
+    const { targets, noUrl } = trackerLivenessTargets(readFileSync(trackerPath, 'utf-8'), { statuses, readReport });
+    console.log(`Tracker rows with status ${statuses.join(' or ')}: ${targets.length} with a posting URL${noUrl.length ? `, ${noUrl.length} without (${noUrl.map((n) => `#${n}`).join(' ')})` : ''}`);
+    for (const t of targets) labels.set(t.url, `#${t.num} ${t.company} · ${t.role} (${t.status})`);
+    urls = targets.map((t) => t.url);
+  } else if (positional[0] === '--file') {
     const text = await readFile(positional[1], 'utf-8');
     urls = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
   } else {
@@ -194,7 +221,7 @@ async function main() {
     }
 
     const icon = { active: '✅', expired: '❌', uncertain: '⚠️' }[result];
-    console.log(`${icon} ${result.padEnd(10)} ${api ? '(api) ' : '      '}${url}`);
+    console.log(`${icon} ${result.padEnd(10)} ${api ? '(api) ' : '      '}${labels.has(url) ? `${labels.get(url)}  ` : ''}${url}`);
     if (result !== 'active') console.log(`           ${reason}`);
     if (result === 'active') active++;
     else if (result === 'expired') expired++;
