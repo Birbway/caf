@@ -241,7 +241,7 @@ const NON_CONTENT_MARKERS = [
     // "paraphrase" or "restate", which a real JD can use as a duty ("you will
     // paraphrase source material") or in finance prose ("restated financials").
     reason: 'says it is a paraphrase or restatement, not the verbatim posting',
-    re: /(\((?:a |an )?(?:(?:close|detailed|faithful) )?paraphras(?:e|ed)\b[^)\n]*\)|\b(?:is|are) (?:a |an )?(?:(?:close|detailed|faithful|complete|non-fabricated|full|accurate)[ ,]+)*(?:paraphrase|restatement)\b|\bthis section restates\b|\bnot (?:a |the )?(?:literal|verbatim) (?:copy|quote|text|reproduction|archive|posting)\b|\b(?:could|would|did|can) ?not (?:be )?(?:reproduc|quot|return|captur|copi)\w*[^.\n]{0,40}\b(?:literal|verbatim)\b)/i,
+    re: /(\((?:a |an )?(?:(?:close|detailed|faithful) )?paraphras(?:e|ed)\b[^)\n]*\)|\b(?:is|are) (?:a |an )?(?:(?:close|detailed|faithful|complete|non-fabricated|full|accurate)[ ,]+)*(?:paraphrase|restatement)\b|\bthis section restates\b|\bparaphrased (?:from|version)\b|[—–-]\s*paraphras(?:e|ed)\s*$|\bnot (?:a |the )?(?:literal|verbatim) (?:copy|quote|text|reproduction|archive|posting)\b|\b(?:could|would|did|can) ?not (?:be )?(?:reproduc|quot|return|captur|copi)\w*[^.\n]{0,40}\b(?:literal|verbatim)\b)/im,
   },
   {
     category: 'bot-challenge',
@@ -787,6 +787,15 @@ function runSelfTest() {
     '## Job Description (archived verbatim)\n\nWe are hiring a part-time Instructional Design Assistant to support course updates in our LMS, 10 hours/week, remote, $28/hr. Candidates must be able to restate technical content for lay readers.\n\n## Machine Summary'),
     'hasEmbeddedJdArchive does not false-positive on real JD prose that mentions restating content (#5179)');
 
+  check(!hasEmbeddedJdArchive(
+    '## Job Description (archived verbatim)\n\nParaphrased from the original posting: Director of Marketing, owns demand generation and reports to the CMO.\n\n## Machine Summary'),
+    'hasEmbeddedJdArchive rejects an unparenthesized "Paraphrased from the original posting" body disclosure (#5179 review)');
+  check(!hasEmbeddedJdArchive(
+    '## Job Description - paraphrased\n\nDirector of Marketing. Owns demand generation, reports to the CMO, manages a team of eight.\n\n## Machine Summary'),
+    'hasEmbeddedJdArchive rejects a heading that ends in "- paraphrased" (#5179 review)');
+  check(!hasEmbeddedJdArchive(
+    '## Job Description \u2014 paraphrased\n\nDirector of Marketing. Owns demand generation, reports to the CMO, manages a team of eight.\n\n## Machine Summary'),
+    'hasEmbeddedJdArchive rejects a heading that ends in an em dash and "paraphrased" (#5179 review)');
   check(hasEmbeddedJdArchive(
     '## Job Description (archived verbatim)\n\nCandidates need not verbatim-copy source text. Survey answers are not literal quotes, and you will review them for tone across three regional teams.\n\n## Machine Summary'),
     'hasEmbeddedJdArchive does not false-positive on real JD prose that says "not literal" or "verbatim" as a duty (#5179 review)');
