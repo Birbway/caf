@@ -33,13 +33,32 @@ function fakeFetch(body, { status = 200 } = {}) {
   const calls = [];
   const impl = async (url) => {
     calls.push(url);
-    return {
-      ok: status >= 200 && status < 300,
-      status,
-      arrayBuffer: async () => new Uint8Array(Buffer.from(body)).buffer,
-    };
+    return new Response(status === 404 ? null : Buffer.from(body), { status });
   };
   return { impl, calls };
+}
+
+// A body that never ends: one 1 KB chunk per pull, counted, so a test can show
+// the reader stopped instead of draining it.
+function endlessBody() {
+  const counter = { pulls: 0 };
+  const stream = new ReadableStream({
+    pull(controller) {
+      counter.pulls++;
+      controller.enqueue(new Uint8Array(1024));
+    },
+  }, { highWaterMark: 0 });
+  return { stream, counter };
+}
+
+async function installInEmptyRoot(opts) {
+  const root = mkdtempSync(join(tmpdir(), 'latex-engine-root-'));
+  try {
+    const result = await installTectonic({ root, platform: 'linux', arch: 'x64', detectEngine: () => null, ...opts });
+    return { result, written: readdirSync(root) };
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 test('tectonicAsset maps every supported platform to a pinned release asset', () => {
@@ -125,11 +144,64 @@ test('an unsupported platform never downloads and points at manual install', asy
   assert.equal(calls.length, 0);
 });
 
-test('an engine that is already available short-circuits without downloading', async () => {
+test('tectonic that is already available short-circuits without downloading', async () => {
   const { impl, calls } = fakeFetch('');
-  const result = await installTectonic({ fetchImpl: impl, detectEngine: () => 'pdflatex' });
-  assert.deepEqual(result, { status: 'already-available', engine: 'pdflatex' });
+  const result = await installTectonic({ fetchImpl: impl, detectEngine: () => 'tectonic' });
+  assert.deepEqual(result, { status: 'already-available', engine: 'tectonic' });
   assert.equal(calls.length, 0);
+});
+
+// generate-latex.mjs sends pdflatex-only users with CJK content here; stopping
+// at "already available" would leave them unable to build the CJK template.
+test('a host with only pdflatex still gets tectonic', async () => {
+  const { impl, calls } = fakeFetch('x');
+  const { result } = await installInEmptyRoot({ fetchImpl: impl, detectEngine: () => 'pdflatex' });
+  assert.equal(result.status, 'checksum-mismatch', 'the download did not run');
+  assert.equal(calls.length, 1);
+});
+
+test('a download that never answers times out instead of hanging', async () => {
+  const { result, written } = await installInEmptyRoot({
+    timeoutMs: 50, fetchImpl: () => new Promise(() => {}),
+  });
+  assert.equal(result.status, 'failed');
+  assert.match(result.error, /timed out/);
+  assert.deepEqual(written, []);
+});
+
+test('a body that stalls mid-download times out too', async () => {
+  let signal;
+  const stalled = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(10)); } });
+  const { result, written } = await installInEmptyRoot({
+    timeoutMs: 50, fetchImpl: async (_url, init) => { signal = init.signal; return new Response(stalled); },
+  });
+  assert.equal(result.status, 'failed');
+  assert.match(result.error, /timed out/);
+  assert.equal(signal.aborted, true, 'the fetch was not aborted');
+  assert.deepEqual(written, []);
+});
+
+test('a declared Content-Length over the cap is refused before reading the body', async () => {
+  const { stream, counter } = endlessBody();
+  const { result, written } = await installInEmptyRoot({
+    maxBytes: 4096,
+    fetchImpl: async () => new Response(stream, { headers: { 'content-length': String(10 * 1024 * 1024) } }),
+  });
+  assert.equal(result.status, 'failed');
+  assert.match(result.error, /exceeds/);
+  assert.equal(counter.pulls, 0, 'the body was read anyway');
+  assert.deepEqual(written, []);
+});
+
+test('an undeclared body that runs past the cap stops being read', async () => {
+  const { stream, counter } = endlessBody();
+  const { result, written } = await installInEmptyRoot({
+    maxBytes: 4096, fetchImpl: async () => new Response(stream),
+  });
+  assert.equal(result.status, 'failed');
+  assert.match(result.error, /exceeds/);
+  assert.ok(counter.pulls <= 6, `read ${counter.pulls} KB against a 4 KB cap`);
+  assert.deepEqual(written, []);
 });
 
 test('--force skips the already-available short-circuit', async () => {

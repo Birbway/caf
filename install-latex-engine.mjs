@@ -4,9 +4,9 @@
  * install-latex-engine.mjs — One-command local LaTeX engine for the latex CV path (#5132)
  *
  * Usage:
- *   node install-latex-engine.mjs            # install tectonic into the repo root (no-op if an engine is present)
+ *   node install-latex-engine.mjs            # install tectonic into the repo root (no-op if tectonic is present)
  *   node install-latex-engine.mjs --check    # report the engine generate-latex.mjs would use; never downloads
- *   node install-latex-engine.mjs --force    # re-download even if an engine is already available
+ *   node install-latex-engine.mjs --force    # re-download even if tectonic is already available
  *   node install-latex-engine.mjs --json     # machine-readable result
  *
  * `latex` / `latex-tex` modes compile through generate-latex.mjs, which needs
@@ -23,12 +23,15 @@
  * Supply chain: the version is pinned and so is the SHA-256 of every asset
  * (the digests GitHub publishes on the release). A download that does not
  * match is discarded before anything is extracted. Bumping the version means
- * updating TECTONIC_VERSION and every digest together.
+ * updating TECTONIC_VERSION and every digest together. The download itself is
+ * bounded: it is aborted after DOWNLOAD_TIMEOUT_MS, and reading stops as soon
+ * as it passes MAX_DOWNLOAD_BYTES, so a stalled or oversized response never
+ * hangs the agent or fills the disk before the digest check can reject it.
  */
 
 import { createHash } from 'crypto';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync,writeFileSync, copyFileSync, chmodSync, rmSync, readdirSync, renameSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, copyFileSync, chmodSync, rmSync, readdirSync, renameSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -68,6 +71,10 @@ export const TECTONIC_ASSETS = {
   },
 };
 
+// The largest pinned asset is ~22 MB; a response far past that is not the release.
+export const MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
+export const DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
+
 const MANUAL_INSTALL_URL = 'https://tectonic-typesetting.github.io/book/latest/installation/';
 
 /**
@@ -100,6 +107,56 @@ function tarBinary(platform) {
   return 'tar';
 }
 
+/**
+ * Fetch `url` into a Buffer, giving up after `timeoutMs` (covering the body as
+ * well as the headers) and as soon as more than `maxBytes` have arrived.
+ * Throws an Error whose message says which limit was hit.
+ */
+async function boundedDownload(fetchImpl, url, { timeoutMs, maxBytes }) {
+  const controller = new AbortController();
+  let timer;
+  const timedOut = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(`timed out after ${Math.round(timeoutMs / 1000)}s`);
+      controller.abort(err);
+      reject(err);
+    }, timeoutMs);
+  });
+  timedOut.catch(() => {});
+  // Raced as well as passed as `signal`, so an implementation that ignores the
+  // signal still cannot outlive the timeout.
+  const bounded = (p) => Promise.race([p, timedOut]);
+  const tooLarge = () => new Error(`response exceeds the ${Math.round(maxBytes / 1024 / 1024)} MB limit`);
+
+  let reader;
+  try {
+    const res = await bounded(fetchImpl(url, { signal: controller.signal }));
+    if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+    const declared = Number(res.headers?.get?.('content-length'));
+    if (declared > maxBytes) throw tooLarge();
+    if (!res.body?.getReader) throw new Error('response has no readable body');
+
+    reader = res.body.getReader();
+    const chunks = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await bounded(reader.read());
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) throw tooLarge();
+      chunks.push(value);
+    }
+    reader = null;
+    return Buffer.concat(chunks, total);
+  } catch (err) {
+    controller.abort(err);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    if (reader) reader.cancel().catch(() => {});
+  }
+}
+
 function binaryWorks(bin) {
   try {
     return execFileSync(bin, ['--version'], { stdio: 'pipe', encoding: 'utf-8' }).trim();
@@ -115,7 +172,9 @@ function binaryWorks(bin) {
  * @param {string} [opts.root] - directory the binary is installed into (the repo root)
  * @param {string} [opts.platform]
  * @param {string} [opts.arch]
- * @param {boolean} [opts.force] - reinstall even if an engine is already available
+ * @param {boolean} [opts.force] - reinstall even if tectonic is already available
+ * @param {number} [opts.timeoutMs] - abort the download after this long
+ * @param {number} [opts.maxBytes] - stop reading the download past this size
  * @param {typeof fetch} [opts.fetchImpl] - injectable for tests
  * @param {() => string|null} [opts.detectEngine] - injectable for tests
  * @param {(asset: object) => void} [opts.onDownload] - called once, right before the download starts
@@ -129,15 +188,19 @@ export async function installTectonic({
   platform = process.platform,
   arch = process.arch,
   force = false,
+  timeoutMs = DOWNLOAD_TIMEOUT_MS,
+  maxBytes = MAX_DOWNLOAD_BYTES,
   fetchImpl = globalThis.fetch,
   detectEngine = resolveLatexEngine,
   onDownload = () => {},
   resolveAsset = tectonicAsset,
   probe = binaryWorks,
 } = {}) {
+  // Only tectonic counts: a pdflatex-only host still needs it for the CJK
+  // template, which is where generate-latex.mjs sends those users.
   if (!force) {
     const engine = detectEngine();
-    if (engine) return { status: 'already-available', engine };
+    if (engine === 'tectonic') return { status: 'already-available', engine };
   }
 
   const asset = resolveAsset(platform, arch);
@@ -151,9 +214,7 @@ export async function installTectonic({
   let buf;
   try {
     onDownload(asset);
-    const res = await fetchImpl(asset.url);
-    if (!res.ok) return { status: 'failed', error: `Download failed: HTTP ${res.status} for ${asset.url}` };
-    buf = Buffer.from(await res.arrayBuffer());
+    buf = await boundedDownload(fetchImpl, asset.url, { timeoutMs, maxBytes });
   } catch (err) {
     return { status: 'failed', error: `Download failed: ${err.message}` };
   }
@@ -208,9 +269,9 @@ export async function installTectonic({
 const KNOWN_FLAGS = ['--check', '--force', '--json', '--help', '-h'];
 
 const USAGE = `Usage:
-  node install-latex-engine.mjs            # install tectonic ${TECTONIC_VERSION} into the repo root (no-op if an engine is present)
+  node install-latex-engine.mjs            # install tectonic ${TECTONIC_VERSION} into the repo root (no-op if tectonic is present)
   node install-latex-engine.mjs --check    # report the engine generate-latex.mjs would use; never downloads
-  node install-latex-engine.mjs --force    # re-download even if an engine is already available
+  node install-latex-engine.mjs --force    # re-download even if tectonic is already available
   node install-latex-engine.mjs --json     # machine-readable result
   node install-latex-engine.mjs --help|-h  # print this usage block and exit
 
@@ -242,7 +303,7 @@ async function main() {
   } else if (result.status === 'installed') {
     console.log(`Installed ${result.version} → ${result.path}`);
   } else if (result.status === 'already-available') {
-    console.log(`LaTeX engine already available (${result.engine}); nothing to do. Use --force to reinstall.`);
+    console.log('tectonic is already available; nothing to do. Use --force to reinstall.');
   } else if (result.status === 'available') {
     console.log(`LaTeX engine: ${result.engine}${result.localBinary ? ` (${result.localBinary})` : ''}`);
   } else {
