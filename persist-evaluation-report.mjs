@@ -132,7 +132,27 @@ function readStdin() {
   });
 }
 
+const USAGE_LINES = [
+  "Usage: node persist-evaluation-report.mjs < payload.json",
+  "",
+  "Read one JSON object on stdin and write the evaluation report plus a",
+  "headed tracker-addition TSV under the process cwd (the data root).",
+  "Does not reserve a report number and does not merge the tracker.",
+  "",
+  "  --help, -h    print this help and exit",
+];
+
 async function main() {
+  const args = process.argv.slice(2);
+  if (args.includes("--help") || args.includes("-h")) {
+    process.stdout.write(`${USAGE_LINES.join("\n")}\n`);
+    return;
+  }
+  if (args.length > 0) {
+    process.stderr.write(`persist-evaluation-report: unrecognized argument: ${args[0]}\n${USAGE_LINES.join("\n")}\n`);
+    process.exitCode = 1;
+    return;
+  }
   let payload;
   try {
     payload = JSON.parse(await readStdin());

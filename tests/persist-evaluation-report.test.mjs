@@ -50,7 +50,29 @@ function tsvWriteFails(real = { mkdirSync, existsSync, unlinkSync, writeFileSync
   };
 }
 
-test("tracker addition builders in lib and web agree", () => {
+
+test("persist-evaluation-report --help prints usage and exits 0", () => {
+  const result = spawnSync(process.execPath, [SCRIPT, "--help"], {
+    cwd: ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^Usage:/m);
+});
+
+test("persist-evaluation-report -h matches --help", () => {
+  const long = spawnSync(process.execPath, [SCRIPT, "--help"], { cwd: ROOT, encoding: "utf8" });
+  const short = spawnSync(process.execPath, [SCRIPT, "-h"], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(short.status, 0, short.stderr);
+  assert.equal(short.stdout, long.stdout);
+});
+test("tracker addition builders in lib and web agree", async (t) => {
+  // web/ is excluded from core-only installs (#3269). Skip rather than crash.
+  if (!existsSync(join(ROOT, "web", "src"))) {
+    t.skip("web/ not present");
+    return;
+  }
+  const { trackerTsvLine: webLine } = await import("../web/src/lib/report-persist.mjs");
   const rows = [
     ROW,
     { ...ROW, via: "Hays", url: "https://example.com/jobs/2" },
