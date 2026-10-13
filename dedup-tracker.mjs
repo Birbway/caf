@@ -12,15 +12,16 @@
  */
 
 import { readFileSync, copyFileSync, existsSync, mkdirSync } from 'fs';
-import { dirname } from 'path';
+import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { getCareerOpsRoot, resolveTrackerPath } from './path-resolver.mjs';
 import { roleFuzzyMatch } from './role-matcher.mjs';
 import { normalizeUrl } from './url-key.mjs';
 import {
   openTrackerTransaction, rebuildRow, normalizeCompany,
+  loadCanonicalStates, resolveCanonicalState,
 } from './tracker-utils.mjs';
-import { resolveColumns, parseTrackerRow, normalizeVia } from './tracker-parse.mjs';
+import { resolveColumns, parseTrackerRow, normalizeVia, extractReqNumber } from './tracker-parse.mjs';
 import { validateFlags } from './lib/cli-flags.mjs';
 
 const CAREER_OPS = getCareerOpsRoot();
@@ -45,6 +46,13 @@ const DRY_RUN = process.argv.includes('--dry-run');
 // Ensure the target tracker directory exists in both normal and fixture mode.
 mkdirSync(dirname(APPS_FILE), { recursive: true });
 
+// templates/states.yml is system layer: it lives beside this script, not in the
+// data root. Unreadable means only the spellings in STATUS_RANK are known.
+let CANONICAL_STATES = [];
+try {
+  CANONICAL_STATES = loadCanonicalStates(join(dirname(fileURLToPath(import.meta.url)), 'templates', 'states.yml'));
+} catch { /* fall back to STATUS_RANK alone */ }
+
 // Status advancement order (higher = more advanced in pipeline)
 // Aplicado > Rechazado because active application > terminal state
 const STATUS_RANK = {
@@ -55,13 +63,19 @@ const STATUS_RANK = {
   'evaluated': 2,
   'applied': 3,
   'responded': 4,
-  'interview': 5,
-  'offer': 6,
+  'assessment': 5,
+  'interview': 6,
+  'offer': 7,
   // Hired outranks everything: the accepted-job record must never lose a
   // dedup contest to a repost row (aliases from templates/states.yml).
-  'hired': 7,
-  'accepted': 7,
-  'accept': 7,
+  'hired': 8,
+  'accepted': 8,
+  'accept': 8,
+  // Assessment aliases from templates/states.yml.
+  'screening': 5,
+  'online assessment': 5,
+  'online_assessment': 5,
+  'online screening': 5,
   // Spanish aliases — kept for backwards compat with existing tracker data
   'no_aplicar': 0,
   'no aplicar': 0,
@@ -72,10 +86,10 @@ const STATUS_RANK = {
   'evaluada': 2,
   'aplicado': 3,
   'respondido': 4,
-  'entrevista': 5,
-  'oferta': 6,
-  'contratado': 7,
-  'contratada': 7,
+  'entrevista': 6,
+  'oferta': 7,
+  'contratado': 8,
+  'contratada': 8,
 };
 
 /**
@@ -107,7 +121,16 @@ function normalizeStatus(status) {
  * @returns {number} Numeric rank from STATUS_RANK, or 0 for unknown statuses.
  */
 function statusRank(status) {
-  return STATUS_RANK[normalizeStatus(status)] || 0;
+  const key = normalizeStatus(status);
+  if (Object.hasOwn(STATUS_RANK, key)) return STATUS_RANK[key];
+  // A status that is not spelled above may still be a states.yml alias
+  // ("Sent", "Aplicada", "Başvuruldu", "Mülakat"...) that the dashboard and
+  // set-status.mjs read as a real state. Ranking it 0 made an Applied row look
+  // like a throwaway and let a higher-scored Evaluated sibling delete it.
+  const label = resolveCanonicalState(key, CANONICAL_STATES);
+  return label && Object.hasOwn(STATUS_RANK, label.toLowerCase())
+    ? STATUS_RANK[label.toLowerCase()]
+    : 0;
 }
 
 /**
@@ -118,7 +141,7 @@ function statusRank(status) {
  * matches from silently deleting an active application record.
  *
  * @param {string} status - Raw status value from the tracker row.
- * @returns {boolean} True when the row is Applied, Responded, Interview, or Offer.
+ * @returns {boolean} True when the row is Applied, Responded, Assessment, Interview, or Offer.
  */
 function isAdvancedStatus(status) {
   return statusRank(status) >= STATUS_RANK.applied;
@@ -215,6 +238,25 @@ function urlsConflict(a, b) {
 }
 
 /**
+ * Check whether two tracker rows carry two different requisition ids in Notes.
+ *
+ * The rule merge-tracker.mjs applies as `reqNumDiffers` (#1524): an id missing
+ * on either side is UNKNOWN, and only two present-and-different ids are evidence
+ * that the rows are distinct openings. An employer posts one title once per city
+ * or country, each copy with its own job id, and merge-tracker keeps those rows
+ * apart on purpose; deleting one here would silently reverse that decision.
+ *
+ * @param {object} a - First parsed applications.md row.
+ * @param {object} b - Second parsed applications.md row.
+ * @returns {boolean} True when both rows carry a recognizable id and they differ.
+ */
+function reqNumsConflict(a, b) {
+  const reqA = extractReqNumber(a.notes);
+  const reqB = extractReqNumber(b.notes);
+  return Boolean(reqA && reqB && reqA !== reqB);
+}
+
+/**
  * Decide whether two same-company tracker rows should be deduplicated.
  *
  * Rows merge only when they describe the same opening: either the exact same
@@ -234,6 +276,9 @@ function urlsConflict(a, b) {
  * through the same normalizeUrl(): two rows cannot be one application while
  * naming two postings. A blank or placeholder URL yields no key and is
  * UNKNOWN, never a conflict, so rows without URLs behave exactly as before.
+ * Two present-and-different requisition ids in Notes (`Job id 8157736` vs
+ * `Job id 8157738`, the #1524 rule) veto every tier the same way, so one title
+ * posted once per city or country keeps one row per posting.
  * Blocking fails toward a duplicate the user can see; merging on a conflict
  * deletes a real application.
  *
@@ -243,6 +288,7 @@ function urlsConflict(a, b) {
  */
 function roleMatch(a, b) {
   if (urlsConflict(a, b)) return false;
+  if (reqNumsConflict(a, b)) return false;
 
   if (sameReportIdentity(a, b)) return true;
   if (normalizeRole(a.role) !== normalizeRole(b.role)) return false;
@@ -394,9 +440,10 @@ for (const [company, companyEntries] of groups) {
       if (processed.has(j)) continue;
       // roleMatch() only compares against the seed row, so a seed with no URL
       // would admit two rows naming different postings and one would be
-      // deleted. Check the candidate's URL against every member already in.
+      // deleted. Check the candidate's URL and requisition id against every
+      // member already in.
       if (roleMatch(companyEntries[i], companyEntries[j])
-          && !cluster.some(member => urlsConflict(member, companyEntries[j]))
+          && !cluster.some(member => urlsConflict(member, companyEntries[j]) || reqNumsConflict(member, companyEntries[j]))
           && (!isBlindGroup || withinBlindWindow(companyEntries[i].date, companyEntries[j].date))) {
         cluster.push(companyEntries[j]);
         processed.add(j);

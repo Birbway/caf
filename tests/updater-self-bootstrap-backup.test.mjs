@@ -33,11 +33,14 @@ try {
   }
 
   const source = readFileSync(join(root, 'update-system.mjs'), 'utf8');
+  // apply() pins FETCH_HEAD to an immutable SHA once per run and addresses that
+  // SHA everywhere afterwards (#3052), so this ordering check follows the pinned
+  // ref rather than the pseudo-ref it replaced.
   const closureAt = source.indexOf('const reexecFiles = assertCanonicalManifestPaths(');
   const coverageAt = source.indexOf('uncoveredReexecFiles.length > 0', closureAt);
-  const detectAt = source.indexOf('locallyModifiedSystemFiles(reexecFiles, pairedTargetRef)', coverageAt);
+  const detectAt = source.indexOf('locallyModifiedSystemFiles(reexecFiles, targetCommit)', coverageAt);
   const backUpAt = source.indexOf('backupSystemFiles(bootstrapAtRisk)', detectAt);
-  const checkoutAt = source.indexOf("git('--literal-pathspecs', 'checkout', pairedTargetRef, '--', ...reexecFiles)", detectAt);
+  const checkoutAt = source.indexOf("git('--literal-pathspecs', 'checkout', targetCommit, '--', ...reexecFiles)", detectAt);
   if (closureAt !== -1 && coverageAt > closureAt && detectAt > coverageAt
       && backUpAt > detectAt && checkoutAt > backUpAt) {
     pass('apply validates, detects, and backs up bootstrap edits before literal checkout');

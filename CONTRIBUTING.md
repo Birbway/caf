@@ -33,13 +33,13 @@ The review process you'll experience here is documented end-to-end in [Agentic m
 
 ## Quick Start
 
-1. Open an issue to discuss your idea
+1. For a new feature, a new mode or command, or an architecture change, open an issue to discuss your idea (see [Before Submitting a PR](#before-submitting-a-pr))
 2. Fork the repo
 3. Create a branch (`git checkout -b feature/my-feature`)
 4. Make your changes
 5. Test with a fresh clone (see [docs/SETUP.md](docs/SETUP.md))
 6. Commit and push
-7. Open a Pull Request referencing the issue
+7. Open a Pull Request, referencing the issue if you opened one
 
 ## What to Contribute
 
@@ -88,7 +88,7 @@ The ladder above is for work that has been **abandoned**. An open PR with an aut
 
 If the conflict came from something **we** merged and resolving it is mechanical, the fix is ours: we rebase the author's own branch (that is what "Allow edits by maintainers" is for), run the suite, and leave their PR and their authorship untouched. If the two changes really collide, only the author can say how theirs should fit, so we ask them to rebase and help on the diff if they want it. Conflicts from anywhere else, the author rebases whenever they're ready. Nobody is on a clock for any of this.
 
-This applies to automation as well. A bot opening replacement PRs on other people's branches is doing the same thing at higher volume, and automated triage posted into someone else's thread ("don't merge both", "treat #X as the primary") reads as a project decision to the person who has been waiting on one. Merge calls are the maintainers' to make. Automated agents may comment only on pull requests their operator authored; automated comments on other people's PRs are minimized as off-topic. Reviews you write yourself, under your own name, are welcome on any PR.
+This applies to automation as well. A bot opening replacement PRs on other people's branches is doing the same thing at higher volume, and automated triage posted into someone else's thread ("don't merge both", "treat #X as the primary") reads as a project decision to the person who has been waiting on one. Merge calls are the maintainers' to make. The `depends-on` check stays inside that line: it reports an order the PR author declared in their own body, and whether that dependency is still open. The ordering stays the author's, and the merge call stays the maintainers'. Automated agents may comment only on pull requests their operator authored; automated comments on other people's PRs are minimized as off-topic. Reviews you write yourself, under your own name, are welcome on any PR.
 
 **The project's own automation is the exception, and it is narrow.** Everything it writes in a thread comes from a bot account, so you can always tell it from a person, and it never decides anything about your PR. It may:
 
