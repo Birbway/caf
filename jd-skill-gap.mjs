@@ -279,6 +279,11 @@ function scanJd(jdText) {
     if (REQUIREMENT_HEADER_RE.test(headerLine)) {
       inRequirementsBlock = true;
       sawRequirementSection = true;
+      // "Requirements: SQL; dbt; Tableau" puts the whole list on the header
+      // line, with no bullets under it. A separator is required so a sentence
+      // such as "About you: Curious and kind" is not read as a list.
+      const inline = headerLine.includes(':') ? headerLine.slice(headerLine.indexOf(':') + 1) : '';
+      if (/[;,]/.test(inline)) addSkillTokens(inline, skills);
       continue;
     }
     if (inRequirementsBlock && line.trim() === '') continue;
@@ -287,19 +292,20 @@ function scanJd(jdText) {
     }
 
     const bulletMatch = BULLET_LINE_RE.exec(line);
-    if (inRequirementsBlock && bulletMatch) {
-      const bulletText = bulletMatch[1];
-      let m;
-      SKILL_TOKEN_RE.lastIndex = 0;
-      while ((m = SKILL_TOKEN_RE.exec(bulletText)) !== null) {
-        const token = m[1].trim();
-        if (!STOPWORDS.has(token.toLowerCase()) && token.length > 1) {
-          skills.add(token);
-        }
-      }
-    }
+    if (inRequirementsBlock && bulletMatch) addSkillTokens(bulletMatch[1], skills);
   }
   return { skills: [...skills], sawRequirementSection };
+}
+
+function addSkillTokens(text, skills) {
+  let m;
+  SKILL_TOKEN_RE.lastIndex = 0;
+  while ((m = SKILL_TOKEN_RE.exec(text)) !== null) {
+    const token = m[1].trim();
+    if (!STOPWORDS.has(token.toLowerCase()) && token.length > 1) {
+      skills.add(token);
+    }
+  }
 }
 
 /**
