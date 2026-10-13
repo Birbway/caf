@@ -8,7 +8,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { trackerTsvLine as coreLine } from "../lib/tracker-addition.mjs";
-import { trackerTsvLine as webLine } from "../web/src/lib/report-persist.mjs";
 import { writeEvaluationArtifacts } from "../persist-evaluation-report.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
