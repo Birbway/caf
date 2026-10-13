@@ -64,7 +64,10 @@ const explicitTarget = targetIdx !== -1 && argv[targetIdx + 1] ? argv[targetIdx 
 const projectRoot = explicitTarget || getCareerOpsRoot();
 // --target diagnoses a whole other checkout, so that checkout's profile is the
 // one that counts; otherwise CAREER_OPS_PROFILE applies as it does everywhere.
-const profilePathFor = (root) => (explicitTarget ? getProfilePath(root) : getProfilePath());
+// With no override the path is the root the doctor started from: the human run
+// loads the root's whole .env later, and a CAREER_OPS_ROOT in it must not move
+// this one check to another root.
+const profilePathFor = (root) => (explicitTarget || !hasProfileOverride() ? getProfilePath(root) : getProfilePath());
 // Only scan.mjs, the evaluators and openrouter-runner load a .env; most readers
 // of the profile see the process environment alone. Doctor reports what they see,
 // so an override set only in the root's .env is looked up for the advice below
@@ -645,6 +648,20 @@ function prereqPresent(root, path) {
   return existsSync(join(root, ...path.split('/')));
 }
 
+// The root's .env names a profile, but only scan.mjs, the evaluators and
+// openrouter-runner load it. That is a split whether or not a data-root profile
+// exists, so it is reported either way. A shell value shadows the .env, so it
+// is not a split then.
+function checkEnvFileProfile(root) {
+  const fromEnvFile = explicitTarget || hasProfileOverride() ? null : profileFromEnvFile(root);
+  if (!fromEnvFile) return null;
+  return {
+    warn: true,
+    label: `.env sets CAREER_OPS_PROFILE=${fromEnvFile}, but only scan.mjs and the evaluators load .env; cv-sync-check, generate-pdf, upskill and the other readers use ${profilePathFor(root)}`,
+    fix: [`Export CAREER_OPS_PROFILE=${fromEnvFile} in your shell so every command reads the same file, or remove it from .env`],
+  };
+}
+
 function checkPrereq({ path, fix }) {
   if (prereqPresent(projectRoot, path)) {
     return { pass: true, label: `${path} found` };
@@ -927,6 +944,8 @@ async function main() {
     checkAutoDir('output'),
     checkAutoDir('reports'),
     checkPlugins(projectRoot),
+    // checkPrereq already explains the .env case when the profile is missing.
+    prereqPresent(projectRoot, 'config/profile.yml') ? checkEnvFileProfile(projectRoot) : null,
   ].filter(Boolean);
 
   // Network-bound portals.yml reachability probe — only under --strict.
@@ -1132,12 +1151,14 @@ function onboardingState(root) {
   const bakCheck = checkTrackedBakFiles(codeRoot);
   const skillCheck = checkSkillEntrypoints(codeRoot);
   const cvShape = checkCvShape(root);
+  const envFileProfile = checkEnvFileProfile(root);
   const warnings = [
     ...(cliWarning ? [cliWarning] : []),
     ...(mcpCheck?.warn ? [`${mcpCheck.label}\n→ ${[].concat(mcpCheck.fix || []).join('\n  ')}`] : []),
     ...(bakCheck.warn ? [`${bakCheck.label}\n→ ${[].concat(bakCheck.fix || []).join('\n  ')}`] : []),
     ...(skillCheck.warn ? [`${skillCheck.label}\n→ ${[].concat(skillCheck.fix || []).join('\n  ')}`] : []),
     ...(cvShape?.warn ? [`${cvShape.label}\n→ ${[].concat(cvShape.fix || []).join('\n  ')}`] : []),
+    ...(envFileProfile ? [`${envFileProfile.label}\n→ ${envFileProfile.fix.join('\n  ')}`] : []),
     ...unpersonalized.map((u) => `${u.path} ${u.reason} — ${u.impact}\n→ Personalize it from cv.md before running evaluations.`),
   ];
 

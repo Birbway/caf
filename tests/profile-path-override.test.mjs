@@ -187,6 +187,61 @@ try {
       : fail(`doctor advice for a .env-only CAREER_OPS_PROFILE does not name the .env, the shell, and the file (${label})`);
   }
 
+  // The agent onboarding flow reads `doctor --json`, where a .env-only override used
+  // to show up as nothing but `missing: ["config/profile.yml"]`, so an agent would
+  // copy a template profile into the data root. The warning has to travel in the JSON.
+  for (const cli of [undefined, 'claude']) {
+    const label = cli ? 'with CAREER_OPS_CLI exported' : 'without CAREER_OPS_CLI';
+    const warnings = JSON.parse(runDoctorEnvFile(['--json'], cli)).warnings.join('\n');
+    /\.env/.test(warnings) && warnings.includes(namedProfile) && /shell/.test(warnings)
+      ? pass(`doctor --json warns that the .env sets CAREER_OPS_PROFILE and names the file (${label})`)
+      : fail(`doctor --json carries no warning for a .env-only CAREER_OPS_PROFILE (${label}): ${JSON.stringify(warnings.slice(0, 200))}`);
+  }
+
+  // A data-root profile that exists does not make the .env override harmless:
+  // scan.mjs and the evaluators read the file the .env names, the rest read this one.
+  const bothRoot = join(scratch, 'both-root');
+  mkdirSync(join(bothRoot, 'config'), { recursive: true });
+  writeFileSync(join(bothRoot, 'config', 'profile.yml'), 'candidate:\n  full_name: Root\n', 'utf-8');
+  writeFileSync(join(bothRoot, '.env'), `CAREER_OPS_PROFILE=${namedProfile}\n`, 'utf-8');
+  const runDoctorBoth = (args) => {
+    const env = { ...process.env, CAREER_OPS_ROOT: bothRoot, CAREER_OPS_DATA_DIR: '' };
+    delete env.CAREER_OPS_PROFILE;
+    const r = spawnSync(NODE, [join(ROOT, 'doctor.mjs'), ...args], { cwd: scratch, encoding: 'utf-8', timeout: 60000, env });
+    if (r.error) throw r.error;
+    return `${r.stdout}${r.stderr}`;
+  };
+  const bothHuman = runDoctorBoth([]);
+  const bothJson = JSON.parse(runDoctorBoth(['--json']));
+  /⚠[^\n]*\.env[^\n]*CAREER_OPS_PROFILE/.test(bothHuman) && bothJson.warnings.join('\n').includes(namedProfile) && !bothJson.missing.includes('config/profile.yml')
+    ? pass('doctor warns, human and --json, that a .env override disagrees with the data-root profile it calls found')
+    : fail(`doctor stayed silent about a .env override beside an existing data-root profile: human warning=${/⚠[^\n]*\.env/.test(bothHuman)}, json=${JSON.stringify(bothJson.warnings)}`);
+
+  // resolveActiveCli loads the whole .env in human mode. A CAREER_OPS_ROOT in it
+  // used to move the profile check, and only that check, to another root.
+  const cloneRoot = join(scratch, 'clone-root');
+  const otherRoot = join(scratch, 'other-root');
+  mkdirSync(cloneRoot, { recursive: true });
+  mkdirSync(join(otherRoot, 'config'), { recursive: true });
+  writeFileSync(join(otherRoot, 'config', 'profile.yml'), 'candidate:\n  full_name: Other\n', 'utf-8');
+  writeFileSync(join(cloneRoot, '.env'), `CAREER_OPS_ROOT=${otherRoot}\n`, 'utf-8');
+  const runDoctorClone = (args) => {
+    // The root comes from CAREER_OPS_DATA_DIR alone, so the .env's CAREER_OPS_ROOT
+    // is not shadowed by the environment and the human run's dotenv load applies it.
+    const env = { ...process.env, CAREER_OPS_DATA_DIR: cloneRoot };
+    delete env.CAREER_OPS_ROOT;
+    delete env.CAREER_OPS_PROFILE;
+    delete env.CAREER_OPS_CLI;
+    const r = spawnSync(NODE, [join(ROOT, 'doctor.mjs'), ...args], { cwd: scratch, encoding: 'utf-8', timeout: 60000, env });
+    if (r.error) throw r.error;
+    return `${r.stdout}${r.stderr}`;
+  };
+  const cloneHuman = /config\/profile\.yml not found/.test(runDoctorClone([]));
+  const cloneJson = JSON.parse(runDoctorClone(['--json'])).missing.includes('config/profile.yml');
+  cloneHuman === cloneJson
+    ? pass('doctor human output and --json agree about the profile when the .env moves CAREER_OPS_ROOT')
+    : fail(`doctor human says profile missing=${cloneHuman} but --json says missing=${cloneJson} when the .env sets CAREER_OPS_ROOT`);
+
   // --target diagnoses another checkout, so CAREER_OPS_PROFILE does not apply to
   // it: the missing-profile advice is the plain copy, not the variable's, and
   // neither the target's .env nor the shell's override leaks into the verdict.
