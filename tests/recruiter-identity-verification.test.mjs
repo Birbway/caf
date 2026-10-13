@@ -74,12 +74,46 @@ check(
     && /Recruiter contact alone is Neutral, not a positive legitimacy signal: run Signal 18/.test(oferta),
   'edge case still treats recruiter contact as positive',
 );
-check(
-  'recruiter contact is no longer a positive legitimacy signal (ja/kyujin)',
-  !/Active recruiter contact 自体を positive legitimacy signal として note/.test(kyujin)
-    && kyujin.includes('Signal 18（Recruiter Identity Verification）'),
-  'Japanese edge case still treats recruiter contact as positive',
-);
+// Translated modes carry the recruiter edge case in their own language and
+// stay self-contained: no positive-signal rule, the five checks, and the
+// hard stop on recruiter-supplied material.
+const locales = [
+  {
+    file: ['ja', 'kyujin.md'],
+    oldRule: /Active recruiter contact 自体を positive legitimacy signal として note/,
+    checks: '(a) company 自身の careers page',
+    hardStop: 'clone / install / open / execute しない',
+  },
+  {
+    file: ['es', 'oferta.md'],
+    oldRule: /contacto activo del recruiter es señal positiva de legitimidad/,
+    checks: '(a) ¿la página de empleo o el board ATS público de la propia empresa lista el rol?',
+    hardStop: 'Nunca clonar, instalar, abrir ni ejecutar repositorios, archivos o enlaces enviados por el recruiter',
+  },
+  {
+    file: ['ru', 'oferta.md'],
+    oldRule: /активный контакт рекрутера сам по себе — положительный сигнал легитимности/,
+    checks: '(a) есть ли эта роль на собственной странице карьеры или публичной ATS-доске компании',
+    hardStop: 'Никогда не клонировать, не устанавливать, не открывать и не запускать репозитории, архивы или ссылки от рекрутера',
+  },
+  {
+    file: ['tr', 'is-ilani.md'],
+    oldRule: /Aktif recruiter temasının kendisinin olumlu bir meşruiyet sinyali olduğunu not et/,
+    checks: '(a) şirketin kendi kariyer sayfası veya herkese açık ATS board\'u bu rolü listeliyor mu',
+    hardStop: 'Recruiter\'ın gönderdiği repo, arşiv veya linki asla klonlama, kurma, açma ya da çalıştırma',
+  },
+];
+for (const { file, oldRule, checks, hardStop } of locales) {
+  const text = file[0] === 'ja' ? kyujin : readFileSync(join(ROOT, 'modes', ...file), 'utf8');
+  check(
+    `recruiter edge case is self-contained and no longer positive (${file.join('/')})`,
+    !oldRule.test(text)
+      && text.includes(checks)
+      && text.includes(hardStop)
+      && !text.includes('modes/oferta.md の Signal 18'),
+    'old positive-signal rule, the checks, or the hard stop is wrong',
+  );
+}
 
 check(
   'batch prompt mirrors Signal 18 with the hard stop and lets it set the tier',
