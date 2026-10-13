@@ -180,10 +180,10 @@ const UNFILLED_TEMPLATE_PLACEHOLDER =
 // round 4) — an earlier version of this check treated ANY jds/*.md
 // reference anywhere in the section as pointer-only, which wrongly rejected
 // real archived text alongside an incidental path mention.
-const JDS_PATH_RE = /jds\/[^\s()]+\.md/;
+const JDS_PATH_RE = /jds\/[^\s()]+\.(?:md|pdf)/;
 const POSTED_LINE_RE = /^Posted:.*$/im;
 const POINTER_SENTENCE_RE =
-  /^See\s+jds\/[^\s()]+\.md\s+for the full archive(?:\s*\(archive-posting\.mjs\s+--report=\d+\))?\.?$/i;
+  /^See\s+jds\/[^\s()]+\.(?:md|pdf)\s+for the full archive(?:\s*\(archive-posting\.mjs\s+--report=\d+\))?\.?$/i;
 
 function isPathOnlyPointer(strippedSection) {
   const withoutPostedLine = strippedSection.replace(POSTED_LINE_RE, '').trim();
@@ -241,7 +241,7 @@ const NON_CONTENT_MARKERS = [
     // "paraphrase" or "restate", which a real JD can use as a duty ("you will
     // paraphrase source material") or in finance prose ("restated financials").
     reason: 'says it is a paraphrase or restatement, not the verbatim posting',
-    re: /(\((?:a |an )?(?:(?:close|detailed|faithful) )?paraphras(?:e|ed)\b[^)\n]*\)|\b(?:is|are) (?:a |an )?(?:(?:close|detailed|faithful|complete|non-fabricated|full|accurate)[ ,]+)*(?:paraphrase|restatement)\b|\bthis section restates\b|\bnot (?:a |the )?(?:literal|verbatim)\b|\b(?:could|would|did|can) ?not (?:be )?(?:reproduc|quot|return|captur|copi)\w*[^.\n]{0,40}\b(?:literal|verbatim)\b)/i,
+    re: /(\((?:a |an )?(?:(?:close|detailed|faithful) )?paraphras(?:e|ed)\b[^)\n]*\)|\b(?:is|are) (?:a |an )?(?:(?:close|detailed|faithful|complete|non-fabricated|full|accurate)[ ,]+)*(?:paraphrase|restatement)\b|\bthis section restates\b|\bnot (?:a |the )?(?:literal|verbatim) (?:copy|quote|text|reproduction|archive|posting)\b|\b(?:could|would|did|can) ?not (?:be )?(?:reproduc|quot|return|captur|copi)\w*[^.\n]{0,40}\b(?:literal|verbatim)\b)/i,
   },
   {
     category: 'bot-challenge',
@@ -786,6 +786,12 @@ function runSelfTest() {
   check(hasEmbeddedJdArchive(
     '## Job Description (archived verbatim)\n\nWe are hiring a part-time Instructional Design Assistant to support course updates in our LMS, 10 hours/week, remote, $28/hr. Candidates must be able to restate technical content for lay readers.\n\n## Machine Summary'),
     'hasEmbeddedJdArchive does not false-positive on real JD prose that mentions restating content (#5179)');
+
+  check(hasEmbeddedJdArchive(
+    '## Job Description (archived verbatim)\n\nCandidates need not verbatim-copy source text. Survey answers are not literal quotes, and you will review them for tone across three regional teams.\n\n## Machine Summary'),
+    'hasEmbeddedJdArchive does not false-positive on real JD prose that says "not literal" or "verbatim" as a duty (#5179 review)');
+  check(isPathOnlyPointer('See jds/042-2026-01-15_acme_director.pdf for the full archive (archive-posting.mjs --report=42).'),
+    'a PDF pointer sentence is read as a pointer, so its capture must resolve (#5179 review)');
 
   // --- Fixture directory tree (mkdtempSync, mirrors the repo's own test convention) ---
   const tmpDir = mkdtempSync(join(tmpdir(), 'check-jd-archive-test-'));

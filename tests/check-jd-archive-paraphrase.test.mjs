@@ -56,3 +56,26 @@ test('the same report passes once a report-numbered jds/ capture exists', () => 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+const PDF_POINTER_REPORT = [
+  '# Evaluation: Acme - Director of Marketing',
+  '',
+  '## Job Description (archived verbatim)',
+  '',
+  'See jds/042-2026-01-15_acme_director.pdf for the full archive (archive-posting.mjs --report=42).',
+  '',
+  '## Machine Summary',
+  '',
+].join('\n');
+
+test('a PDF pointer with no capture on disk is flagged, and passes once the capture exists', () => {
+  const { dir, reportsDir, jdsDir } = fixture();
+  try {
+    writeFileSync(join(reportsDir, '042-acme-2026-01-15.md'), PDF_POINTER_REPORT);
+    assert.equal(checkJdArchive(reportsDir, jdsDir).findings.length, 1);
+    writeFileSync(join(jdsDir, '042-2026-01-15_acme_director.pdf'), 'pdf bytes');
+    assert.deepEqual(checkJdArchive(reportsDir, jdsDir).findings, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
