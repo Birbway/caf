@@ -15,8 +15,8 @@ function responseFor(chunks) {
   }));
 }
 
-function read(response, onStep = () => {}, isCurrent = () => true) {
-  return readFillResult(response, onStep, isCurrent);
+function read(response, onStep = () => {}, isCurrent = () => true, signal) {
+  return readFillResult(response, onStep, isCurrent, signal);
 }
 
 test("EOF after a progress step releases filling without claiming success", async () => {
@@ -150,6 +150,19 @@ test("transport errors reach the provider's recovery path and release the reader
     start(controller) { controller.error(new Error("Connection dropped")); },
   }));
   await assert.rejects(read(response), /Connection dropped/);
+  assert.equal(response.body.locked, false);
+});
+
+test("aborting a never-closing stream settles and cancels the reader without another chunk", async () => {
+  let cancelled = false;
+  const response = new Response(new ReadableStream({
+    cancel() { cancelled = true; },
+  }));
+  const controller = new AbortController();
+  const pending = read(response, () => {}, () => true, controller.signal);
+  controller.abort();
+  assert.equal(await pending, null);
+  assert.equal(cancelled, true);
   assert.equal(response.body.locked, false);
 });
 

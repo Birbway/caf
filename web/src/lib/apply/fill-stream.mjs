@@ -5,11 +5,13 @@
  * @param {Response} response
  * @param {(step: import("./issue").DriveStep) => void} onStep
  * @param {() => boolean} isCurrent
+ * @param {AbortSignal} [signal] Aborts the pending read when the session generation is dropped.
+ *   A generation check alone cannot unblock `reader.read()` if no further chunk arrives.
  * @returns {Promise<{status: "done", filled: boolean} | {status: "ready", error: string} | null>}
  */
-export async function readFillResult(response, onStep, isCurrent) {
+export async function readFillResult(response, onStep, isCurrent, signal) {
   const failed = (error) => ({ status: /** @type {const} */ ("ready"), error });
-  if (!isCurrent()) return null;
+  if (signal?.aborted || !isCurrent()) return null;
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     if (!isCurrent()) return null;
@@ -22,6 +24,10 @@ export async function readFillResult(response, onStep, isCurrent) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  const cancelRead = () => {
+    reader.cancel().catch(() => {});
+  };
+  signal?.addEventListener("abort", cancelRead, { once: true });
   const consume = (line) => {
     if (!line) return null;
     const unreadable = () => failed("The agent sent an unreadable fill result. Check the real form before trying again.");
@@ -47,8 +53,15 @@ export async function readFillResult(response, onStep, isCurrent) {
 
   try {
     for (;;) {
-      const { value, done } = await reader.read();
-      if (!isCurrent()) return null;
+      let value;
+      let done;
+      try {
+        ({ value, done } = await reader.read());
+      } catch (err) {
+        if (signal?.aborted || !isCurrent()) return null;
+        throw err;
+      }
+      if (signal?.aborted || !isCurrent()) return null;
       buffer += decoder.decode(value, { stream: !done });
       let newline;
       while ((newline = buffer.indexOf("\n")) >= 0) {
@@ -62,7 +75,7 @@ export async function readFillResult(response, onStep, isCurrent) {
       }
     }
   } finally {
-    // Stop consuming once a terminal result arrives or the session is replaced.
+    signal?.removeEventListener("abort", cancelRead);
     void reader.cancel().catch(() => {});
     reader.releaseLock();
   }
