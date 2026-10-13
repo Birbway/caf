@@ -347,6 +347,37 @@ try {
       fail(`successfactors fetch() empty-RMK CSB-probe wrong: ${probeErr ? `threw "${probeErr.message}"` : JSON.stringify(probeJobs)} after ${probeCalls} jobs-API calls`);
     }
   }
+  // CSB paging against a server whose default sort reshuffles ties on every
+  // request (BMW's live behavior): every posting must still come back.
+  {
+    const ids = Array.from({ length: 25 }, (_, i) => String(1000 + i));
+    const rec = (id) => ({ response: { id, unifiedStandardTitle: `Role ${id}`, unifiedUrlTitle: `Role-${id}` } });
+    let seed = 7;
+    const rand = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    let dateCalls = 0;
+    const jobs = await sf.fetch(
+      { name: 'ShuffleCo', careers_url: 'https://jobs.shuffleco.example', sfVariant: 'csb' },
+      {
+        sleep: async () => {},
+        fetchText: async () => '<a href="/search/?locale=en_US">en</a>',
+        fetchJson: async (_url, opts) => {
+          const { pageNumber, sortBy } = JSON.parse(opts.body);
+          let order;
+          if (sortBy === 'date') {
+            dateCalls++;
+            order = [...ids];
+            if (dateCalls <= 3 && pageNumber === 1) order[10] = order[9];
+          } else {
+            order = [...ids].sort(() => rand() - 0.5);
+          }
+          return { totalJobs: ids.length, jobSearchResult: order.slice(pageNumber * 10, pageNumber * 10 + 10).map(rec) };
+        },
+      },
+    );
+    const got = new Set(jobs.map((j) => j.url.split('/').pop().split('-')[0]));
+    if (got.size === 25 && jobs.length === 25) pass('successfactors CSB returns every posting when the server reshuffles page order');
+    else fail(`successfactors CSB lost postings under unstable paging: ${got.size} of 25`);
+  }
 } catch (err) {
   fail(`successfactors provider test threw: ${err.message}`);
 }
