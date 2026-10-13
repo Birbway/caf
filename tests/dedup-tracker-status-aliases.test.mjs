@@ -201,15 +201,23 @@ ok('control: the sandbox copy dedups normally when states.yml is beside it', () 
   });
 });
 
-for (const [what, statesYml] of [
-  ['is missing', null],
-  ['has no states list', 'version: 1\n'],
-  ['is not valid YAML', 'states: [\n'],
+// A states.yml that parses but leaves a ranked state undefined is the same
+// hazard as one that cannot be read: every spelling of that state resolves to
+// nothing and ranks 0. An empty list is the limiting case.
+const statesWithout = (missingId) => `states:\n${states.filter((s) => s.id !== missingId)
+  .map((s) => `  - { id: ${s.id}, label: ${s.label} }\n`).join('')}`;
+
+for (const [what, statesYml, names] of [
+  ['is missing', null, /states\.yml/],
+  ['has no states list', 'version: 1\n', /states\.yml/],
+  ['is not valid YAML', 'states: [\n', /states\.yml/],
+  ['has an empty states list', 'states: []\n', /states\.yml.*\bapplied\b/s],
+  ['defines every state but Interview', statesWithout('interview'), /states\.yml.*\binterview\b/s],
 ]) {
   ok(`when states.yml ${what}, dedup-tracker stops with an error and leaves the tracker alone`, () => {
     inSandbox(statesYml, ({ r, tracker }) => {
       assert.equal(r.status, 1, `expected exit 1, got ${r.status}: ${r.stdout}${r.stderr}`);
-      assert.match(r.stderr, /states\.yml/, 'the error does not name states.yml');
+      assert.match(r.stderr, names, `the error does not say what is wrong: ${r.stderr}`);
       assert.equal(readFileSync(tracker, 'utf-8'), trackerText(DUPLICATE_ROWS), 'the tracker was modified');
       assert.ok(!existsSync(`${tracker}.bak`), 'a .bak was written although nothing ran');
     });

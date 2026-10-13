@@ -43,23 +43,6 @@ const cliArgs = process.argv.slice(2);
 validateFlags(cliArgs, KNOWN_FLAGS, USAGE);
 const DRY_RUN = process.argv.includes('--dry-run');
 
-// templates/states.yml is system layer: it lives beside this script, not in the
-// data root. It is the only place a status spelling is defined, so without it
-// no row can be ranked, and a row ranked 0 is one this script may delete. Stop
-// before touching the tracker rather than rank from a partial vocabulary.
-const STATES_FILE = join(dirname(fileURLToPath(import.meta.url)), 'templates', 'states.yml');
-let CANONICAL_STATES;
-try {
-  CANONICAL_STATES = loadCanonicalStates(STATES_FILE);
-} catch (err) {
-  console.error(`Cannot read ${STATES_FILE}: ${err.message}`);
-  console.error('dedup-tracker ranks every status through that file and will not guess without it. Nothing was changed.');
-  process.exit(1);
-}
-
-// Ensure the target tracker directory exists in both normal and fixture mode.
-mkdirSync(dirname(APPS_FILE), { recursive: true });
-
 // Status advancement order (higher = more advanced in pipeline), keyed by
 // states.yml id. Only the ORDER lives here. Every spelling of a state (label,
 // alias, localized form) resolves to its id through states.yml, so a new alias
@@ -79,6 +62,30 @@ const STATUS_RANK = {
   // dedup contest to a repost row.
   'hired': 8,
 };
+
+// templates/states.yml is system layer: it lives beside this script, not in the
+// data root. It is the only place a status spelling is defined, so without it
+// no row can be ranked, and a row ranked 0 is one this script may delete. Stop
+// before touching the tracker rather than rank from a partial vocabulary.
+//
+// A file that parses but does not define one of the ranked states is the same
+// hazard, only narrower: every spelling of that state resolves to nothing and
+// ranks 0. `states: []` is the limiting case, where that is every row.
+const STATES_FILE = join(dirname(fileURLToPath(import.meta.url)), 'templates', 'states.yml');
+let CANONICAL_STATES;
+try {
+  CANONICAL_STATES = loadCanonicalStates(STATES_FILE);
+  const defined = new Set(CANONICAL_STATES.map((s) => s.id.toLowerCase()));
+  const undefinedIds = Object.keys(STATUS_RANK).filter((id) => !defined.has(id));
+  if (undefinedIds.length > 0) throw new Error(`it defines no state with id ${undefinedIds.join(', ')}`);
+} catch (err) {
+  console.error(`Cannot rank statuses from ${STATES_FILE}: ${err.message}`);
+  console.error('dedup-tracker ranks every status through that file and will not guess without it. Nothing was changed.');
+  process.exit(1);
+}
+
+// Ensure the target tracker directory exists in both normal and fixture mode.
+mkdirSync(dirname(APPS_FILE), { recursive: true });
 
 /**
  * Convert a tracker status into its pipeline-advancement rank.
