@@ -54,7 +54,7 @@ export function hasProfileOverride() {
  * means, so the environment does not redirect it.
  *
  * @param {string} [rootDir] Explicit workspace root, when the caller has one
- * @returns {string} Absolute path to the profile file
+ * @returns {string} Path to the profile file: absolute unless the caller passed a relative rootDir
  */
 export function getProfilePath(rootDir) {
   if (rootDir) return join(rootDir, 'config', 'profile.yml');
