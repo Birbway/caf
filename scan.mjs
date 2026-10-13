@@ -492,7 +492,18 @@ const USPS_STATES = Object.freeze([
 function compileUsStateAbbrev(abbr) {
   const escaped = abbr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(`(?:,\\s*${escaped}(?![\\p{L}\\p{M}\\p{N}])|(?:^|[^\\p{L}\\p{M}\\p{N}])${escaped}[^\\p{L}\\p{M}\\p{N}]*$)`, 'u');
-  return (lower) => re.test(lower);
+  return (lower) => re.test(withoutCountryCodeSlot(lower));
+}
+
+// "City, Region, CC" ends in an ISO country code, and several of those are
+// also USPS codes: "Bengaluru, Karnataka, IN" read as Indiana and "Toronto,
+// ON, CA" as California, so always_allow beat the user's own block entry.
+// A two-letter last part after two or more parts is the country slot, never
+// a state. "Austin, TX, US" still keeps TX.
+function withoutCountryCodeSlot(lower) {
+  const parts = lower.split(',');
+  if (parts.length < 3 || !/^\s*\p{L}{2}\s*$/u.test(parts.at(-1))) return lower;
+  return parts.slice(0, -1).join(',');
 }
 
 const US_STATE_ALWAYS_ALLOW_MATCHERS = USPS_STATES.flatMap(([name, abbr]) => [
