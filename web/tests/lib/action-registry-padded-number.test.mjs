@@ -52,5 +52,6 @@ test("an unknown or non-numeric number falls back to the raw label", () => {
   const { ctx, started } = context();
   dispatch("generatePdf", { n: "99" }, ctx);
   dispatch("generatePdf", { n: "abc" }, ctx);
-  assert.deepEqual(started.map((s) => s.title), ["CV PDF · #99", "CV PDF · #abc"]);
+  dispatch("generatePdf", { n: "7abc" }, ctx);
+  assert.deepEqual(started.map((s) => s.title), ["CV PDF · #99", "CV PDF · #abc", "CV PDF · #7abc"]);
 });

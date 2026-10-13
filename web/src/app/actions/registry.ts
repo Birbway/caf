@@ -14,12 +14,11 @@ import { normalizeTextKey } from "@/lib/core/normalize-text-key.mjs";
 import { coercePersonalization, SECTIONS } from "@/lib/personalization.mjs";
 import { formatBatchSpendConfirmation, requiresBatchSpendConfirmation } from "@/lib/run-cost-estimate.mjs";
 
-
 /** Tracker numbers compare numerically, so "007" finds row 7. */
 function applicationByNumber<T extends { n: string }>(apps: T[], n: string): T | undefined {
-  const target = parseInt(n, 10);
-  if (Number.isNaN(target)) return undefined;
-  return apps.find((a) => parseInt(a.n, 10) === target);
+  if (!/^\d+$/.test(n)) return undefined;
+  const target = Number(n);
+  return apps.find((a) => Number(a.n) === target);
 }
 
 export const BATCH_CAP = 12; // hard ceiling on a single fan-out
