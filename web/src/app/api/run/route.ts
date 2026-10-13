@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from "@/lib/clis";
 import { localISODate } from "@/lib/followups";
-import { accumulateTokens, hasNewCompletedReport, isFatalGenericStderr, killMsForKind, timeoutMessage } from "@/lib/run-cli-support.mjs";
+import { accumulateTokens, hasNewCompletedReport, isFatalGenericStderr, killMsForKind, newCompletedReportNum, timeoutMessage } from "@/lib/run-cli-support.mjs";
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
 import { careerOpsRoot, readMemory, findReportFile, readInbox, readScanDates, readLanguageConfig } from "@/lib/career-ops";
 import { resolvePdfPaths, type PdfPaths } from "@/lib/pdf-paths.mjs";
@@ -165,10 +165,12 @@ export async function POST(req: Request) {
     }
   };
   const persists = kind === "evaluate";
-  const reportsBefore = persists ? reportEntries() : [];
   // Tracker-mutating runs hold a write token so a row delete can't race their merge
   // (tracker.mjs delete doesn't yet share a lock with merge-tracker — see run-registry).
   const writeToken = kind === "evaluate" || kind === "pdf" ? acquireTrackerWrite() : null;
+  // Snapshot after the token. A baseline taken before it lets a concurrent
+  // evaluate's report look like this run's report.
+  const reportsBefore = persists ? reportEntries() : [];
 
   // stdin must reach EOF or the CLI waits on piped input that never comes: Codex's
   // `exec` blocks reading stdin for additional context, hangs until the kill timer,
@@ -533,7 +535,8 @@ export async function POST(req: Request) {
           return close();
         }
 
-        const wroteReport = hasNewCompletedReport(reportsBefore, reportEntries());
+        const reportsAfter = reportEntries();
+        const wroteReport = hasNewCompletedReport(reportsBefore, reportsAfter);
         // Honesty gate (#9): a green "done" with a parsed score requires a CLEAN exit,
         // real output, AND (for evaluations) a report actually written. Anything else
         // is surfaced — an errored run must never be banked as a confident score.
@@ -553,7 +556,12 @@ export async function POST(req: Request) {
           const detail = !sawError && stderrErrorSnippet ? ` (${stderrErrorSnippet})` : "";
           send({ type: "error", msg: `This run hit an error before finishing, so it isn't recorded as a confident result — re-run it to verify.${detail}`.slice(0, 200) });
         } else {
-          send({ type: "done", tokens: lastTokens, costUsd: lastCostUsd });
+          send({
+            type: "done",
+            tokens: lastTokens,
+            costUsd: lastCostUsd,
+            reportN: persists ? newCompletedReportNum(reportsBefore, reportsAfter) : null,
+          });
         }
         close();
       });
