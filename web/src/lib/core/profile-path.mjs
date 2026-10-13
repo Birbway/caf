@@ -10,8 +10,10 @@
  * Coverage: the readers and writers under web/src that route through this
  * helper (and cv-template.mjs, which reads the variable itself) follow
  * CAREER_OPS_PROFILE; a scan guard in the root suite fails when a tracked file
- * under web/src builds the path by hand. batch/batch-runner.sh and the prompts
- * under modes/ and batch/ are outside this change.
+ * under web/src builds the path by hand. Outside this change: batch/batch-runner.sh,
+ * the prompts under modes/ and batch/, and three web prompt sites that name
+ * config/profile.yml in text sent to a model (web/src/lib/apply/answer-prompt.mjs,
+ * web/src/lib/run-prompts.mjs, web/src/app/api/assistant/route.ts).
  *
  * `CAREER_OPS_PROFILE` names the profile file directly. Unlike core's
  * getProfilePath(rootDir), where an explicit rootDir beats the env, this

@@ -1,10 +1,15 @@
-// The web's profile.yml path resolver must agree with the core's getProfilePath()
-// (path-resolver.mjs): the CAREER_OPS_PROFILE override wins when no root is
-// stated, and an explicit root names its own config/profile.yml (#5026).
+// The web's profile.yml path resolver mirrors the core's getProfilePath()
+// (path-resolver.mjs) where the two contracts agree: the CAREER_OPS_PROFILE
+// override wins when no root is stated, and an explicit root names its own
+// config/profile.yml (#5026). It differs on purpose in two places: its first
+// argument is the data root (so the override wins unless explicitRoot is set,
+// where core's rootDir argument always beats it), and a relative override
+// resolves against that root, not the cwd.
 //
 // The web cannot import the core helper (Turbopack's root is pinned to web/), so
-// this is a mirror; tests/web-profile-path-parity.test.mjs in the root suite is
-// the guard that keeps the two contracts from drifting.
+// this is a mirror; tests/web-profile-path-parity.test.mjs in the root suite
+// compares it with the core helper itself and is the guard that keeps the two
+// from drifting.
 //
 // Run:  node --test tests/lib/profile-path.test.mjs
 

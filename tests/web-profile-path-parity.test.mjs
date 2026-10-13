@@ -9,8 +9,10 @@
 // web/tests/, because web-ci.yml runs `npm ci` inside web/ only and is not a
 // required check, while test-all.mjs runs on every PR.
 //
-// The core's getProfilePath() ships in a sibling change and is not imported here;
-// the contract is asserted directly instead:
+// The contract is asserted directly (first block below), and, once the core's
+// getProfilePath() is present (Part 1 of #5026), the mirror is also compared with
+// the core helper itself wherever the two contracts agree (second block), with the
+// places they differ on purpose pinned on both sides:
 //   - no root argument semantics are the web's "derived data root" case, where
 //     the CAREER_OPS_PROFILE override (trimmed; blank counts as unset) wins;
 //   - an explicit root names <root>/config/profile.yml and the override does
@@ -23,7 +25,9 @@
 //     root as their cwd); an absolute one is unchanged.
 // Compare against path-resolver.mjs's getProfilePath when changing either side.
 // Unlike core's getProfilePath(rootDir), the web's first argument is the data
-// root and the env wins unless explicitRoot is true.
+// root and the env wins unless explicitRoot is true. A relative override is the
+// other deliberate difference: core resolves it against the cwd, the web against
+// the root it passes.
 
 import { pass, fail, ROOT } from './helpers.mjs';
 import { existsSync } from 'fs';
@@ -58,6 +62,71 @@ if (!existsSync(join(ROOT, 'web'))) {
   for (const [label, got, want] of cases) {
     if (got === want) pass(label);
     else fail(`${label}: got ${got}, want ${want}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The mirror against the core helper itself, where the contracts agree.
+// Part 1 of #5026 adds getProfilePath() to path-resolver.mjs; before it lands
+// there is nothing to compare, and that is said out loud rather than passed over.
+
+console.log('\nprofile path — web mirror against the core helper');
+
+const core = await import(pathToFileURL(join(ROOT, 'path-resolver.mjs')).href);
+if (!existsSync(MIRROR)) {
+  fail('web profile-path mirror is missing; nothing to compare with the core helper');
+} else if (typeof core.getProfilePath !== 'function') {
+  pass('core comparison skipped: path-resolver.mjs has no getProfilePath yet (Part 1 of #5026)');
+} else {
+  const { getProfilePath: web } = await import(pathToFileURL(MIRROR).href);
+  const { mkdtempSync, realpathSync, rmSync } = await import('fs');
+  const { tmpdir } = await import('os');
+  const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'web-core-profile-parity-')));
+  const elsewhere = join(dataRoot, 'elsewhere', 'me.yml');
+  const saved = { root: process.env.CAREER_OPS_ROOT, dir: process.env.CAREER_OPS_DATA_DIR, profile: process.env.CAREER_OPS_PROFILE, cwd: process.cwd() };
+  const withCore = (profile, cwd, fn) => {
+    process.env.CAREER_OPS_ROOT = dataRoot;
+    process.env.CAREER_OPS_DATA_DIR = '';
+    if (profile === undefined) delete process.env.CAREER_OPS_PROFILE; else process.env.CAREER_OPS_PROFILE = profile;
+    process.chdir(cwd);
+    try { return fn(); } finally {
+      process.chdir(saved.cwd);
+      for (const [k, v] of [['CAREER_OPS_ROOT', saved.root], ['CAREER_OPS_DATA_DIR', saved.dir], ['CAREER_OPS_PROFILE', saved.profile]]) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
+  };
+  try {
+    const agree = [
+      ['no override', undefined],
+      ['an absolute override', elsewhere],
+      ['an absolute override with surrounding whitespace', `  ${elsewhere}\n`],
+      ['a blank override', ' \t '],
+    ];
+    for (const [label, profile] of agree) {
+      const fromCore = withCore(profile, dataRoot, () => core.getProfilePath());
+      const fromWeb = web(dataRoot, { env: profile === undefined ? {} : { CAREER_OPS_PROFILE: profile } });
+      if (fromCore === fromWeb) pass(`web mirror equals core getProfilePath() for ${label}`);
+      else fail(`web mirror and core getProfilePath() differ for ${label}: web ${fromWeb}, core ${fromCore}`);
+    }
+    const coreExplicit = withCore(elsewhere, dataRoot, () => core.getProfilePath(dataRoot));
+    const webExplicit = web(dataRoot, { explicitRoot: true, env: { CAREER_OPS_PROFILE: elsewhere } });
+    if (coreExplicit === webExplicit) pass('web explicitRoot equals core getProfilePath(rootDir): the override does not redirect an explicit root');
+    else fail(`explicit-root semantics differ: web ${webExplicit}, core ${coreExplicit}`);
+
+    // The deliberate difference: a relative override names a file relative to the
+    // cwd the core CLI runs in, but the web's own cwd is web/, so it anchors to
+    // the root it passes. Both are pinned, so neither drifts unnoticed.
+    const cwd = join(dataRoot, 'elsewhere');
+    const relCore = withCore('profiles/me.yml', cwd, () => core.getProfilePath());
+    const relWeb = web(dataRoot, { env: { CAREER_OPS_PROFILE: 'profiles/me.yml' } });
+    if (relCore === join(cwd, 'profiles', 'me.yml') && relWeb === join(dataRoot, 'profiles', 'me.yml')) {
+      pass('a relative override differs on purpose: core resolves it against the cwd, the web against the root it passes');
+    } else {
+      fail(`relative override: core ${relCore} (want under cwd ${cwd}), web ${relWeb} (want under ${dataRoot})`);
+    }
+  } finally {
+    rmSync(dataRoot, { recursive: true, force: true });
   }
 }
 
