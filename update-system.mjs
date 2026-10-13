@@ -1965,14 +1965,17 @@ export function configuredTemplateVariantPathsToPreserve(
  *
  * `profilePath` names the profile outright (apply() passes the one
  * CAREER_OPS_PROFILE selects); without it the profile is the one under `dataRoot`.
+ * An unparsable profile stops the update, unless `tolerateUnreadableProfile` says
+ * this one is not the profile in force: then it is skipped and reported in `warnings`.
  *
- * @param {{dataRoot?: string, profilePath?: string, remoteFiles?: string[], readRemoteContent?: (path: string) => string,
+ * @param {{dataRoot?: string, profilePath?: string, tolerateUnreadableProfile?: boolean, remoteFiles?: string[], readRemoteContent?: (path: string) => string,
  *   readLocalContent?: (path: string) => string, localPathExists?: (path: string) => boolean}} options
- * @returns {Promise<{configuredVariants: object, localFiles: string[], localContents: object, remoteContents: object, preservedPaths: string[]}>}
+ * @returns {Promise<{configuredVariants: object, warnings: string[], localFiles: string[], localContents: object, remoteContents: object, preservedPaths: string[]}>}
  */
 export async function snapshotConfiguredTemplateVariants({
   dataRoot = ROOT,
   profilePath,
+  tolerateUnreadableProfile = false,
   remoteFiles = [],
   readRemoteContent = () => null,
   readLocalContent = (path) => readFileSync(path, 'utf8'),
@@ -1987,9 +1990,17 @@ export async function snapshotConfiguredTemplateVariants({
       // profile falls through to cv-templates.mjs's own default.
     }
   }
-  const configuredVariants = await loadConfiguredTemplateVariants({
-    profilePath: resolvedProfilePath,
-  });
+  let configuredVariants;
+  const warnings = [];
+  try {
+    configuredVariants = await loadConfiguredTemplateVariants({
+      profilePath: resolvedProfilePath,
+    });
+  } catch (err) {
+    if (!tolerateUnreadableProfile) throw err;
+    configuredVariants = {};
+    warnings.push(`Skipped template variants from ${resolvedProfilePath}: ${err?.message || err}`);
+  }
   const configuredVariantPaths = [];
   for (const [kind, name] of Object.entries(configuredVariants)) {
     const prefix = kind === 'cv' ? 'cv-template' : 'cover-letter-template';
@@ -2036,6 +2047,7 @@ export async function snapshotConfiguredTemplateVariants({
   }
   return {
     configuredVariants,
+    warnings,
     localFiles,
     localContents,
     remoteContents,
@@ -2052,14 +2064,17 @@ export async function snapshotConfiguredTemplateVariants({
  * its own, so a variant either of them selects has to survive the checkout.
  *
  * @param {{profilePaths: string[]}} options profile files to read, in order;
- *   the rest is snapshotConfiguredTemplateVariants()'s options
- * @returns {Promise<{configuredVariants: {cv?: string[], cover?: string[]}, localFiles: string[], localContents: object, remoteContents: object, preservedPaths: string[]}>}
+ *   the first is the profile in force and must parse, a later one that does not
+ *   is skipped with a warning; the rest is snapshotConfiguredTemplateVariants()'s options
+ * @returns {Promise<{configuredVariants: {cv?: string[], cover?: string[]}, warnings: string[], localFiles: string[], localContents: object, remoteContents: object, preservedPaths: string[]}>}
  */
 export async function snapshotConfiguredTemplateVariantsAcrossProfiles({ profilePaths = [], ...options } = {}) {
-  const merged = { configuredVariants: {}, localFiles: [], localContents: {}, remoteContents: {}, preservedPaths: [] };
+  const merged = { configuredVariants: {}, warnings: [], localFiles: [], localContents: {}, remoteContents: {}, preservedPaths: [] };
   // No paths (path-resolver.mjs absent in an old target): one pass, the historical default.
-  for (const profilePath of new Set(profilePaths.length ? profilePaths : [undefined])) {
-    const snapshot = await snapshotConfiguredTemplateVariants({ ...options, profilePath });
+  const distinct = [...new Set(profilePaths.length ? profilePaths : [undefined])];
+  for (const [index, profilePath] of distinct.entries()) {
+    const snapshot = await snapshotConfiguredTemplateVariants({ ...options, profilePath, tolerateUnreadableProfile: index > 0 });
+    merged.warnings.push(...snapshot.warnings);
     for (const [kind, name] of Object.entries(snapshot.configuredVariants)) {
       merged.configuredVariants[kind] = [...new Set([...(merged.configuredVariants[kind] ?? []), name])];
     }
@@ -4198,6 +4213,7 @@ async function apply() {
       readRemoteContent: (file) => gitShowRaw(`${targetCommit}:${file}`),
     });
     const { configuredVariants } = configuredSnapshot;
+    for (const warning of configuredSnapshot.warnings) console.log(`Warning: ${warning}`);
     const configuredReferencePaths = configuredSnapshot.localFiles;
     const configuredAtRisk = configuredSnapshot.preservedPaths;
     if (configuredAtRisk.length > 0) {

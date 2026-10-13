@@ -363,6 +363,35 @@ if (REEXEC_FALLBACK_FILES.includes('cv-templates.mjs')
     } else {
       fail(`repeated-profile preserve list was ${JSON.stringify(one.preservedPaths)}`);
     }
+    // The first profile is the one in force; a later one is read only for the
+    // variants it protects. A stale or malformed data-root profile must not abort
+    // an update for a user whose override never reads it.
+    const brokenProfile = join(root, 'broken.yml');
+    writeFileSync(brokenProfile, 'cv:\n  template: [unterminated\n', 'utf-8');
+    const tolerant = await snapshotConfiguredTemplateVariantsAcrossProfiles({
+      dataRoot: root, profilePaths: [overrideProfile, brokenProfile], remoteFiles,
+      readRemoteContent: (file) => `<p>upstream ${file}</p>`,
+    });
+    if (JSON.stringify(tolerant.preservedPaths) === JSON.stringify(['templates/cv-template.alpha.html'])
+        && tolerant.warnings.length === 1 && tolerant.warnings[0].includes(brokenProfile)) {
+      pass('an unparsable non-active profile is skipped with a warning and the active profile still protects its variant');
+    } else {
+      fail(`unparsable non-active profile gave preserved ${JSON.stringify(tolerant.preservedPaths)} and warnings ${JSON.stringify(tolerant.warnings)}`);
+    }
+    let activeRejected = false;
+    try {
+      await snapshotConfiguredTemplateVariantsAcrossProfiles({
+        dataRoot: root, profilePaths: [brokenProfile, overrideProfile], remoteFiles,
+        readRemoteContent: (file) => `<p>upstream ${file}</p>`,
+      });
+    } catch (err) {
+      activeRejected = /Failed to parse profile YAML/.test(err.message);
+    }
+    if (activeRejected) {
+      pass('an unparsable ACTIVE profile still aborts the update');
+    } else {
+      fail('an unparsable active profile no longer stops the update');
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
