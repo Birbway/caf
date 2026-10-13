@@ -33,15 +33,17 @@ export function splitLines(text) {
  *  and role cells are never labels, so a word: prefix there stays text. */
 const LABELED_SEGMENT = /^([a-z][a-z_-]*):\s*(.*)$/i;
 
-const HTTP_URL = /^https?:\/\//i;
+/** What a row points at: a posting URL, or a job description saved on disk
+ *  (`local:jds/…`, the row modes/scan.md writes for a pasted posting). */
+const ROW_TARGET = /^(?:https?:\/\/|local:\S)/i;
 
 /** Parse data/pipeline.md — `- [ ] URL | Company | Role [| Location [| Compensation]] [| label: …]*`.
- *  The http(s) cell is the URL, so `#NNN | URL | …` and a bare checkbox URL
- *  both survive. Company and role are the first two cells after that URL and
+ *  The http(s) or `local:` cell is the URL, so `#NNN | URL | …` and a bare
+ *  checkbox URL both survive. Company and role are the first two cells after that URL and
  *  are never labels: a `word:` there is text. Labels (`posted:`/`trust:`/`note:`/…)
  *  start at the third cell after the URL, so they do not occupy location or
- *  compensation. Missing company and role stay empty. A row with no http(s)
- *  cell is skipped. Unknown labels and further trailing columns are ignored.
+ *  compensation. Missing company and role stay empty. A row with neither an
+ *  http(s) nor a `local:` cell is skipped. Unknown labels and further trailing columns are ignored.
  *  @param {string} md - content of data/pipeline.md.
  *  @returns {{url: string, company: string, role: string, location?: string, compensation?: string, done: boolean, postedAt?: string}[]}
  */
@@ -51,7 +53,7 @@ export function parseInbox(md) {
     const m = line.match(/^\s*-\s*\[([ xX])\]\s*(.+)$/);
     if (!m) continue;
     const all = m[2].split("|").map((s) => s.trim());
-    const urlIndex = all.findIndex((seg) => HTTP_URL.test(seg));
+    const urlIndex = all.findIndex((seg) => ROW_TARGET.test(seg));
     if (urlIndex < 0) continue;
     const labels = new Map();
     const positional = [];

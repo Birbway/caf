@@ -90,11 +90,28 @@ test("non-http junk is skipped", () => {
   const md = [
     "- [ ] not-a-url | Acme | Engineer",
     "- [ ] ftp://example.com/job/1 | Acme | Engineer",
-    "- [ ] local:jds/acme.md | Acme | Engineer",
     "- a prose line with https://example.com/job/1 in it",
     "",
   ].join("\n");
   assert.deepEqual(parseInbox(md), []);
+});
+
+test("a local: row for a saved job description is kept", () => {
+  // modes/scan.md writes this row for a posting pasted as text; the inbox
+  // showed it before bare URL rows were supported and must keep showing it.
+  const jobs = parseInbox(
+    [
+      "- [ ] local:jds/acme-engineer.md | Acme | Engineer",
+      "- [x] #12 | local:jds/acme-engineer.md | Acme | Engineer",
+      "- [ ] local: | Acme | Engineer",
+    ].join("\n"),
+  );
+  assert.equal(jobs.length, 2);
+  assert.equal(jobs[0].url, "local:jds/acme-engineer.md");
+  assert.equal(jobs[0].company, "Acme");
+  assert.equal(jobs[0].role, "Engineer");
+  assert.equal(jobs[1].done, true);
+  assert.equal(jobs[1].url, "local:jds/acme-engineer.md");
 });
 
 test("processed #NNN | URL row keeps the http URL, not the report number", () => {
