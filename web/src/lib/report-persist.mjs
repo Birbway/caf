@@ -13,11 +13,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-
-/** Lowercase, non-alphanumeric runs -> single hyphen, trimmed. Same rule as pdf-paths.mjs. */
-function slugify(s) {
-  return String(s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-}
+import { slugify } from "./pdf-paths.mjs";
 
 const ISO_DATE_RE = /^20\d{2}-\d{2}-\d{2}$/;
 const YAML_FENCE = /##\s*Machine Summary\s*\n+```(?:yaml|yml)?\s*\n([\s\S]*?)\n```/i;
@@ -65,15 +61,16 @@ export function yamlScalar(block, key) {
 }
 
 /**
- * Score as the tracker writes it (`X.X/5`). Null if the value is not a number.
+ * Score as the tracker writes it (`X.X/5`). Null unless the value is a finite
+ * number in 0..5. A trailing `/5` does not skip that range check.
  * @param {string|null} raw
  * @returns {string|null}
  */
 export function formatScore(raw) {
   const s = String(raw ?? "").trim();
-  if (!s) return null;
-  if (/^\d+(?:\.\d+)?\/5$/.test(s)) return s.includes(".") ? s : `${s.slice(0, -2)}.0/5`;
-  const n = Number(s);
+  const m = s.match(/^(\d+(?:\.\d+)?)(?:\/5)?$/);
+  if (!m) return null;
+  const n = Number(m[1]);
   if (!Number.isFinite(n) || n < 0 || n > 5) return null;
   return `${n.toFixed(1)}/5`;
 }
@@ -129,21 +126,37 @@ export function reportSlug(company, via) {
 }
 
 /**
- * One tracker-additions TSV line (tab-separated, trailing newline). Always 10
- * fields with the posting URL last — empty when there is none, never "N/A".
- * A tagged `via={Agency}` extra sits between notes and URL when present.
+ * Labels for the required-plus-notes prefix. Same spelling and order as
+ * `TSV_ADDITION_HEADER` in tracker-parse.mjs. merge-tracker resolves a headed
+ * addition by name, so a cell with no label is dropped and a cell under the
+ * wrong label is stored as that column.
+ */
+const ADDITION_LABELS = ["num", "date", "company", "role", "status", "score", "pdf", "report", "notes"];
+
+/**
+ * Header row plus one data row. `via` and `url` are appended only when set,
+ * in that order, so the URL stays under `url` and the agency stays under `via`.
+ * The via cell is the agency name. The headed parser strips a `via=` prefix
+ * if one is present. An empty URL is omitted, not written as a blank cell.
  *
  * @param {{num: string, today: string, company: string, role: string, score: string, reportFile: string, notes: string, via: string|null, url: string}} row
  * @returns {string}
  */
 export function trackerTsvLine({ num, today, company, role, score, reportFile, notes, via, url }) {
+  const labels = [...ADDITION_LABELS];
   const fields = [
     num, today, company, role, "Evaluated", score, "❌",
     `[${num}](reports/${reportFile})`, notes,
   ];
-  if (via) fields.push(`via=${via}`);
-  fields.push(url);
-  return `${fields.join("\t")}\n`;
+  if (via) {
+    labels.push("via");
+    fields.push(via);
+  }
+  if (url) {
+    labels.push("url");
+    fields.push(url);
+  }
+  return `${labels.join("\t")}\n${fields.join("\t")}\n`;
 }
 
 function spawnScript({ spawnFn, execPath, root, script, args = [] }) {
@@ -188,14 +201,38 @@ export async function persistEvaluation({ spawnFn, execPath, root, markdown, url
     spawnFn, execPath, root, script: "reserve-report-num.mjs", args: ["--release", num],
   });
 
+  // One release. A failed --release is not success: the sentinel would stay
+  // held and the next evaluate could not take a number. When the save also
+  // failed, both errors come back. When only the release failed, say the
+  // report was saved.
+  let released = false;
+  const finish = async (error) => {
+    if (!released) {
+      released = true;
+      const releasedResult = await release();
+      if (!releasedResult.ok) {
+        const releaseError = `The report reservation ${num} was not released: ${releasedResult.stderr || "reserve-report-num.mjs --release failed"}.`;
+        if (error) return { ok: false, error: `${error} ${releaseError}` };
+        return { ok: false, error: `The report was saved but the sentinel was not released. ${releaseError}` };
+      }
+    }
+    if (error) return { ok: false, error };
+    return null;
+  };
+
+  // A tab or newline in the URL would split the tracker row. Refuse before
+  // any write, and release the number. Do not blank the URL and continue.
+  if (tsvUnsafe(String(url ?? ""))) {
+    return finish("The posting URL has a tab or newline, so the tracker row cannot be built.");
+  }
+
   const slug = reportSlug(meta.company, meta.via);
   const reportFile = `${num}-${slug}-${today}.md`;
   // The backend owns the path. A slug of `..` cannot happen (slugify strips
   // non-alphanumerics) but a report written outside reports/ would be the
   // original hole this module exists to close — refuse rather than join.
   if (path.basename(reportFile) !== reportFile || reportFile.includes("..")) {
-    await release();
-    return { ok: false, error: `Refusing to write report "${reportFile}" — the filename is not a single path segment.` };
+    return finish(`Refusing to write report "${reportFile}" — the filename is not a single path segment.`);
   }
 
   const reportsDir = path.join(root, "reports");
@@ -203,8 +240,7 @@ export async function persistEvaluation({ spawnFn, execPath, root, markdown, url
   const reportPath = path.join(reportsDir, reportFile);
   const tsvPath = path.join(additionsDir, `${num}-${slug}.tsv`);
   if (path.dirname(reportPath) !== reportsDir || path.dirname(tsvPath) !== additionsDir) {
-    await release();
-    return { ok: false, error: "Refusing to persist outside reports/ or batch/tracker-additions/." };
+    return finish("Refusing to persist outside reports/ or batch/tracker-additions/.");
   }
 
   const postingUrl = /^https?:\/\//i.test(String(url ?? "")) ? String(url) : "";
@@ -219,17 +255,17 @@ export async function persistEvaluation({ spawnFn, execPath, root, markdown, url
       reportFile, notes, via: meta.via, url: postingUrl,
     }), "utf8");
   } catch (err) {
-    await release();
-    return { ok: false, error: `Could not save the evaluation report: ${err.message}` };
+    return finish(`Could not save the evaluation report: ${err.message}`);
   }
 
   const merged = await spawnScript({
     spawnFn, execPath, root, script: "merge-tracker.mjs",
   });
-  await release();
   if (!merged.ok) {
-    return { ok: false, error: `The report was saved but merge-tracker.mjs failed: ${merged.stderr || "non-zero exit"}.` };
+    return finish(`The report was saved but merge-tracker.mjs failed: ${merged.stderr || "non-zero exit"}.`);
   }
+  const held = await finish(null);
+  if (held) return held;
   const warnings = [];
   if (merged.stderr) warnings.push(merged.stderr);
   return { ok: true, num, reportFile, warnings };

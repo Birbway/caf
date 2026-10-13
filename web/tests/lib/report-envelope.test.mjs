@@ -49,6 +49,12 @@ test("parseReportEnvelope: refuses two envelopes rather than guessing", () => {
   assert.match(result.error, /2 <<report-md>> envelopes/i);
 });
 
+test("parseReportEnvelope: refuses two closers rather than taking the first", () => {
+  const result = parseReportEnvelope(`<<report-md>>\n${REPORT}\n<</report-md>>\n<</report-md>>`);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /2 <<report-md>> closers/i);
+});
+
 test("parseReportEnvelope: refuses an unclosed envelope", () => {
   const result = parseReportEnvelope(`<<report-md>>\n${REPORT}\n`);
   assert.equal(result.ok, false);

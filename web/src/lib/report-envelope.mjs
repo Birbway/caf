@@ -10,8 +10,9 @@
  * envelope and the BACKEND persists it — the same arc #2185 used for pdf.
  *
  * Plain .mjs so this can be unit-tested with `node --test`, no TypeScript
- * build step. Fail-closed: markers only count on a line of their own, the
- * FIRST closer wins, more than one envelope is refused rather than guessed.
+ * build step. Fail-closed: markers only count on a line of their own.
+ * Exactly one opener and exactly one closer. A second of either is refused
+ * rather than guessed.
  */
 export const OPEN_MARK = "<<report-md>>";
 export const CLOSE_MARK = "<</report-md>>";
@@ -19,7 +20,6 @@ export const CLOSE_MARK = "<</report-md>>";
 const OPENER_SRC = String.raw`^<<report-md>>[ \t]*$`;
 const CLOSER_SRC = String.raw`^<<\/report-md>>[ \t]*$`;
 const OPENER = new RegExp(OPENER_SRC, "gm");
-const CLOSER = new RegExp(CLOSER_SRC, "m");
 const CLOSER_ALL = new RegExp(CLOSER_SRC, "gm");
 
 /**
@@ -67,10 +67,14 @@ export function parseReportEnvelope(text) {
 
   const opener = openers[0];
   const afterOpener = normalized.slice(opener.index + opener[0].length);
-  const closer = CLOSER.exec(afterOpener);
-  if (!closer) {
+  const closers = [...afterOpener.matchAll(CLOSER_ALL)];
+  if (closers.length === 0) {
     return { ok: false, error: "The <<report-md>> envelope was never closed — the report output is incomplete." };
   }
+  if (closers.length !== 1) {
+    return { ok: false, error: `Found ${closers.length} <<report-md>> closers; refusing to guess where the report ends.` };
+  }
+  const closer = closers[0];
 
   const markdown = afterOpener.slice(0, closer.index).replace(/^\n/, "").replace(/\n$/, "");
   if (!markdown.trim()) {

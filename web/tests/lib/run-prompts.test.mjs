@@ -284,16 +284,17 @@ test("buildPrompt: unattended multi-market evaluation falls back to primary and 
   assert.match(prompt, /do not stop or ask the candidate/i);
   assert.match(prompt, /first\/primary market \(modes\/de\)/);
   assert.match(prompt, /report header or Block G/i);
+  const envelopeAt = prompt.indexOf("2. Do NOT save or edit any file");
+  assert.ok(envelopeAt > 0, "step 2 is the report envelope, which the platform persists");
   assert.ok(
-    prompt.indexOf("If those signals remain genuinely ambiguous")
-      < prompt.indexOf("2. Persist the result CANONICALLY"),
-    "ambiguity resolution must precede report and tracker persistence",
+    prompt.indexOf("If those signals remain genuinely ambiguous") < envelopeAt,
+    "ambiguity resolution must precede the report envelope",
   );
   assert.ok(
-    prompt.indexOf("MARKET signals") < prompt.indexOf("2. Persist the result CANONICALLY")
-      && prompt.indexOf("modes/de/_shared.md") < prompt.indexOf("2. Persist the result CANONICALLY")
-      && prompt.indexOf("modes/zh/_shared.md") < prompt.indexOf("2. Persist the result CANONICALLY"),
-    "market selection and every declared shared context must precede persistence",
+    prompt.indexOf("MARKET signals") < envelopeAt
+      && prompt.indexOf("modes/de/_shared.md") < envelopeAt
+      && prompt.indexOf("modes/zh/_shared.md") < envelopeAt,
+    "market selection and every declared shared context must precede the report envelope",
   );
 });
 

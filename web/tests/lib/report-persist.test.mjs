@@ -18,6 +18,7 @@ import {
   trackerTsvLine,
   persistEvaluation,
 } from "../../src/lib/report-persist.mjs";
+import { resolveTsvColumns, TSV_ADDITION_HEADER } from "../../../tracker-parse.mjs";
 
 function fakeChild({ stdout = "", stderr = "", exitCode = 0, spawnError = null } = {}) {
   const child = new EventEmitter();
@@ -98,6 +99,8 @@ test("formatScore: normalizes to X.X/5", () => {
   assert.equal(formatScore("4/5"), "4.0/5");
   assert.equal(formatScore("nope"), null);
   assert.equal(formatScore("9"), null);
+  assert.equal(formatScore("9/5"), null);
+  assert.equal(formatScore("4/10"), null);
   assert.equal(formatScore(""), null);
   assert.equal(formatScore(null), null);
 });
@@ -161,20 +164,37 @@ test("reportSlug: confidential marker for unknown employer", () => {
   assert.equal(reportSlug("???", null), "company");
 });
 
-test("trackerTsvLine: 10 fields, url last, via tagged when present", () => {
-  const line = trackerTsvLine({
+function headedRows(text) {
+  const lines = text.replace(/\n$/, "").split("\n");
+  assert.equal(lines.length, 2, "a tracker addition is a header row and one data row");
+  return { header: lines[0].split("\t"), fields: lines[1].split("\t") };
+}
+
+test("trackerTsvLine: header names sit on the same cells merge-tracker reads", () => {
+  const row = {
     num: "035", today: "2026-08-04", company: "Acme", role: "Eng",
     score: "4.2/5", reportFile: "035-acme-2026-08-04.md", notes: "; posted: 2026-08-01",
     via: "Hays", url: "https://acme.com/jobs/7",
-  }).trimEnd();
-  const fields = line.split("\t");
-  assert.equal(fields[0], "035");
-  assert.equal(fields[4], "Evaluated");
-  assert.equal(fields[5], "4.2/5");
-  assert.equal(fields[7], "[035](reports/035-acme-2026-08-04.md)");
-  assert.equal(fields[8], "; posted: 2026-08-01");
-  assert.equal(fields[9], "via=Hays");
-  assert.equal(fields[10], "https://acme.com/jobs/7");
+  };
+  const { header, fields } = headedRows(trackerTsvLine(row));
+  assert.equal(header.slice(0, 9).join("\t"), TSV_ADDITION_HEADER);
+  assert.deepEqual(header.slice(9), ["via", "url"]);
+  assert.equal(header.length, fields.length);
+  const { map, missing, unknown } = resolveTsvColumns(header);
+  assert.deepEqual(missing, []);
+  assert.deepEqual(unknown, []);
+  assert.equal(fields[map.num], "035");
+  assert.equal(fields[map.status], "Evaluated");
+  assert.equal(fields[map.score], "4.2/5");
+  assert.equal(fields[map.report], "[035](reports/035-acme-2026-08-04.md)");
+  assert.equal(fields[map.notes], "; posted: 2026-08-01");
+  assert.equal(fields[map.via], "Hays");
+  assert.equal(fields[map.url], "https://acme.com/jobs/7");
+
+  const noVia = headedRows(trackerTsvLine({ ...row, via: null }));
+  assert.equal(noVia.header.join("\t"), `${TSV_ADDITION_HEADER}\turl`);
+  assert.equal(noVia.fields[noVia.header.indexOf("url")], "https://acme.com/jobs/7");
+  assert.equal(noVia.header.includes("via"), false);
 });
 
 test("persistEvaluation: writes report + TSV, reserves, merges, releases", async () => {
@@ -198,11 +218,13 @@ test("persistEvaluation: writes report + TSV, reserves, merges, releases", async
     const reportPath = join(root, "reports", "035-acme-ai-2026-08-04.md");
     const tsvPath = join(root, "batch", "tracker-additions", "035-acme-ai.tsv");
     assert.equal(readFileSync(reportPath, "utf8"), REPORT);
-    const tsv = readFileSync(tsvPath, "utf8").trimEnd().split("\t");
-    assert.equal(tsv[2], "Acme AI");
-    assert.equal(tsv[4], "Evaluated");
-    assert.equal(tsv[8], "; posted: 2026-08-01");
-    assert.equal(tsv[9], "https://acme.com/jobs/7");
+    const { header, fields } = headedRows(readFileSync(tsvPath, "utf8"));
+    const { map, missing } = resolveTsvColumns(header);
+    assert.deepEqual(missing, []);
+    assert.equal(fields[map.company], "Acme AI");
+    assert.equal(fields[map.status], "Evaluated");
+    assert.equal(fields[map.notes], "; posted: 2026-08-01");
+    assert.equal(fields[map.url], "https://acme.com/jobs/7");
 
     const scripts = calls.map((c) => basename(c.args[0]) + (c.args.includes("--release") ? " --release" : ""));
     assert.deepEqual(scripts, ["reserve-report-num.mjs", "merge-tracker.mjs", "reserve-report-num.mjs --release"]);
@@ -268,6 +290,72 @@ test("persistEvaluation: merge failure still releases the sentinel", async () =>
     assert.equal(result.ok, false);
     assert.match(result.error, /merge-tracker/);
     assert.ok(calls.some((c) => c.args.includes("--release")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("persistEvaluation: a failed release after a saved report is not success", async () => {
+  const root = mkdtempSync(join(tmpdir(), "co-evalpersist-"));
+  const { spawnFn } = makeRouterSpawn({
+    "reserve-report-num.mjs": (args) => args.includes("--release")
+      ? { exitCode: 1, stderr: "sentinel stuck" }
+      : { exitCode: 0, stdout: "035\n" },
+    "merge-tracker.mjs": { exitCode: 0 },
+  });
+  try {
+    const result = await persistEvaluation({
+      spawnFn, execPath: "node", root, markdown: REPORT,
+      url: "https://acme.com/jobs/7", today: "2026-08-04",
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /saved but the sentinel was not released/i);
+    assert.match(result.error, /sentinel stuck/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("persistEvaluation: merge failure and release failure are both reported", async () => {
+  const root = mkdtempSync(join(tmpdir(), "co-evalpersist-"));
+  const { spawnFn } = makeRouterSpawn({
+    "reserve-report-num.mjs": (args) => args.includes("--release")
+      ? { exitCode: 1, stderr: "sentinel stuck" }
+      : { exitCode: 0, stdout: "036\n" },
+    "merge-tracker.mjs": { exitCode: 1, stderr: "status not canonical" },
+  });
+  try {
+    const result = await persistEvaluation({
+      spawnFn, execPath: "node", root, markdown: REPORT,
+      url: "https://acme.com/jobs/7", today: "2026-08-04",
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /merge-tracker/);
+    assert.match(result.error, /sentinel stuck/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("persistEvaluation: a tab in the posting URL releases the number and writes nothing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "co-evalpersist-"));
+  const { spawnFn, calls } = makeRouterSpawn({
+    "reserve-report-num.mjs": (args) => args.includes("--release")
+      ? { exitCode: 0 }
+      : { exitCode: 0, stdout: "037\n" },
+    "merge-tracker.mjs": { exitCode: 0 },
+  });
+  try {
+    const result = await persistEvaluation({
+      spawnFn, execPath: "node", root, markdown: REPORT,
+      url: "https://evil.com/\tmore", today: "2026-08-04",
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /tab or newline/i);
+    assert.equal(existsSync(join(root, "reports")), false);
+    assert.equal(existsSync(join(root, "batch", "tracker-additions")), false);
+    assert.ok(calls.some((c) => c.args.includes("--release")));
+    assert.equal(calls.some((c) => basename(c.args[0]) === "merge-tracker.mjs"), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
