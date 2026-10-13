@@ -80,3 +80,28 @@ export async function readFillResult(response, onStep, isCurrent, signal) {
     reader.releaseLock();
   }
 }
+
+/**
+ * Map a terminal fill onto the screen the user should see.
+ * `drive/route.ts` emits `t:"done"` for a finished drive and puts the outcome
+ * in `filled`. `filled: false` means the agent stopped short, so the editor
+ * stays up and the drafted answers stay put.
+ *
+ * @param {{status: "done", filled: boolean} | {status: "ready", error: string}} result
+ * @returns {{status: "done", issue: string} | {status: "ready", error: string}}
+ */
+export function screenForFill(result) {
+  if (result.status === "done" && result.filled) {
+    return {
+      status: /** @type {const} */ ("done"),
+      issue: "AI filled the form for you — review every answer on the real form, then submit it yourself.",
+    };
+  }
+  if (result.status === "done") {
+    return {
+      status: /** @type {const} */ ("ready"),
+      error: "AI did its best but couldn't finish. Check the real form before trying again.",
+    };
+  }
+  return { status: /** @type {const} */ ("ready"), error: result.error };
+}

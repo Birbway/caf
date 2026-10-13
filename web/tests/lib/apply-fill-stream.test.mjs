@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFillResult } from "../../src/lib/apply/fill-stream.mjs";
+import { readFillResult, screenForFill } from "../../src/lib/apply/fill-stream.mjs";
 
 const encoder = new TextEncoder();
 const step = { t: "step", turn: 1, action: "fill", detail: "Filled the name field" };
@@ -43,6 +43,22 @@ test("a complete terminal result without a trailing newline finishes the fill", 
 
 test("an unsuccessful but completed agent attempt preserves its filled=false result", async () => {
   assert.deepEqual(await read(responseFor([record({ t: "done", filled: false })])), { status: "done", filled: false });
+});
+
+test("filled false leaves the success screen and returns to the editor", () => {
+  const outcome = screenForFill({ status: "done", filled: false });
+  assert.equal(outcome.status, "ready");
+  assert.equal(outcome.error, "AI did its best but couldn't finish. Check the real form before trying again.");
+});
+
+test("filled true stays on the success screen", () => {
+  const outcome = screenForFill({ status: "done", filled: true });
+  assert.equal(outcome.status, "done");
+  assert.equal(outcome.issue, "AI filled the form for you — review every answer on the real form, then submit it yourself.");
+});
+
+test("a stream failure keeps its own error on the editor", () => {
+  assert.deepEqual(screenForFill({ status: "ready", error: "Page closed" }), { status: "ready", error: "Page closed" });
 });
 
 test("split records and split Unicode bytes preserve steps and completion", async () => {

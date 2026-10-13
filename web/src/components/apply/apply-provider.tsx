@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ApplyField } from "@/lib/apply/extract";
 import type { ApplyIssue, DriveStep } from "@/lib/apply/issue";
 import { resolveLateSession } from "@/lib/apply/exit.mjs";
-import { readFillResult } from "@/lib/apply/fill-stream.mjs";
+import { readFillResult, screenForFill } from "@/lib/apply/fill-stream.mjs";
 
 export type FillStep = { fieldId: string; label: string; ok: boolean; thumb?: string };
 type Meta = { needsConfirmation?: boolean };
@@ -374,12 +374,13 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
       if (controller.signal.aborted || generation.current !== gen) return; // left mid-fill
       const result = await readFillResult(r, (step) => setDriveSteps((p) => [...p, step]), () => generation.current === gen, controller.signal);
       if (!result || controller.signal.aborted || generation.current !== gen) return; // left mid-fill
-      if (result.status === "done") {
-        setIssues((prev) => [...prev, { level: "info", code: "ai-filled", message: result.filled ? "AI filled the form for you — review every answer on the real form, then submit it yourself." : "AI did its best but couldn't finish — check the real form before submitting." }]);
+      const outcome = screenForFill(result);
+      if (outcome.status === "done") {
+        setIssues((prev) => [...prev, { level: "info", code: "ai-filled", message: outcome.issue }]);
       } else {
-        setError(result.error);
+        setError(outcome.error);
       }
-      setStatus(result.status);
+      setStatus(outcome.status);
     } catch (e) {
       if (controller.signal.aborted || generation.current !== gen) return; // left mid-fill
       setError(`The agent couldn't fill the form: ${e instanceof Error ? e.message : "stream error"}. Check the real form before trying again.`);
