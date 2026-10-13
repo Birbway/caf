@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import * as yaml from 'js-yaml';
 import { isMainModule } from '../lib/is-main-module.mjs';
-import { getCareerOpsRoot, getProfilePath } from '../path-resolver.mjs';
+import { getCareerOpsRoot, getProfilePath, hasProfileOverride } from '../path-resolver.mjs';
 import { validateFlags } from '../lib/cli-flags.mjs';
 
 /**
@@ -233,7 +233,7 @@ export function loadProfile(customProfilePath = null, customCvPath = null) {
     }
   } else {
     if (!existsSync(profileSource)) {
-      const via = process.env.CAREER_OPS_PROFILE?.trim() ? ' (named by CAREER_OPS_PROFILE)' : '';
+      const via = hasProfileOverride() ? ' (named by CAREER_OPS_PROFILE)' : '';
       throw new Error(`Profile not found at ${profileSource}${via}: fill it in first`);
     }
     try {
