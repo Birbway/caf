@@ -40,7 +40,7 @@
  */
 
 
-import { execSync, execFile, execFileSync, spawn, spawnSync } from 'child_process';
+import { execSync, execFileSync, spawn, spawnSync } from 'child_process';
 import { readFileSync, existsSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync as _rmSync, statSync, unlinkSync, realpathSync, symlinkSync, copyFileSync, openSync, closeSync } from 'fs';
 
 // Windows keeps a handle open on a just-exited child process's working files
@@ -58,12 +58,12 @@ import { readFileSync, existsSync, readdirSync, mkdtempSync, mkdirSync, writeFil
 const rmSync = (target, opts = {}) => _rmSync(target, { maxRetries: 10, retryDelay: 100, ...opts });
 import { join, dirname, basename, relative, delimiter } from 'path';
 import { tmpdir, availableParallelism } from 'os';
-import { promisify } from 'util';
 import { fileURLToPath, pathToFileURL } from 'url';
 import * as yaml from 'js-yaml';
 import { pass, fail, warn, run, runAcrossUtcDay, runAcrossLocalDay, lastRunFailure, formatRunFailure, fileExists, finish, results, absorbResults, importSuiteContained, linkNodeModules, ROOT, QUICK, NODE, DEFAULT_SCRIPT_TIMEOUT_MS, getBash, toBashPath, hermeticGitEnv } from './tests/helpers.mjs';
 import { flagValue, hasFlag } from './lib/cli-flags.mjs';
 import { collectMjsFiles } from './lib/mjs-files.mjs';
+import { checkSyntax, NODE_CHECK_TIMEOUT_MS } from './lib/syntax-check.mjs';
 import { walkTree, listTree } from './lib/walk-tree.mjs';
 import { FROZEN_EVALUATION_MODES, KNOWN_EVALUATION_MODES, discoverEvaluationModes, readModeText, structuralGaps } from './tests/evaluation-mode-parity-helpers.mjs';
 import { childFailureExcerpt } from './lib/failure-excerpt.mjs';
@@ -566,25 +566,26 @@ const mjsFiles = collectMjsFiles(ROOT).map(f => f.slice(ROOT.length + 1).replace
 // diff two runs' pass labels.
 console.log(`  (${mjsFiles.length} .mjs files, recursive from the repository root)`);
 
-// `node --check` parses a file and exits; it runs no user code, touches no
-// shared state, and its result depends on nothing but that one file. Spawning
-// the files one at a time was pure process-startup latency, so they go through
-// a bounded pool instead (#2387) — which is also what keeps the recursive scope
-// above a wall-clock non-event. Results are collected by index and reported
-// afterwards in collector order, so the log stays byte-identical to the
-// sequential version regardless of completion order.
-const SYNTAX_POOL_SIZE = 8;
-const execFileAsync = promisify(execFile);
-const syntaxOk = new Array(mjsFiles.length);
-const syntaxDetail = new Array(mjsFiles.length);
-let nextSyntaxIdx = 0;
+// One process parses all of them, and `node --check` then runs only on a file
+// that pass did not vouch for, so a failure below carries the diagnostic it
+// always carried (lib/syntax-check.mjs, #5078). One `node --check` per file,
+// even eight at a time (#2387), was 22 s of starting node for 0.3 s of parsing.
+// Results come back by index and are reported in collector order, so the log
+// does not depend on what finished first.
+const { errors: syntaxErrors, fastPassUnavailable } = await checkSyntax(mjsFiles, { cwd: ROOT, node: NODE });
+if (fastPassUnavailable) {
+  // Not a failure and not a narrower check: every file went through
+  // `node --check` instead. Said out loud because it costs about 20 s a run,
+  // and nothing else here would show where they went.
+  console.log(`  (the single-process parse did not run: ${fastPassUnavailable}; each file was checked with node --check instead)`);
+}
 
 // A bare catch reports a child killed on timeout, or one that never spawned, as
 // "has syntax errors" — sending the reader hunting for a parse error that does
 // not exist. Keep enough of the child's own diagnosis to tell those apart.
 const describeCheckFailure = (err) => {
   if (err?.killed || err?.signal === 'SIGTERM' || err?.code === 'ETIMEDOUT') {
-    return `node --check timed out after 30000ms${err.signal ? ` (signal ${err.signal})` : ''}`;
+    return `node --check timed out after ${NODE_CHECK_TIMEOUT_MS}ms${err.signal ? ` (signal ${err.signal})` : ''}`;
   }
   const stderr = String(err?.stderr ?? '').trim();
   if (!stderr) return `no stderr (exit ${err?.code ?? 'unknown'})`;
@@ -594,25 +595,11 @@ const describeCheckFailure = (err) => {
   return clipped.replace(/\n/g, '\n    ');
 };
 
-const syntaxWorker = async () => {
-  for (let i = nextSyntaxIdx++; i < mjsFiles.length; i = nextSyntaxIdx++) {
-    try {
-      await execFileAsync(NODE, ['--check', mjsFiles[i]], { cwd: ROOT, timeout: 30000 });
-      syntaxOk[i] = true;
-    } catch (err) {
-      syntaxOk[i] = false;
-      syntaxDetail[i] = describeCheckFailure(err);
-    }
-  }
-};
-await Promise.all(
-  Array.from({ length: Math.min(SYNTAX_POOL_SIZE, mjsFiles.length) }, syntaxWorker)
-);
 mjsFiles.forEach((f, i) => {
-  if (syntaxOk[i]) {
+  if (!syntaxErrors[i]) {
     pass(`${f} syntax OK`);
   } else {
-    fail(`${f} has syntax errors\n    ${syntaxDetail[i] ?? 'no diagnostic captured'}`);
+    fail(`${f} has syntax errors\n    ${describeCheckFailure(syntaxErrors[i])}`);
   }
 });
 
