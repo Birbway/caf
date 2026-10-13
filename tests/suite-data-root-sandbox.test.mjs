@@ -14,7 +14,7 @@
 import { pass, fail, ROOT, NODE, rmSync } from './helpers.mjs';
 import { diffSnapshots, snapshotDataRoot } from './data-root-guard.mjs';
 import { spawnSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -99,6 +99,25 @@ try {
       pass("a child that loads the helpers joins the run's scratch root and does not remove it");
     } else {
       fail(`a child of the run did not share its scratch root: exit ${r.status}\n${r.out}`);
+    }
+  }
+
+  // The sandbox variable is inherited too, so a stale export must not be taken
+  // at its word: a directory these helpers did not make is not joined, whether
+  // it is somebody's data or merely named like a sandbox somewhere else.
+  {
+    const lookalike = join(dir, 'career-ops-test-data-lookalike');
+    mkdirSync(lookalike);
+    for (const [label, stale] of [['a real data directory', theirs], ['a sandbox-named directory outside the temp root', lookalike]]) {
+      const r = child({ CAREER_OPS_ROOT: theirs, CAREER_OPS_TEST_DATA_ROOT: stale }, 'writer');
+      const sandbox = r.field('SANDBOX');
+      if (r.status === 0 && r.field('ADDED') === 'true' && r.field('REAL') === theirs
+          && sandbox && sandbox !== stale && r.field('RESOLVED') === sandbox
+          && untouched() && readdirSync(lookalike).length === 0) {
+        pass(`an inherited sandbox variable naming ${label} is not joined`);
+      } else {
+        fail(`a stale sandbox variable (${label}) was trusted: exit ${r.status}\n${r.out}`);
+      }
     }
   }
 

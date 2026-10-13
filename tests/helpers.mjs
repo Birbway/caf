@@ -53,8 +53,26 @@ process.env.CAREER_OPS_TRACKER = '';
 // and joins the run's root rather than making another, and only the creator
 // removes it.
 const SANDBOX_ENV = 'CAREER_OPS_TEST_DATA_ROOT';
+const SANDBOX_PREFIX = 'career-ops-test-data-';
+
+// The variable is inherited, so it is only as trustworthy as the shell it came
+// from: a stale export naming a real directory would make this process a
+// guest in it — fixtures written there, no snapshot, no drift check. Join only
+// what these helpers could have made: a directory of that name, directly under
+// the OS temp directory.
+function isRunSandbox(path) {
+  try {
+    const real = realpathSync(path);
+    return statSync(real).isDirectory()
+      && dirname(real) === realpathSync(tmpdir())
+      && basename(real).startsWith(SANDBOX_PREFIX);
+  } catch {
+    return false;
+  }
+}
+
 const inheritedSandbox = process.env[SANDBOX_ENV]?.trim();
-const ownsSandbox = !(inheritedSandbox && existsSync(inheritedSandbox));
+const ownsSandbox = !(inheritedSandbox && isRunSandbox(inheritedSandbox));
 
 /**
  * The data root the developer's own commands resolve to, read before it is
@@ -66,8 +84,8 @@ const realRootBefore = ownsSandbox ? snapshotDataRoot(REAL_DATA_ROOT, ROOT) : nu
 
 /** The scratch data root every script resolves to while the suite runs. */
 export const SANDBOX_DATA_ROOT = ownsSandbox
-  ? realpathSync(mkdtempSync(join(tmpdir(), 'career-ops-test-data-')))
-  : inheritedSandbox;
+  ? realpathSync(mkdtempSync(join(tmpdir(), SANDBOX_PREFIX)))
+  : realpathSync(inheritedSandbox);
 
 /**
  * Point the data root back at the suite's sandbox.
