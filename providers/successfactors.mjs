@@ -60,6 +60,12 @@ const MAX_JOBS = 1000; // cap total postings pulled per site (both strategies)
 const CSB_PAGE_SIZE = 10; // fixed by the /services/recruiting/v1/jobs API
 const CSB_MAX_PAGES_PER_LOCALE = 100; // safety cap per locale (100*10 = 1000 postings)
 const CSB_MAX_LOCALES = 16; // guard against a tenant advertising an absurd locale list
+// The API's own default sort ("recent", which the site itself sends) is not a
+// stable order: each page request reshuffles ties, so offset paging returned
+// only ~400 distinct ids of BMW's 521 per pass. "date" is nearly stable; a
+// second sweep picks up the few same-day ties it still shuffles across pages.
+const CSB_SORT = 'date';
+const CSB_SWEEPS = 2;
 // Locales tried when /search/ discovery yields nothing (fetch failed / markup
 // changed). de_DE + en_US cover the DACH targets this provider is aimed at.
 const CSB_DEFAULT_LOCALES = ['de_DE', 'en_US'];
@@ -333,43 +339,50 @@ async function fetchCsb(entry, cfg, ctx, { probe = false } = {}) {
   for (const locale of locales) {
     if (jobs.length >= MAX_JOBS) break;
     let total = null;
-    for (let page = 0; page < maxPages; page++) {
-      let json;
-      try {
-        json = await ctx.fetchJson(cfg.jobsApi, {
-          method: 'POST',
-          redirect: 'error',
-          headers: { 'content-type': 'application/json', accept: 'application/json' },
-          body: JSON.stringify({ keywords: '', locale, location: '', pageNumber: page, sortBy: 'recent' }),
-        });
-      } catch (err) {
-        firstErr ??= err;
-        break; // this locale failed (e.g. 307 legacy redirect) — try the next
-      }
-      succeededOnce = true;
-      if (total === null) {
-        total = typeof json?.totalJobs === 'number' ? json.totalJobs : null;
-      }
-      // Page-fullness checks below use the raw response count, not rows.length:
-      // parseCsbJobs drops id/title-less records, and a full API page with a
-      // few dropped records would otherwise look "short" and stop pagination
-      // before reaching later pages that still hold valid jobs.
-      const rawCount = Array.isArray(json?.jobSearchResult) ? json.jobSearchResult.length : 0;
-      if (rawCount === 0) break;
-      const rows = parseCsbJobs(json, cfg, locale);
+    let failed = false;
+    const localeIds = new Set();
+    for (let sweep = 0; sweep < CSB_SWEEPS; sweep++) {
+      for (let page = 0; page < maxPages; page++) {
+        let json;
+        try {
+          json = await ctx.fetchJson(cfg.jobsApi, {
+            method: 'POST',
+            redirect: 'error',
+            headers: { 'content-type': 'application/json', accept: 'application/json' },
+            body: JSON.stringify({ keywords: '', locale, location: '', pageNumber: page, sortBy: CSB_SORT }),
+          });
+        } catch (err) {
+          firstErr ??= err;
+          failed = true;
+          break; // this locale failed (e.g. 307 legacy redirect) — try the next
+        }
+        succeededOnce = true;
+        if (total === null) {
+          total = typeof json?.totalJobs === 'number' ? json.totalJobs : null;
+        }
+        // Page-fullness checks below use the raw response count, not rows.length:
+        // parseCsbJobs drops id/title-less records, and a full API page with a
+        // few dropped records would otherwise look "short" and stop pagination
+        // before reaching later pages that still hold valid jobs.
+        const rawCount = Array.isArray(json?.jobSearchResult) ? json.jobSearchResult.length : 0;
+        if (rawCount === 0) break;
+        const rows = parseCsbJobs(json, cfg, locale);
 
-      for (const row of rows) {
-        if (seen.has(row.id)) continue;
-        seen.add(row.id);
-        const job = { title: row.title, url: row.url, company: entry.name, location: row.location };
-        if (typeof row.postedAt === 'number') job.postedAt = row.postedAt;
-        jobs.push(job);
+        for (const row of rows) {
+          localeIds.add(row.id);
+          if (seen.has(row.id)) continue;
+          seen.add(row.id);
+          const job = { title: row.title, url: row.url, company: entry.name, location: row.location };
+          if (typeof row.postedAt === 'number') job.postedAt = row.postedAt;
+          jobs.push(job);
+          if (jobs.length >= MAX_JOBS) break;
+        }
         if (jobs.length >= MAX_JOBS) break;
+        // Stop once we've covered the reported total, or on a short page.
+        if (total !== null && (page + 1) * CSB_PAGE_SIZE >= total) break;
+        if (rawCount < CSB_PAGE_SIZE) break;
       }
-      if (jobs.length >= MAX_JOBS) break;
-      // Stop once we've covered the reported total, or on a short page.
-      if (total !== null && (page + 1) * CSB_PAGE_SIZE >= total) break;
-      if (rawCount < CSB_PAGE_SIZE) break;
+      if (failed || total === null || localeIds.size >= total || jobs.length >= MAX_JOBS) break;
     }
   }
   if (!probe && !succeededOnce && firstErr) throw firstErr;
