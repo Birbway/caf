@@ -70,7 +70,7 @@ import { workdayDedupKey, stripWorkdayRepostSuffix, isWorkdayJobUrl } from './pr
 import { normalizeCompany } from './tracker-utils.mjs';
 import { normalizeCompanyName } from './invite-match.mjs';
 import { withPipelineLock } from './pipeline-lock.mjs';
-import { compileKeyword, compilePositiveKeyword, compileContentKeyword, buildTitleFilter, foldAccents } from './title-keywords.mjs';
+import { compileKeyword, compilePositiveKeyword, compileContentKeyword, buildTitleFilter, foldTitle } from './title-keywords.mjs';
 import { flagValue, hasFlag, validateFlags } from './lib/cli-flags.mjs';
 import { withPortalHealthLock } from './portal-health-lock.mjs';
 import { localToday } from './lib/local-today.mjs';
@@ -334,7 +334,7 @@ function compiledPositiveMatchers(positiveList) {
   if (compiledPositiveCache.has(positiveList)) return compiledPositiveCache.get(positiveList);
   const compiled = positiveList
     .filter(k => typeof k === 'string' && k.trim().length > 0)
-    .map(k => ({ raw: k, match: compilePositiveKeyword(foldAccents(k.trim().toLowerCase())) }));
+    .map(k => ({ raw: k, match: compilePositiveKeyword(foldTitle(k).trim()) }));
   compiledPositiveCache.set(positiveList, compiled);
   return compiled;
 }
@@ -346,7 +346,7 @@ function compiledPositiveMatchers(positiveList) {
 // `by_title_keyword` key must be written exactly as the positive entry is.
 export function matchedTitleKeywords(title, titleFilter) {
   const raw = Array.isArray(titleFilter?.positive) ? titleFilter.positive : [];
-  const lower = foldAccents((title || '').toLowerCase());
+  const lower = foldTitle(title || '');
   return compiledPositiveMatchers(raw)
     .filter(({ match }) => match(lower))
     .map(({ raw: kw }) => kw);
