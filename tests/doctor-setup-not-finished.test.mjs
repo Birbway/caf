@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, copyFileSync, symlinkSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { linkNodeModules } from './helpers.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DOCTOR = join(ROOT, 'doctor.mjs');
@@ -13,7 +14,7 @@ const PLAYWRIGHT_STUB = join(ROOT, 'tests', 'fixtures', 'playwright-stub.mjs');
 function checkout({ withSetup }) {
   const dir = mkdtempSync(join(tmpdir(), 'doctor-setup-'));
   copyFileSync(join(ROOT, 'package.json'), join(dir, 'package.json'));
-  symlinkSync(join(ROOT, 'node_modules'), join(dir, 'node_modules'), 'dir');
+  assert.equal(linkNodeModules(dir), null);
   mkdirSync(join(dir, 'modes'));
   mkdirSync(join(dir, 'config'));
   if (withSetup) {
