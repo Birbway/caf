@@ -74,7 +74,7 @@
  */
 
 import { readFileSync, readdirSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
-import { join, dirname, basename } from 'path';
+import { join, dirname, basename, relative, isAbsolute } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { flagValue } from './lib/cli-flags.mjs';
@@ -430,8 +430,14 @@ export function mapTrackerCaptureLinks(trackerPath, jdsDir) {
     // directory is overridable with --jds-dir, so the literal `jds/` segment is
     // not guaranteed to be where they live. Try the root-relative path first,
     // then the same basename inside the directory actually in use.
+    // A link such as `jds/../../x.pdf` must not reach a file outside the data
+    // root, or the capture directory in use.
+    const within = (base, candidate) => {
+      const rel = relative(base, candidate);
+      return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+    };
     const abs = [join(dataRoot, match[0]), join(jdsDir, basename(match[0]))]
-      .find((candidate) => existsSync(candidate));
+      .find((candidate) => (within(dataRoot, candidate) || within(jdsDir, candidate)) && existsSync(candidate));
     if (!abs) continue; // dangling link is not an archive
     // extractTrackerReportNumbers only recognizes `reports/` links, so a row
     // whose Report cell points straight at a capture — `[276](jds/foo.md)` —

@@ -79,3 +79,24 @@ test('a PDF pointer with no capture on disk is flagged, and passes once the capt
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+import { mapTrackerCaptureLinks } from '../check-jd-archive.mjs';
+
+test('a tracker capture link cannot escape the data root', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jd-traversal-'));
+  try {
+    const root = join(dir, 'root');
+    mkdirSync(join(root, 'data'), { recursive: true });
+    mkdirSync(join(root, 'jds'));
+    writeFileSync(join(dir, 'outside.pdf'), 'not a capture');
+    const tracker = join(root, 'data', 'applications.md');
+    const header = '| # | Date | Company | Role | Score | Status | PDF | Report | Notes |\n|---|---|---|---|---|---|---|---|---|\n';
+    writeFileSync(tracker, `${header}| 42 | 2026-01-15 | Acme | Director | 4.0/5 | Applied | no | [42](jds/../../outside.pdf) | |\n`);
+    assert.equal(mapTrackerCaptureLinks(tracker, join(root, 'jds')).size, 0);
+    writeFileSync(join(root, 'jds', 'inside.pdf'), 'capture');
+    writeFileSync(tracker, `${header}| 42 | 2026-01-15 | Acme | Director | 4.0/5 | Applied | no | [42](jds/inside.pdf) | |\n`);
+    assert.equal(mapTrackerCaptureLinks(tracker, join(root, 'jds')).size, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
