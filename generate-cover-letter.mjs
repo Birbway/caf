@@ -401,6 +401,7 @@ async function main() {
       payload: { type: "string" },
       out:     { type: "string" },
       format:  { type: "string" },
+      country: { type: "string" },
       report:  { type: "string" },
       help:    { type: "boolean", short: "h" },
     },
@@ -410,12 +411,14 @@ async function main() {
   if (args.help || !args.payload) {
     console.log(`
 Usage:
-  node generate-cover-letter.mjs --payload payload.json [--out output/path.pdf] [--format letter|a4] [--report NNN]
+  node generate-cover-letter.mjs --payload payload.json [--out output/path.pdf] [--format letter|a4] [--country XX] [--report NNN]
 
   --payload   Path to the JSON payload file (required)
   --out       Override output path from payload (optional)
   --format    Override output PDF page format (letter|a4). Defaults to
               config/profile.yml page_format, then letter.
+  --country   Employer's ISO 3166-1 country code (e.g. DE). Picks the sheet
+              only when page_format is "auto". Defaults to the payload's country.
   --report    Link the PDF to a tracker report number in data/pdf-index.tsv
 `);
     process.exit(args.help ? 0 : 1);
@@ -475,6 +478,7 @@ Usage:
       // config/profile.yml, so a cover letter and its CV cannot end up on
       // different paper because only one of them carried a flag.
       format: args.format,
+      country: args.country || payload.country,
       reportNum: args.report,
       // Declared, never inferred: this script always renders a cover letter, and
       // the manifest must not file it as the report's CV (#3887).
