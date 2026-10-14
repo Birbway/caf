@@ -21,7 +21,6 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { localToday } from '../lib/local-today.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -170,8 +169,9 @@ test('--on anchors the follow-up on the day the application was really sent', ()
     const unanchored = jsonOf(setStatus(withoutOn, ['--row', '7', 'Applied', '--json']));
     const cadence = daysBetween('2026-01-05', anchored.followupSeeded.nextDate);
     assert.ok(cadence > 0, `--on did not reach the seeder: ${anchored.followupSeeded.nextDate}`);
+    const transitionDate = readFileSync(join(withoutOn, 'data', 'status-log.tsv'), 'utf-8').trim().split('\n').pop().split('\t')[1];
     assert.equal(
-      daysBetween(localToday(), unanchored.followupSeeded.nextDate),
+      daysBetween(transitionDate, unanchored.followupSeeded.nextDate),
       cadence,
       `with no --on the first follow-up (${unanchored.followupSeeded.nextDate}) was not anchored on today`,
     );
