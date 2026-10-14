@@ -602,6 +602,12 @@ Python, Docker, Zookeeper
     eq(`"${heading}" opens a named skills section`,
       classifySkillGaps(['Python'], `${heading}\nPython\n`).existing, ['Python']);
   }
+  for (const heading of ['## Core Competencies', '## Competencies', '## Skills & Competencies', '### Key Competency Areas']) {
+    eq(`"${heading}" opens a named skills section`,
+      classifySkillGaps(['Python'], `${heading}\nPython\n`).existing, ['Python']);
+  }
+  eq('a "Competition Wins" heading is not a skills section',
+    classifySkillGaps(['Python'], '## Competition Wins\nPython\n').existing, []);
   const twoSectionsCv = '## Skills\nPython\n\n## Experience\nUsed Docker daily.\n\n## Tools\nTerraform\n';
   const twoSectionsResult = classifySkillGaps(['Python', 'Terraform', 'Docker'], twoSectionsCv);
   eq('every skills section counts, not just the first', twoSectionsResult.existing.sort(), ['Python', 'Terraform']);
