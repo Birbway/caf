@@ -469,7 +469,7 @@ Hệ thống này không có cách đáng tin cậy để giữ mức lương t�
 
 **Cổng số liệu so sánh được (bắt buộc):** chỉ quy đổi khi `advertised_comp` là một **khoản tiền mặt cố định, được đảm bảo**. Loại trừ: khoảng (không có một con số để quy đổi) và mọi thành phần biến đổi hay phi tiền mặt -- thưởng, hoa hồng, phụ cấp, OT, tháng 13, phúc lợi. Nếu `advertised_comp` là `null`, cụm không phải số ("thỏa thuận", "cạnh tranh"), một khoảng hoặc không phải khoản tiền mặt cố định đảm bảo, bỏ qua tín hiệu.
 
-**Quy đổi theo giờ:** nếu đã là theo giờ, dùng trực tiếp. Nếu theo tháng hoặc năm, quy đổi theo số giờ làm việc JD nêu; chỉ khi JD không nói, dùng giả định thận trọng **2080 giờ/năm** (52 tuần × 40 giờ; tháng nhân 12 trước) và **luôn nêu trong kết quả đã dùng số giờ nào**. Nếu không có số giờ hay loại tiền dùng được, bỏ qua thay vì quy đổi trên giả định không đáng tin.
+**Quy đổi theo giờ:** nếu đã là theo giờ, dùng trực tiếp. Nếu theo tháng hoặc năm, quy đổi theo số giờ làm việc JD nêu; chỉ khi JD không nói, dùng **2080 giờ/năm** (52 tuần × 40 giờ; tháng nhân 12 trước) làm giả định minh họa, không phải giả định thận trọng (tuần làm việc bình thường có thể tới 48 giờ, tức 2496 giờ/năm), và **luôn nêu trong kết quả đã dùng số giờ nào**; xác nhận lịch làm việc thực tế trước khi diễn giải mức theo giờ. Nếu không có số giờ hay loại tiền dùng được, bỏ qua thay vì quy đổi trên giả định không đáng tin.
 
 **Xác định khu vực pháp lý (bắt buộc):** chỉ từ địa điểm làm việc nêu trong JD. Nếu JD không nêu đủ chính xác để gọi tên một khu vực (ở Việt Nam là vùng áp dụng của địa điểm), bỏ qua hoàn toàn: không đoán.
 
@@ -561,7 +561,7 @@ Kết thúc phần thân báo cáo bằng khối `## Risk Summary` ngay sau kh�
 
 **Chỉ tổng hợp, không phán đoán mới.** Mỗi dòng trích hoặc liên kết đến kết luận đã có của tín hiệu nguồn. Bản tóm tắt không bao giờ chấm lại, đổi trọng số hay ghi đè -- nếu một dòng trông sai, sửa ở tín hiệu nguồn, không phải ở đây.
 
-Ba trạng thái mỗi dòng: `✅ {kết luận rõ}` / `⚠️ {phát hiện}` / `— not evaluated`. **`— not evaluated` là trạng thái hạng nhất:** khi một tín hiệu không chạy được, nêu rõ thay vì bỏ dòng, để một bản tóm tắt toàn ✅ đáng tin. **Ngoại lệ có tên:** dòng Interview red flags hiển thị trường hợp chưa đánh giá là `— no interview sessions yet`, không phải trạng thái thứ tư.
+Ba trạng thái mỗi dòng: `✅ {kết luận rõ}` / `⚠️ {phát hiện}` / `— not evaluated`. **`— not evaluated` là trạng thái hạng nhất:** khi một tín hiệu không chạy được, nêu rõ thay vì bỏ dòng, để một bản tóm tắt toàn ✅ đáng tin. **Ngoại lệ có tên:** dòng Interview red flags hiển thị trường hợp chưa đánh giá là `— no interview sessions yet`; dòng AI-screening disclosure có thể hiển thị `ℹ️ {jurisdiction_name} requires disclosure; posting is silent` và `— no jurisdiction match`, ánh xạ lần lượt tới `corroborating_only` và `no_match` trong `risk_summary`. Đây không phải trạng thái thứ tư.
 
 **Tên dòng, tiêu đề `| Signal | Status |` và các từ trạng thái là chuỗi cố định, không dịch**: trường `risk_summary` của Machine Summary phụ thuộc vào chúng.
 

@@ -111,7 +111,7 @@ Nếu vai trò trên màn hình khác với vai trò đã đánh giá:
 - **Thông báo cho ứng viên**: "Vai trò đã đổi từ [X] sang [Y]. Bạn muốn tôi đánh giá lại hay điều chỉnh câu trả lời theo chức danh mới?"
 - **Nếu điều chỉnh**: điều chỉnh câu trả lời theo vai trò mới mà không đánh giá lại, chỉ sau khi ứng viên chấp nhận tường minh sự lệch này
 - **Nếu đánh giá lại**: chạy đánh giá A-F đầy đủ, cập nhật báo cáo, tạo lại Block H
-- **Cập nhật tracker**: đổi chức danh trong applications.md nếu cần
+- **Sau khi đánh giá lại**: ghi TSV với chức danh vai trò mới (quy tắc 9 trong `_shared.md`) và gộp bằng `node merge-tracker.mjs`. Báo cáo được cập nhật tại chỗ và giữ nguyên số, nên bước gộp khớp TSV với dòng hiện có theo số đó: chức danh được thay và trạng thái được giữ nguyên.
 
 ## Bước 4b — Xác định CV đã điều chỉnh (nguồn sự thật cho các trường kinh nghiệm)
 

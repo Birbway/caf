@@ -269,9 +269,9 @@ Trước khi gán `confidence`, phân loại bằng chứng cho từng chiều (
 | WebFetch | Fallback để trích JD từ trang tĩnh |
 | Playwright | Xác minh tin còn mở (browser_navigate + browser_snapshot). **KHÔNG BAO GIỜ để 2+ agent cùng điều khiển một phiên Playwright/MCP browser** -- chúng tranh quyền điều khiển và có thể đọc nhầm trạng thái trang của nhau |
 | Read | cv.md, _profile.md, article-digest.md, cv-template.html |
-| Write | HTML tạm cho PDF, applications.md, báo cáo .md |
-| Edit | Cập nhật tracker |
-| Bash | `node generate-pdf.mjs` |
+| Write | HTML tạm cho PDF, báo cáo .md, TSV bổ sung tracker trong `batch/tracker-additions/` (KHÔNG BAO GIỜ ghi trực tiếp vào `applications.md`) |
+| Edit | Sửa báo cáo và nội dung sinh ra khác. Không bao giờ sửa bảng tracker: dòng mới đi vào dưới dạng TSV được gộp bằng `node merge-tracker.mjs`, thay đổi trạng thái và ghi chú đi qua `node set-status.mjs` |
+| Bash | `node generate-pdf.mjs`, `node merge-tracker.mjs`, `node set-status.mjs` |
 
 ### Giao việc cho subagent (giới hạn chi phí)
 
