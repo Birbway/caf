@@ -2,8 +2,8 @@
 // reader of config/profile.yml, through one resolver (#5026).
 //
 // cv-templates.mjs documented the precedence: the override wins over the data
-// root. The expression that implements it was then copied by hand into six more
-// modules, and most other core readers built the data-root path on their own and
+// root. The expression that implements it was then copied by hand into eight more
+// core modules (two of them with a working-directory fallback), and most other readers built the data-root path on their own and
 // never looked at the variable. One command could report the same profile as both
 // missing and fine (doctor.mjs), and `scan.mjs` followed the named profile while
 // the evaluators that ran next read a different one.
@@ -238,9 +238,44 @@ try {
   };
   const cloneHuman = /config\/profile\.yml not found/.test(runDoctorClone([]));
   const cloneJson = JSON.parse(runDoctorClone(['--json'])).missing.includes('config/profile.yml');
-  cloneHuman === cloneJson
-    ? pass('doctor human output and --json agree about the profile when the .env moves CAREER_OPS_ROOT')
+  // Agreeing is not enough: both must report from the root doctor started at (the
+  // clone, which has no profile), not from the root the .env names (which has one).
+  cloneHuman && cloneJson
+    ? pass('doctor human output and --json both report the profile missing from the root doctor started at, not the one the .env names')
     : fail(`doctor human says profile missing=${cloneHuman} but --json says missing=${cloneJson} when the .env sets CAREER_OPS_ROOT`);
+
+  // checkEnvFileProfile has two guards, and each needs a case that only it catches.
+  // A value exported in the shell shadows the .env, so the .env is no split: no
+  // warning in either output even with a data-root profile beside it.
+  const shadowOut = (args) => {
+    const env = { ...process.env, CAREER_OPS_ROOT: bothRoot, CAREER_OPS_DATA_DIR: '', CAREER_OPS_PROFILE: namedProfile };
+    const r = spawnSync(NODE, [join(ROOT, 'doctor.mjs'), ...args], { cwd: scratch, encoding: 'utf-8', timeout: 60000, env });
+    if (r.error) throw r.error;
+    return `${r.stdout}${r.stderr}`;
+  };
+  const shadowHuman = shadowOut([]);
+  const shadowJson = JSON.parse(shadowOut(['--json']));
+  !/\.env sets CAREER_OPS_PROFILE/.test(shadowHuman) && !shadowJson.warnings.some((w) => /\.env sets CAREER_OPS_PROFILE/.test(w))
+    ? pass('doctor does not warn about a .env override that an exported CAREER_OPS_PROFILE shadows')
+    : fail('doctor warned about a .env override although the shell exports CAREER_OPS_PROFILE');
+  // --target diagnoses another checkout: its .env is not the user's and the
+  // variable does not apply to it, so neither output warns about it.
+  const targetEnvDir = join(scratch, 'target-env-checkout');
+  mkdirSync(join(targetEnvDir, 'config'), { recursive: true });
+  writeFileSync(join(targetEnvDir, 'config', 'profile.yml'), 'candidate:\n  full_name: T\n', 'utf-8');
+  writeFileSync(join(targetEnvDir, '.env'), `CAREER_OPS_PROFILE=${namedProfile}\n`, 'utf-8');
+  const targetEnvHuman = runDoctor(['--target', targetEnvDir], undefined);
+  const targetEnvJson = JSON.parse(runDoctor(['--target', targetEnvDir, '--json'], undefined));
+  !/\.env sets CAREER_OPS_PROFILE/.test(targetEnvHuman) && !targetEnvJson.warnings.some((w) => /\.env sets CAREER_OPS_PROFILE/.test(w))
+    ? pass('doctor --target does not warn about the target checkout\'s .env override')
+    : fail('doctor --target warned about a .env override in the target checkout');
+
+  // The onboarding steps act only on `missing`, so the warning changes nothing
+  // unless AGENTS.md tells the agent to read it before copying the example profile.
+  const agentsOnboarding = readFileSync(join(ROOT, 'AGENTS.md'), 'utf-8').split('#### Step 2: Profile')[1]?.split('#### Step 3')[0] ?? '';
+  /warnings/.test(agentsOnboarding) && /CAREER_OPS_PROFILE/.test(agentsOnboarding) && /export/.test(agentsOnboarding)
+    ? pass('AGENTS.md onboarding Step 2 sends an agent to the doctor warning before copying the example profile')
+    : fail('AGENTS.md onboarding Step 2 does not mention the doctor --json warning for a .env-set CAREER_OPS_PROFILE');
 
   // --target diagnoses another checkout, so CAREER_OPS_PROFILE does not apply to
   // it: the missing-profile advice is the plain copy, not the variable's, and
