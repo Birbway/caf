@@ -125,7 +125,7 @@ const QUESTION_BY_MATCH = {
 
 /**
  * Likely screening questions, one per important requirement, most important
- * first. The match verdict picks the question: proof for a strong match,
+ * first. A requirement listed twice keeps only its most important entry. The match verdict picks the question: proof for a strong match,
  * depth for a partial one, a gap plan for a missing one.
  * @param {MachineSummary} s
  * @param {number} [limit]
@@ -135,6 +135,7 @@ export function prepQuestions(s, limit = 6) {
   return s.requirements
     .filter((r) => Object.hasOwn(QUESTION_BY_MATCH, r.match) && IMPORTANCE_RANK[r.importance] <= IMPORTANCE_RANK.meaningful)
     .sort((a, b) => IMPORTANCE_RANK[a.importance] - IMPORTANCE_RANK[b.importance])
+    .filter((r, i, all) => all.findIndex((o) => o.requirement === r.requirement) === i)
     .slice(0, limit)
     .map((r) => ({ ...r, question: QUESTION_BY_MATCH[r.match](r.requirement) }));
 }
