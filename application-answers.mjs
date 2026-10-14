@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { localToday } from './lib/local-today.mjs';
+import { flagValue, hasFlag, validateFlags } from './lib/cli-flags.mjs';
 
 export const APPLICATION_ANSWERS_HEADING = '## Application Answers';
 
@@ -477,24 +478,32 @@ export function upsertApplicationAnswersSection(reportText, snapshot = {}) {
   return [before, section, after].filter(Boolean).join('\n\n') + '\n';
 }
 
+const KNOWN_FLAGS = [
+  '--help',
+  '-h',
+  '--read',
+  '--read-draft',
+  '--strict',
+  '--report',
+  '--input',
+  '--state',
+  '--date',
+];
+
+const VALUE_FLAGS = ['--report', '--input', '--state', '--date'];
+
 function parseArgs(argv) {
-  const args = {};
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === '--help' || arg === '-h') args.help = true;
-    else if (arg === '--read') args.read = true;
-    else if (arg === '--read-draft') args.readDraft = true;
-    else if (arg === '--strict') args.strict = true;
-    else if (arg.startsWith('--')) {
-      const value = argv[i + 1];
-      if (!value || value.startsWith('--')) {
-        throw new Error(`Missing value for ${arg}`);
-      }
-      args[arg.slice(2)] = value;
-      i += 1;
-    }
-  }
-  return args;
+  validateFlags(argv, KNOWN_FLAGS, usage(), { valueFlags: VALUE_FLAGS, requireOperand: true });
+  return {
+    help: hasFlag(argv, '--help') || hasFlag(argv, '-h'),
+    read: hasFlag(argv, '--read'),
+    readDraft: hasFlag(argv, '--read-draft'),
+    strict: hasFlag(argv, '--strict'),
+    report: flagValue(argv, '--report'),
+    input: flagValue(argv, '--input'),
+    state: flagValue(argv, '--state'),
+    date: flagValue(argv, '--date'),
+  };
 }
 
 function usage() {
