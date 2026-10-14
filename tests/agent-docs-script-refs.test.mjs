@@ -20,10 +20,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { listTree } from '../lib/walk-tree.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -34,9 +35,8 @@ const AGENT_DOCS = [
   'AGENTS.md', 'CLAUDE.md', 'CODEX.md', 'OPENCODE.md',
   'GEMINI.md', 'KIMI.md', 'DATA_CONTRACT.md',
   'batch/batch-prompt.md',
-  ...readdirSync(join(ROOT, 'modes'), { recursive: true })
-    .filter((rel) => rel.endsWith('.md'))
-    .map((rel) => join('modes', rel))
+  ...listTree(join(ROOT, 'modes'), { match: /\.md$/ })
+    .map((path) => relative(ROOT, path))
     .sort(),
 ];
 
