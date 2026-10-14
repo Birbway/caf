@@ -118,7 +118,8 @@ export async function loadStudio(n: string): Promise<StudioLoad> {
   let raw: unknown = null;
   try {
     raw = JSON.parse(fs.readFileSync(editsPath(id.reportNum), "utf8"));
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     raw = null;
   }
   const { edits, stale } = parseEdits(raw, sourceHash);

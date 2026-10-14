@@ -208,3 +208,9 @@ test("htmlText collapses nested tag shapes so no live tag remains", () => {
   assert.equal(htmlText("<style>a{}</style>body"), "a{}body");
   assert.equal(htmlText("<style>a{}</style>body").includes("<"), false);
 });
+
+test("parseEdits fills missing custom.keywords so shown.keywords.forEach cannot throw", () => {
+  const raw = { v: 1, sourceHash: "h1", use: { s0i0b0: { kind: "custom", text: "rewrote" } } };
+  const { edits } = parseEdits(raw, "h1");
+  assert.deepEqual(edits.use.s0i0b0, { kind: "custom", text: "rewrote", keywords: [] });
+});

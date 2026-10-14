@@ -142,7 +142,9 @@ export function parseEdits(raw, sourceHash) {
   const strings = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
   const record = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
   const use = Object.fromEntries(
-    Object.entries(record(r.use)).filter(([, u]) => u && (u.kind === "base" || u.kind === "tailored" || (u.kind === "custom" && typeof u.text === "string"))),
+    Object.entries(record(r.use))
+      .filter(([, u]) => u && (u.kind === "base" || u.kind === "tailored" || (u.kind === "custom" && typeof u.text === "string")))
+      .map(([k, u]) => [k, u.kind === "custom" ? { kind: "custom", text: u.text, keywords: strings(u.keywords) } : { kind: u.kind }]),
   );
   return {
     edits: {
