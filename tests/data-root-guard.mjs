@@ -22,9 +22,10 @@ import { walkTree } from '../lib/walk-tree.mjs';
 
 /**
  * The user layer, relative to the data root — the content half of
- * `USER_PATHS` in update-system.mjs. An entry is a file or a directory; one
- * that does not exist contributes nothing, so a fresh clone snapshots to
- * almost nothing and costs nothing.
+ * `USER_PATHS` in update-system.mjs; the other half is
+ * `UNGUARDED_USER_PATHS` below. An entry is a file or a directory; one that
+ * does not exist contributes nothing, so a fresh clone snapshots to almost
+ * nothing and costs nothing.
  */
 export const GUARDED_PATHS = [
   'cv.md',
@@ -44,6 +45,30 @@ export const GUARDED_PATHS = [
   'jds',
   'writing-samples',
 ];
+
+/**
+ * The rest of `USER_PATHS`: user-owned paths the guard does not fingerprint,
+ * each with the reason. A suite that wrote one of these for real would not be
+ * reported here.
+ *
+ * Five are resolved from the checkout, not from the data root, so the scratch
+ * root the suite pins does not move them and a snapshot of the data root does
+ * not contain them. The sixth is under the data root and is left out on
+ * purpose.
+ *
+ * Kept as a list so that each gap is a decision. tests/data-root-guard.test.mjs
+ * holds `USER_PATHS` to this list plus `GUARDED_PATHS`: a path added to the
+ * user layer later has to be put in one of them, with a reason if it is this
+ * one.
+ */
+export const UNGUARDED_USER_PATHS = {
+  '.career-ops-web': "the dashboard's run logs and memory under the data root, written whenever it is in use: a suite run beside an open dashboard would report it every time",
+  'plugins.local': 'installed plugin code, kept beside plugins/ in the checkout',
+  'plugins.lock': 'the plugin trust lock, kept beside plugins/ in the checkout',
+  'opencode.json': "OpenCode's project config, read from the checkout by that CLI",
+  '.claude/settings.json': "Claude Code's project config, read from the checkout by that CLI",
+  '.claude/hooks': "Claude Code's project hooks, read from the checkout by that CLI",
+};
 
 /**
  * The marker that redirects the data root. It lives beside the code, not in
