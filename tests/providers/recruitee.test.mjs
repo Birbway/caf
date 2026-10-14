@@ -1,4 +1,5 @@
-// tests/providers/recruitee.test.mjs — moved verbatim from test-all.mjs (#1440).
+// tests/providers/recruitee.test.mjs — Recruitee provider: detect(), the
+// offers-API fetch, and the offer parser.
 import { pass, fail, ROOT } from '../helpers.mjs';
 import { join } from 'path';
 import { pathToFileURL } from 'url';
@@ -14,8 +15,8 @@ try {
   if (recruitee.id === 'recruitee') pass('recruitee.id is "recruitee"');
   else fail(`recruitee.id is ${JSON.stringify(recruitee.id)}`);
 
-  const hit = recruitee.detect({ name: 'Channable', careers_url: 'https://channable.recruitee.com' });
-  if (hit && hit.url === 'https://channable.recruitee.com/api/offers/') {
+  const hit = recruitee.detect({ name: 'Acme', careers_url: 'https://acme.recruitee.com' });
+  if (hit && hit.url === 'https://acme.recruitee.com/api/offers/') {
     pass('recruitee.detect() resolves <slug>.recruitee.com → api offers');
   } else {
     fail(`recruitee.detect() returned ${JSON.stringify(hit)}`);
@@ -27,19 +28,32 @@ try {
     fail('recruitee.detect() should return null for non-recruitee URLs');
   }
 
+  // A tenant host behind http:, a string that is not a URL, and an entry with
+  // no careers_url at all are junk input: detect() answers null, never throws.
+  const junkDetects = [
+    { name: 'Acme', careers_url: 'http://acme.recruitee.com' },
+    { name: 'Acme', careers_url: 'not a url' },
+    { name: 'Acme' },
+  ].map(entry => recruitee.detect(entry));
+  if (junkDetects.every(hit => hit === null)) {
+    pass('recruitee.detect() returns null for a non-HTTPS tenant URL, a malformed URL and a missing careers_url');
+  } else {
+    fail(`recruitee.detect() junk input returned ${JSON.stringify(junkDetects)}`);
+  }
+
   // parseRecruiteeResponse
   const sample = {
     offers: [
-      { title: 'Senior PM', careers_url: 'https://channable.recruitee.com/o/senior-pm', city: 'Utrecht', country: 'Netherlands', remote: false },
-      { title: 'Backend Eng', url: 'https://channable.recruitee.com/o/backend', city: 'Amsterdam', country: 'Netherlands', remote: true },
-      { title: 'AI Lead', careers_url: 'https://channable.recruitee.com/o/ai-lead', location: 'Remote, EMEA' },
+      { title: 'Senior PM', careers_url: 'https://acme.recruitee.com/o/senior-pm', city: 'Utrecht', country: 'Netherlands', remote: false },
+      { title: 'Backend Eng', url: 'https://acme.recruitee.com/o/backend', city: 'Amsterdam', country: 'Netherlands', remote: true },
+      { title: 'AI Lead', careers_url: 'https://acme.recruitee.com/o/ai-lead', location: 'Remote, EMEA' },
     ],
   };
-  const jobs = parseRecruiteeResponse(sample, 'Channable');
+  const jobs = parseRecruiteeResponse(sample, 'Acme');
   if (jobs.length === 3) pass('parseRecruiteeResponse extracts 3 offers');
   else fail(`parseRecruiteeResponse returned ${jobs.length} offers`);
 
-  if (jobs[0]?.title === 'Senior PM' && jobs[0]?.company === 'Channable' && jobs[0]?.url === 'https://channable.recruitee.com/o/senior-pm') {
+  if (jobs[0]?.title === 'Senior PM' && jobs[0]?.company === 'Acme' && jobs[0]?.url === 'https://acme.recruitee.com/o/senior-pm') {
     pass('parseRecruiteeResponse prefers careers_url field over url');
   } else {
     fail(`row 0 = ${JSON.stringify(jobs[0])}`);
@@ -77,13 +91,34 @@ try {
     fail(`flat-location no-duplicate = ${JSON.stringify(primaryCountry[1]?.location)}`);
   }
 
-  if (parseRecruiteeResponse({}, 'X').length === 0) pass('empty {} → empty result');
-  else fail('empty {} should yield empty result');
-
-  if (parseRecruiteeResponse({ offers: null }, 'X').length === 0) {
-    pass('null offers → empty result (no crash)');
+  // Empty vs broken: a present-and-empty `offers` array is an empty board; any
+  // other envelope is not the documented shape and throws, naming what it got.
+  if (parseRecruiteeResponse({ offers: [] }, 'X').length === 0) {
+    pass('parseRecruiteeResponse returns [] for a present-and-empty offers array');
   } else {
-    fail('null offers should yield empty result');
+    fail('parseRecruiteeResponse should return [] for { offers: [] }');
+  }
+  const brokenEnvelopes = [
+    [{}, '[]'],
+    [{ offers: null }, '[offers]'],
+    [{ offers: {} }, '[offers]'],
+    [{ jobs: [] }, '[jobs]'],
+    [null, '[object]'],
+    ['', '[string]'],
+    [42, '[number]'],
+  ];
+  const envelopeResults = brokenEnvelopes.map(([body, got]) => {
+    try {
+      parseRecruiteeResponse(body, 'X');
+      return `${JSON.stringify(body)} did not throw`;
+    } catch (e) {
+      return e.message === `recruitee: unexpected response — expected offers[], got: ${got}` ? null : `${JSON.stringify(body)} threw "${e.message}"`;
+    }
+  }).filter(Boolean);
+  if (envelopeResults.length === 0) {
+    pass('parseRecruiteeResponse throws, naming the keys or type it got, for every envelope that is not { offers: [...] }');
+  } else {
+    fail(`envelope check: ${envelopeResults.join('; ')}`);
   }
 
   // careers_url with non-string value → detect() returns null without crashing
@@ -94,7 +129,7 @@ try {
   }
 
   // SSRF: malicious URL with recruitee.com in the PATH (not host) must not be detected.
-  if (recruitee.detect({ name: 'Spoof', careers_url: 'https://evil.example/channable.recruitee.com/foo' }) === null) {
+  if (recruitee.detect({ name: 'Spoof', careers_url: 'https://evil.example/acme.recruitee.com/foo' }) === null) {
     pass('recruitee.detect() rejects path-spoofed URLs');
   } else {
     fail('recruitee.detect() must NOT misdetect path-spoofed URLs');
@@ -102,24 +137,24 @@ try {
 
   // Per-offer URL validation: custom-domain https URLs are KEPT (Recruitee
   // tenants serve postings on their own domain, e.g. careers.hostaway.com);
-  // the per-offer URL is display-only and not host-locked to *.recruitee.com
-  // — see #recruitee. A non-https, malformed, or missing URL drops the WHOLE
+  // the per-offer URL is display-only and not host-locked to *.recruitee.com.
+  // A non-https, malformed, or missing URL drops the WHOLE
   // offer (url is this provider's own dedup key downstream — see the Drop
   // rule doc on parseRecruiteeResponse), not just the url field.
   const offerUrlOffers = parseRecruiteeResponse(
     {
       offers: [
-        { title: 'Recruitee domain', careers_url: 'https://channable.recruitee.com/o/good' },
+        { title: 'Recruitee domain', careers_url: 'https://acme.recruitee.com/o/good' },
         { title: 'Custom domain', careers_url: 'https://careers.hostaway.com/o/senior-backend' },
-        { title: 'Insecure', careers_url: 'http://channable.recruitee.com/o/insecure' },
+        { title: 'Insecure', careers_url: 'http://acme.recruitee.com/o/insecure' },
         { title: 'No URL field' },
       ],
     },
-    'Channable',
+    'Acme',
   );
   if (
     offerUrlOffers.length === 2 &&
-    offerUrlOffers[0]?.url === 'https://channable.recruitee.com/o/good' &&
+    offerUrlOffers[0]?.url === 'https://acme.recruitee.com/o/good' &&
     offerUrlOffers[1]?.url === 'https://careers.hostaway.com/o/senior-backend'
   ) {
     pass('parseRecruiteeResponse keeps custom-domain https URLs, drops offers with non-https or missing URL entirely');
@@ -132,32 +167,34 @@ try {
   let fetchedUrl = null;
   let fetchedOpts = null;
   const fetchJobs = await recruitee.fetch(
-    { name: 'Channable', careers_url: 'https://channable.recruitee.com/' },
-    { fetchJson: async (url, opts) => { fetchedUrl = url; fetchedOpts = opts; return { offers: [{ title: 'Senior PM', careers_url: 'https://channable.recruitee.com/o/senior-pm' }] }; } },
+    { name: 'Acme', careers_url: 'https://acme.recruitee.com/' },
+    { fetchJson: async (url, opts) => { fetchedUrl = url; fetchedOpts = opts; return { offers: [{ title: 'Senior PM', careers_url: 'https://acme.recruitee.com/o/senior-pm' }] }; } },
   );
-  if (fetchedUrl === 'https://channable.recruitee.com/api/offers/' && fetchedOpts?.redirect === 'error' && fetchJobs.length === 1) {
+  if (fetchedUrl === 'https://acme.recruitee.com/api/offers/' && fetchedOpts?.redirect === 'error' && fetchJobs.length === 1) {
     pass('recruitee.fetch() hits /api/offers/ with redirect:"error" and returns parsed offers');
   } else {
     fail(`recruitee.fetch() url=${JSON.stringify(fetchedUrl)} opts=${JSON.stringify(fetchedOpts)} jobs=${fetchJobs.length}`);
   }
 
   // fetch() refuses entries whose careers_url can't derive a trusted
-  // <slug>.recruitee.com API URL — the guard chain must run before any request.
+  // <slug>.recruitee.com API URL — the guard chain runs before any request,
+  // so the fetch stub is never entered.
+  let untrustedFetchCalls = 0;
   try {
     await recruitee.fetch(
       { name: 'Evil', careers_url: 'https://evil.example.com/careers' },
-      { fetchJson: async () => { throw new Error('must not be called'); } },
+      { fetchJson: async () => { untrustedFetchCalls++; return { offers: [] }; } },
     );
     fail('recruitee.fetch() should throw for an untrusted careers_url');
   } catch (e) {
-    if (/cannot derive API URL for Evil/.test(e.message)) {
-      pass('recruitee.fetch() throws before fetching when the host is untrusted');
+    if (/cannot derive API URL for Evil/.test(e.message) && untrustedFetchCalls === 0) {
+      pass('recruitee.fetch() throws before fetching when the host is untrusted (fetchJson called 0 times)');
     } else {
-      fail(`recruitee.fetch() threw the wrong error: ${e.message}`);
+      fail(`recruitee.fetch() untrusted host: error "${e.message}", fetchJson calls ${untrustedFetchCalls}`);
     }
   }
 
-  // ── Description (#3175 phase 2) ──
+  // ── Description ──
   // Recruitee's list payload embeds each offer's HTML body for free — same
   // request, no per-job fetch. It must arrive as plain text (tags stripped,
   // entities decoded), and offers without a body omit the key entirely.
@@ -166,14 +203,14 @@ try {
       offers: [
         {
           title: 'With body',
-          careers_url: 'https://channable.recruitee.com/o/with-body',
+          careers_url: 'https://acme.recruitee.com/o/with-body',
           description: '&lt;p&gt;Build &lt;strong&gt;pipelines&lt;/strong&gt; at Hostaway&amp;rsquo;s HQ&lt;/p&gt;&lt;script&gt;evil()&lt;/script&gt;',
         },
-        { title: 'Without body', careers_url: 'https://channable.recruitee.com/o/no-body' },
-        { title: 'Empty body', careers_url: 'https://channable.recruitee.com/o/empty-body', description: '   ' },
+        { title: 'Without body', careers_url: 'https://acme.recruitee.com/o/no-body' },
+        { title: 'Empty body', careers_url: 'https://acme.recruitee.com/o/empty-body', description: '   ' },
       ],
     },
-    'Channable',
+    'Acme',
   );
   if (descOffers[0]?.description === "Build pipelines at Hostaway\u2019s HQ") {
     pass('parseRecruiteeResponse double-decodes the offer body to plain text (tags + script gone)');
@@ -282,7 +319,7 @@ try {
     fail(`unusable salary rows = ${JSON.stringify(salaryOffers.slice(4).map(o => o.salary))}`);
   }
 
-  // ── Demo-tenant filtering (#4190) ──────────────────────────────────────────
+  // ── Demo-tenant filtering ──────────────────────────────────────────────────
   // Recruitee itself stamps "(Sample)" on its own seeded posting — captured
   // live, byte-identical, from two unrelated tenants (adecco, accenture).
   const demoOffers = parseRecruiteeResponse(
@@ -296,7 +333,7 @@ try {
     'ExampleCo',
   );
   if (demoOffers.length === 1 && demoOffers[0].title === 'Real Backend Engineer') {
-    pass('parseRecruiteeResponse drops any posting whose title carries the "(Sample)" marker, case-insensitively (#4190)');
+    pass('parseRecruiteeResponse drops any posting whose title carries the "(Sample)" marker, case-insensitively');
   } else {
     fail(`parseRecruiteeResponse demo-filter kept ${demoOffers.length} offers: ${JSON.stringify(demoOffers.map(o => o.title))}`);
   }
@@ -403,18 +440,18 @@ try {
   // `title: ''` — same convention as ibm.mjs / eightfold.mjs. Every row here
   // carries a valid `careers_url` so only the title check is under test (a
   // missing/invalid URL is covered separately by the "URL validation" case
-  // above, which now drops the whole offer).
+  // above, which drops the whole offer).
   const titleDropOffers = parseRecruiteeResponse(
     {
       offers: [
-        { title: 'Real Offer', careers_url: 'https://channable.recruitee.com/o/real' },
-        { careers_url: 'https://channable.recruitee.com/o/no-title' },
-        { title: '', careers_url: 'https://channable.recruitee.com/o/blank-title' },
-        { title: '   ', careers_url: 'https://channable.recruitee.com/o/whitespace-title' },
-        { title: 42, careers_url: 'https://channable.recruitee.com/o/non-string-title' },
+        { title: 'Real Offer', careers_url: 'https://acme.recruitee.com/o/real' },
+        { careers_url: 'https://acme.recruitee.com/o/no-title' },
+        { title: '', careers_url: 'https://acme.recruitee.com/o/blank-title' },
+        { title: '   ', careers_url: 'https://acme.recruitee.com/o/whitespace-title' },
+        { title: 42, careers_url: 'https://acme.recruitee.com/o/non-string-title' },
       ],
     },
-    'Channable',
+    'Acme',
   );
   if (titleDropOffers.length === 1 && titleDropOffers[0]?.title === 'Real Offer') {
     pass('parseRecruiteeResponse drops offers with no usable title (missing, blank, whitespace-only, non-string)');

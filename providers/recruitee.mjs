@@ -1,7 +1,8 @@
 // @ts-check
 /** @typedef {import('./_types.js').Provider} Provider */
 
-// Recruitee provider — hits the public per-tenant offers API.
+// Recruitee provider — a single-company ATS adapter for `tracked_companies:`
+// entries; hits the public per-tenant offers API.
 // Auto-detects from careers_url pattern `https://<slug>.recruitee.com`.
 // Per-tenant subdomains are the variable part — SSRF defence uses a
 // regex match on `<safe-slug>.recruitee.com` rather than a static
@@ -26,7 +27,7 @@ function assertRecruiteeUrl(url) {
 }
 
 function resolveApiUrl(entry) {
-  const raw = typeof entry.careers_url === 'string' ? entry.careers_url : '';
+  const raw = typeof entry?.careers_url === 'string' ? entry.careers_url : '';
   if (!raw) return null;
   let parsed;
   try {
@@ -59,7 +60,7 @@ export default {
 
 // Recruitee serves a shared demo/trial-account posting for tenants that
 // never launched real hiring — the API still answers 200 with well-formed
-// job data (#4190). Verified live against 2 unrelated tenants (adecco,
+// job data. Verified live against 2 unrelated tenants (adecco,
 // accenture): both return the identical title "Senior Marketer (Sample)"
 // with the identical description text, byte-for-byte. Recruitee itself
 // stamps the "(Sample)" marker on the title, so this is the platform's own
@@ -116,9 +117,9 @@ function containsWholeWord(text, word) {
  * "Parisian HQ" still gets city "Paris" appended rather than being mistaken
  * for already naming it. Each field is checked and appended independently, so
  * a name missing only one of the two still gets exactly that one added.
- * Deduped, joined with " · " like ashby/eightfold/gem/workday's multi-place
- * handling, so scan.mjs's location_filter sees every place a multi-location
- * role is open to.
+ * Deduped and joined with " · ", the separator the providers share for
+ * multi-place postings (`grep -l "' · '" providers/*.mjs`), so scan.mjs's
+ * location_filter sees every place a multi-location role is open to.
  *
  * Falls back to the single-place logic — explicit `location` (with the
  * top-level `country` appended when the location doesn't already name it),
@@ -158,8 +159,7 @@ function assembleLocation(j) {
   const remote = j.remote ? 'Remote' : '';
   // The flat `location` gets the same country fold every `locations[]` entry
   // gets above — without it a primary place spelled as a city or subdivision
-  // ("London, England") hides the country location_filter matches on, the
-  // asymmetry that dropped UK-primary postings on Ashby (formatLocation there).
+  // ("London, England") hides the country location_filter matches on.
   if (typeof j.location === 'string' && j.location.trim()) {
     const loc = j.location.trim();
     return typeof country === 'string' && country.trim() && !containsWholeWord(loc, country.trim())
@@ -262,8 +262,14 @@ function parseSalary(salary) {
  * - salary: `salary` annualized by its `period` (see parseSalary); omitted
  *   when the offer states no figure or no known period.
  * - a posting Recruitee itself marks "(Sample)" in the title is dropped
- *   entirely (see isRecruiteeSamplePosting, #4190), so a tenant serving only
- *   its seeded sample posting resolves as empty rather than as a live board.
+ *   entirely (see isRecruiteeSamplePosting), so a tenant serving only its
+ *   seeded sample posting resolves as empty rather than as a live board.
+ *
+ * Envelope: `offers` present as an array — an empty one is an empty board and
+ * yields `[]`. Anything else (a non-object body, no `offers` key, `offers`
+ * null or not an array) is not the documented shape and throws, naming what
+ * came back, so a changed API surfaces as an error instead of reading as an
+ * empty board forever.
  *
  * Drop rule: an offer with no usable `title`, or no resolvable absolute
  * `url`, is silently omitted, never emitted half-formed with `title: ''` or
@@ -283,8 +289,11 @@ function parseSalary(salary) {
  * @returns {Array<{title: string, url: string, company: string, location: string, description?: string, postedAt?: number, salary?: {min: number, max: number, currency: string}}>}
  */
 export function parseRecruiteeResponse(json, companyName) {
-  const offers = json?.offers;
-  if (!Array.isArray(offers)) return [];
+  const offers = json && typeof json === 'object' && Array.isArray(json.offers) ? json.offers : null;
+  if (!offers) {
+    const got = json && typeof json === 'object' ? Object.keys(json).join(', ') : typeof json;
+    throw new Error(`recruitee: unexpected response — expected offers[], got: [${got}]`);
+  }
   const out = [];
   for (const j of offers) {
     if (!j || typeof j !== 'object') continue;
