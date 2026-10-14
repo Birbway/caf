@@ -929,6 +929,41 @@ export function makeCliFailWith(json) {
 }
 
 /**
+ * Build a failUsage(message) bound to raw argv and a USAGE string, shared by
+ * every canonical tracker-writer CLI so the usage-error contract can't drift
+ * between them. The copies differ only in defaultMessage.
+ *
+ * Print usage (plus an optional specific complaint) and exit CLI_EXIT.USAGE.
+ *
+ * With --json a structured usage-error payload goes to stdout (same shape as
+ * failWith) so machine callers always parse one stream. failUsage can fire
+ * mid-argv-parse — before flags.json is settled — so JSON mode is detected
+ * from the raw argv directly. JSON must be the last thing written to stdout;
+ * machine callers parse stdout as one JSON document. The human-readable
+ * `❌` line always goes to stderr.
+ *
+ * Without --json, a specific complaint is printed to stderr only when a
+ * message was given, then the USAGE text.
+ *
+ * @param {{argv: string[], usage: string, defaultMessage: string}} options
+ * @returns {(message?: string|null) => never}
+ */
+export function makeCliFailUsage({ argv, usage, defaultMessage }) {
+  return function failUsage(message) {
+    const msg = message ?? defaultMessage;
+    if (argv.includes('--json')) {
+      // JSON must be the last thing written to stdout; machine callers parse stdout as one JSON document.
+      console.log(JSON.stringify({ error: msg, code: 'usage' }));
+      console.error(`❌ ${msg}`);
+    } else {
+      if (message) console.error(`❌ ${message}\n`);
+      console.error(usage);
+    }
+    process.exit(CLI_EXIT.USAGE);
+  };
+}
+
+/**
  * Acquire the shared tracker lock for a locked read-modify-write CLI,
  * routing any failure through the caller's failWith so every canonical
  * writer surfaces lock errors identically (LOCK_TIMEOUT → CLI_EXIT.LOCK_TIMEOUT,

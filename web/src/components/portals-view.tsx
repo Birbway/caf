@@ -8,7 +8,7 @@ import { useJobs, type Job } from "@/components/jobs/job-store";
 import { cn } from "@/lib/cn";
 
 type Company = { name: string; status: string; detail: string };
-type Result = { available: boolean; configured: boolean; companies: Company[] };
+type Result = { available: boolean; configured: boolean; companies: Company[]; error?: string };
 
 const TONE: Record<string, { dot: string; label: string; chip: string }> = {
   live: { dot: "bg-emerald-500", label: "live", chip: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" },
@@ -62,10 +62,18 @@ export function PortalsView() {
         {loading && <span className="text-xs text-faint">Probing each company&apos;s ATS… (~30–60s)</span>}
       </div>
 
-      {res && !res.available && (
+      {res && !res.available && !res.error && (
         <p className="mt-4 rounded-xl border border-dashed border-border bg-surface/30 p-4 text-sm text-muted">
           <code className="text-foreground">verify-portals.mjs</code> not found — this needs a complete career-ops
           checkout (the web orchestrates the core&apos;s validator).
+        </p>
+      )}
+      {res && !res.available && res.error && (
+        <p className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-muted">
+          <span className="font-medium text-red-700 dark:text-red-400">The portal check did not finish</span> — no
+          portal was verified, so none is shown as healthy. Try again, or run{" "}
+          <code className="text-foreground">node verify-portals.mjs</code> to see why.{" "}
+          <code className="break-all font-mono text-xs text-faint">{res.error}</code>
         </p>
       )}
       {res && res.available && !res.configured && (

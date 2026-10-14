@@ -40,7 +40,7 @@
  */
 
 
-import { execSync, execFile, execFileSync, spawn, spawnSync } from 'child_process';
+import { execSync, execFileSync, spawn, spawnSync } from 'child_process';
 import { readFileSync, existsSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync as _rmSync, statSync, unlinkSync, realpathSync, symlinkSync, copyFileSync, openSync, closeSync } from 'fs';
 
 // Windows keeps a handle open on a just-exited child process's working files
@@ -58,16 +58,18 @@ import { readFileSync, existsSync, readdirSync, mkdtempSync, mkdirSync, writeFil
 const rmSync = (target, opts = {}) => _rmSync(target, { maxRetries: 10, retryDelay: 100, ...opts });
 import { join, dirname, basename, relative, delimiter } from 'path';
 import { tmpdir, availableParallelism } from 'os';
-import { promisify } from 'util';
 import { fileURLToPath, pathToFileURL } from 'url';
 import * as yaml from 'js-yaml';
-import { pass, fail, warn, run, runAcrossUtcDay, runAcrossLocalDay, lastRunFailure, formatRunFailure, fileExists, finish, results, absorbResults, importSuiteContained, linkNodeModules, ROOT, QUICK, NODE, DEFAULT_SCRIPT_TIMEOUT_MS, getBash, toBashPath, hermeticGitEnv } from './tests/helpers.mjs';
+import { pass, fail, warn, run, runAcrossUtcDay, runAcrossLocalDay, lastRunFailure, formatRunFailure, fileExists, finish, results, absorbResults, importSuiteContained, linkNodeModules, ROOT, QUICK, NODE, DEFAULT_SCRIPT_TIMEOUT_MS, getBash, toBashPath, hermeticGitEnv, pinSandboxDataRoot, exitOnInterrupt, ownRootEnv } from './tests/helpers.mjs';
 import { flagValue, hasFlag } from './lib/cli-flags.mjs';
 import { collectMjsFiles } from './lib/mjs-files.mjs';
+import { checkSyntax, NODE_CHECK_TIMEOUT_MS } from './lib/syntax-check.mjs';
 import { walkTree, listTree } from './lib/walk-tree.mjs';
 import { FROZEN_EVALUATION_MODES, KNOWN_EVALUATION_MODES, discoverEvaluationModes, readModeText, structuralGaps } from './tests/evaluation-mode-parity-helpers.mjs';
 import { childFailureExcerpt } from './lib/failure-excerpt.mjs';
 import { SCRATCH_PREFIX, markScratchOwner, sweepScratchDirs } from './lib/scratch-dirs.mjs';
+import { MARKER_FILE } from './tests/data-root-guard.mjs';
+import { getCareerOpsRoot } from './path-resolver.mjs';
 
 /**
  * Read a repo-relative text file as UTF-8.
@@ -112,6 +114,12 @@ const normalizeEol = (text) => text.replace(/\r\n/g, '\n');
  * @returns {string} File contents with LF-only line endings.
  */
 const readTextLF = (path) => normalizeEol(readFile(path));
+
+// An interrupted run still answers for the developer's data (#5113). A signal
+// handler only runs between two turns of the event loop, and most of this file
+// is synchronous: every discovered suite is awaited, so the loop turns there,
+// and the script smoke tests yield between scripts for the same reason.
+exitOnInterrupt();
 
 // ── Auto-discovered test files (issue #1440) ─────────────────────────────
 // Deterministic: recursive readdirSync with default lexicographic sort of
@@ -280,6 +288,11 @@ async function runDiscovered(filter = null) {
   }
   for (const f of files) {
     const rel = f.slice(ROOT.length + 1);
+    // In-process suites share this process's environment. One that moves the
+    // data root for its own fixture and leaves it there, or deletes the
+    // variable to "restore" it, would hand every suite after it a different
+    // root — the developer's own, in the second case (#5113).
+    pinSandboxDataRoot();
     const kind = discoveredSuiteKind(readFileSync(f, 'utf-8'));
     if (SUITE_REFUSALS[kind]) {
       fail(SUITE_REFUSALS[kind](rel));
@@ -566,25 +579,26 @@ const mjsFiles = collectMjsFiles(ROOT).map(f => f.slice(ROOT.length + 1).replace
 // diff two runs' pass labels.
 console.log(`  (${mjsFiles.length} .mjs files, recursive from the repository root)`);
 
-// `node --check` parses a file and exits; it runs no user code, touches no
-// shared state, and its result depends on nothing but that one file. Spawning
-// the files one at a time was pure process-startup latency, so they go through
-// a bounded pool instead (#2387) — which is also what keeps the recursive scope
-// above a wall-clock non-event. Results are collected by index and reported
-// afterwards in collector order, so the log stays byte-identical to the
-// sequential version regardless of completion order.
-const SYNTAX_POOL_SIZE = 8;
-const execFileAsync = promisify(execFile);
-const syntaxOk = new Array(mjsFiles.length);
-const syntaxDetail = new Array(mjsFiles.length);
-let nextSyntaxIdx = 0;
+// One process parses all of them, and `node --check` then runs only on a file
+// that pass did not vouch for, so a failure below carries the diagnostic it
+// always carried (lib/syntax-check.mjs, #5078). One `node --check` per file,
+// even eight at a time (#2387), was 22 s of starting node for 0.3 s of parsing.
+// Results come back by index and are reported in collector order, so the log
+// does not depend on what finished first.
+const { errors: syntaxErrors, fastPassUnavailable } = await checkSyntax(mjsFiles, { cwd: ROOT, node: NODE });
+if (fastPassUnavailable) {
+  // Not a failure and not a narrower check: every file went through
+  // `node --check` instead. Said out loud because it costs about 20 s a run,
+  // and nothing else here would show where they went.
+  console.log(`  (the single-process parse did not run: ${fastPassUnavailable}; each file was checked with node --check instead)`);
+}
 
 // A bare catch reports a child killed on timeout, or one that never spawned, as
 // "has syntax errors" — sending the reader hunting for a parse error that does
 // not exist. Keep enough of the child's own diagnosis to tell those apart.
 const describeCheckFailure = (err) => {
   if (err?.killed || err?.signal === 'SIGTERM' || err?.code === 'ETIMEDOUT') {
-    return `node --check timed out after 30000ms${err.signal ? ` (signal ${err.signal})` : ''}`;
+    return `node --check timed out after ${NODE_CHECK_TIMEOUT_MS}ms${err.signal ? ` (signal ${err.signal})` : ''}`;
   }
   const stderr = String(err?.stderr ?? '').trim();
   if (!stderr) return `no stderr (exit ${err?.code ?? 'unknown'})`;
@@ -594,25 +608,11 @@ const describeCheckFailure = (err) => {
   return clipped.replace(/\n/g, '\n    ');
 };
 
-const syntaxWorker = async () => {
-  for (let i = nextSyntaxIdx++; i < mjsFiles.length; i = nextSyntaxIdx++) {
-    try {
-      await execFileAsync(NODE, ['--check', mjsFiles[i]], { cwd: ROOT, timeout: 30000 });
-      syntaxOk[i] = true;
-    } catch (err) {
-      syntaxOk[i] = false;
-      syntaxDetail[i] = describeCheckFailure(err);
-    }
-  }
-};
-await Promise.all(
-  Array.from({ length: Math.min(SYNTAX_POOL_SIZE, mjsFiles.length) }, syntaxWorker)
-);
 mjsFiles.forEach((f, i) => {
-  if (syntaxOk[i]) {
+  if (!syntaxErrors[i]) {
     pass(`${f} syntax OK`);
   } else {
-    fail(`${f} has syntax errors\n    ${syntaxDetail[i] ?? 'no diagnostic captured'}`);
+    fail(`${f} has syntax errors\n    ${describeCheckFailure(syntaxErrors[i])}`);
   }
 });
 
@@ -772,6 +772,9 @@ try {
     'cdp-diff-focused.patch',
     'test_diff.patch',
     'test_diff_utf8.patch',
+    // A marker redirects the data root, and the copy would follow the
+    // developer's to their real data (#5113).
+    MARKER_FILE,
     basename(scriptTmp),
   ];
   copyDirSync(ROOT, scriptTmp, excludeDirs);
@@ -797,7 +800,19 @@ try {
     'utf-8'
   );
 
+  // The copy is its own data root: no override, and no marker copied in, so
+  // each script falls through to the directory it runs from. Passed
+  // explicitly because a child inherits the environment otherwise, and an
+  // inherited CAREER_OPS_ROOT outranks the script's own location — these
+  // smoke tests appended a fixture row to the developer's real
+  // data/assessments.tsv that way, on every run (#5113).
+  const scratchEnv = ownRootEnv();
+
   for (const script of scripts) {
+    // Let a pending SIGINT/SIGTERM land between scripts. This loop is otherwise
+    // one synchronous stretch, the longest in the file, and a signal handler
+    // cannot run inside one.
+    await new Promise((resolve) => setImmediate(resolve));
     const { name, allowFail, timeoutMs } = script;
     const parts = name.split(' ');
     const scriptFile = parts[0];
@@ -833,6 +848,7 @@ try {
     // a hung CI job. Absent means absent, so run()'s own default stands.
     const result = run(NODE, [join(scriptTmp, scriptFile), ...args], {
       cwd: scriptTmp,
+      env: scratchEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
       ...(declared ? { timeout: timeoutMs } : {}),
     });
@@ -878,6 +894,7 @@ try {
   {
     const assessmentCli = (...argv) => spawnSync(NODE, [join(scriptTmp, 'assessment-log.mjs'), ...argv], {
       cwd: scriptTmp,
+      env: scratchEnv,
       encoding: 'utf-8',
       timeout: 30000,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -932,6 +949,7 @@ try {
   {
     const replyWatchCli = (...argv) => spawnSync(NODE, [join(scriptTmp, 'reply-watch.mjs'), ...argv], {
       cwd: scriptTmp,
+      env: scratchEnv,
       encoding: 'utf-8',
       timeout: 30000,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -2601,10 +2619,14 @@ try {
 }
 try {
   const { repoRelativeManifestPath, injectPrintPageCss } = await import(pathToFileURL(join(ROOT, 'generate-pdf.mjs')).href);
-  const insideHtmlPath = join(ROOT, 'templates', 'cv-template.html');
-  const outsideHtmlPath = join(dirname(ROOT), 'outside-cv-template.html');
+  // Relative to the workspace, which is the data root: the checkout only when
+  // nothing points the root elsewhere, and the suite does (#5113). A path under
+  // output/, which is where a tailored CV's source HTML lives.
+  const manifestRoot = getCareerOpsRoot();
+  const insideHtmlPath = join(manifestRoot, 'output', 'cv-template.html');
+  const outsideHtmlPath = join(dirname(manifestRoot), 'outside-cv-template.html');
 
-  if (repoRelativeManifestPath(insideHtmlPath) === 'templates/cv-template.html') {
+  if (repoRelativeManifestPath(insideHtmlPath) === 'output/cv-template.html') {
     pass('PDF manifest records repo-local source HTML paths');
   } else {
     fail('PDF manifest does not normalize repo-local source HTML paths');
@@ -5025,7 +5047,7 @@ try {
 } catch (err) {
   fail(`scan.mjs fresh-install pipeline test crashed: ${err.message}`);
 } finally {
-  delete process.env.CAREER_OPS_ROOT;
+  pinSandboxDataRoot();
   if (priorPipelineEnv === undefined) delete process.env.CAREER_OPS_PIPELINE;
   else process.env.CAREER_OPS_PIPELINE = priorPipelineEnv;
   if (fixtureRoot) {
@@ -7531,7 +7553,10 @@ if (!hasBrowser) {
   if (!liveJobUrl) {
     warn('archive render skipped — Greenhouse API unreachable');
   } else {
-    const JDS_DIR = join(ROOT, 'jds');
+    // jds/ under the data root, where archive-posting.mjs writes: the
+    // suite's scratch root, so the capture this makes and removes never sits
+    // among the developer's own (#5113).
+    const JDS_DIR = join(getCareerOpsRoot(), 'jds');
     const startedAt = Date.now();
     const archiveOut = run('node', ['archive-posting.mjs', liveJobUrl], { timeout: 60000 });
 
@@ -9587,7 +9612,7 @@ try {
         cwd: e2eTmp,
         encoding: 'utf-8',
         timeout: 30000,
-        env: { ...process.env, CAREER_OPS_PROFILE: '' },
+        env: ownRootEnv({ CAREER_OPS_PROFILE: '' }),
       });
       const e2e = JSON.parse(e2eOut.trim());
       const byNum = new Map((e2e.entries || []).map(entry => [entry.num, entry]));
@@ -17467,20 +17492,10 @@ console.log('\n20. Path resolution layer and overrides');
 try {
   const { getCareerOpsRoot } = await import(pathToFileURL(join(ROOT, 'path-resolver.mjs')).href);
 
-  // 1. Unset env vars should resolve to codebase root (ROOT)
-  const originalRoot = process.env.CAREER_OPS_ROOT;
-  const originalDataDir = process.env.CAREER_OPS_DATA_DIR;
-  delete process.env.CAREER_OPS_ROOT;
-  delete process.env.CAREER_OPS_DATA_DIR;
-
+  // 1. The default, with nothing set, is checked in step 6 below, against a
+  //    copy of the resolver: asked of this checkout it is the marker's target
+  //    for anyone who has a .career-ops-data file, and failed for them.
   try {
-    const defaultRoot = getCareerOpsRoot();
-    if (defaultRoot === ROOT) {
-      pass('getCareerOpsRoot() defaults to codebase root when environment variables are unset');
-    } else {
-      fail(`getCareerOpsRoot() returned ${defaultRoot}, expected ${ROOT}`);
-    }
-
     // 2. CAREER_OPS_ROOT should override the resolved path
     const testOverridePath = join(ROOT, 'test-override-path');
     process.env.CAREER_OPS_ROOT = testOverridePath;
@@ -17490,7 +17505,7 @@ try {
     } else {
       fail(`getCareerOpsRoot() returned ${overriddenRoot}, expected ${testOverridePath}`);
     }
-    delete process.env.CAREER_OPS_ROOT;
+    process.env.CAREER_OPS_ROOT = '';
 
     // 3. CAREER_OPS_DATA_DIR should override the resolved path
     process.env.CAREER_OPS_DATA_DIR = testOverridePath;
@@ -17501,39 +17516,35 @@ try {
       fail(`getCareerOpsRoot() returned ${overriddenDataDirRoot}, expected ${testOverridePath}`);
     }
   } finally {
-    // Restore original env vars
-    if (originalRoot) process.env.CAREER_OPS_ROOT = originalRoot;
-    else delete process.env.CAREER_OPS_ROOT;
-
-    if (originalDataDir) process.env.CAREER_OPS_DATA_DIR = originalDataDir;
-    else delete process.env.CAREER_OPS_DATA_DIR;
+    // Back to the suite's own data root. Restoring by deleting, as the steps
+    // below used to, left every later section resolving to the developer's.
+    pinSandboxDataRoot();
   }
 
   // 4. Test doctor.mjs respects target directory or target override when CAREER_OPS_ROOT is set
   const tempTarget = mkdtempSync(join(ROOT, 'co-temp-target-'));
+  // The override goes in the child's env, here and below, not in this
+  // process's: nothing then has to be put back.
   try {
-    process.env.CAREER_OPS_ROOT = tempTarget;
-    const r = JSON.parse(run(NODE, ['doctor.mjs', '--json']) || '{}');
+    const r = JSON.parse(run(NODE, ['doctor.mjs', '--json'], {
+      env: { ...process.env, CAREER_OPS_ROOT: tempTarget, CAREER_OPS_DATA_DIR: '' },
+    }) || '{}');
     if (r.onboardingNeeded === true && r.missing.includes('cv.md')) {
       pass('doctor.mjs respects CAREER_OPS_ROOT default root check');
     } else {
       fail(`doctor.mjs with CAREER_OPS_ROOT override failed: ${JSON.stringify(r)}`);
     }
-  } finally {
-    delete process.env.CAREER_OPS_ROOT;
-  }
 
-  // 4b. Test doctor.mjs respects CAREER_OPS_DATA_DIR override
-  try {
-    process.env.CAREER_OPS_DATA_DIR = tempTarget;
-    const r = JSON.parse(run(NODE, ['doctor.mjs', '--json']) || '{}');
-    if (r.onboardingNeeded === true && r.missing.includes('cv.md')) {
+    // 4b. Test doctor.mjs respects CAREER_OPS_DATA_DIR override
+    const rDataDir = JSON.parse(run(NODE, ['doctor.mjs', '--json'], {
+      env: { ...process.env, CAREER_OPS_ROOT: '', CAREER_OPS_DATA_DIR: tempTarget },
+    }) || '{}');
+    if (rDataDir.onboardingNeeded === true && rDataDir.missing.includes('cv.md')) {
       pass('doctor.mjs respects CAREER_OPS_DATA_DIR override check');
     } else {
-      fail(`doctor.mjs with CAREER_OPS_DATA_DIR override failed: ${JSON.stringify(r)}`);
+      fail(`doctor.mjs with CAREER_OPS_DATA_DIR override failed: ${JSON.stringify(rDataDir)}`);
     }
   } finally {
-    delete process.env.CAREER_OPS_DATA_DIR;
     rmSync(tempTarget, { recursive: true, force: true });
   }
 
@@ -17553,8 +17564,9 @@ try {
 
 
   try {
-    process.env.CAREER_OPS_ROOT = tempRoot;
-    run(NODE, ['normalize-statuses.mjs']);
+    run(NODE, ['normalize-statuses.mjs'], {
+      env: { ...process.env, CAREER_OPS_ROOT: tempRoot, CAREER_OPS_DATA_DIR: '' },
+    });
     const updated = readFileSync(tempTracker, 'utf-8');
     if (updated.includes('| Applied |') && !updated.includes('**Applied**')) {
       pass('normalize-statuses.mjs respects CAREER_OPS_ROOT and modifies the correct tracker file');
@@ -17563,27 +17575,36 @@ try {
     }
 
   } finally {
-    delete process.env.CAREER_OPS_ROOT;
     rmSync(tempRoot, { recursive: true, force: true });
   }
 
   // 6. Test .career-ops-data marker file resolution
-  const tempMarkerRoot = mkdtempSync(join(ROOT, 'co-temp-marker-'));
-  const markerFile = join(ROOT, '.career-ops-data');
-  const originalRootEnv = process.env.CAREER_OPS_ROOT;
-  const originalDataDirEnv = process.env.CAREER_OPS_DATA_DIR;
-  delete process.env.CAREER_OPS_ROOT;
-  delete process.env.CAREER_OPS_DATA_DIR;
-
-  const originalMarkerExists = existsSync(markerFile);
-  let originalMarkerContent = '';
-  if (originalMarkerExists) {
-    try { originalMarkerContent = readFileSync(markerFile, 'utf-8'); } catch {}
-  }
-
+  //
+  // Against a copy of path-resolver.mjs, never the checkout's own marker. The
+  // resolver looks for the marker beside itself, so a copy in a scratch
+  // directory reads a scratch marker. This used to write the repo-root marker
+  // and put the developer's back afterwards, inside a `catch {}`: an
+  // interrupted or failed restore left every script resolving to a temp
+  // directory that no longer existed, and said nothing (#5113).
+  // realpathSync: the copy locates itself through import.meta.url, which Node
+  // gives as a real path, and macOS's temp directory is a symlink.
+  const tempMarkerCode = realpathSync(mkdtempSync(join(tmpdir(), 'co-temp-marker-code-')));
+  const tempMarkerRoot = mkdtempSync(join(tmpdir(), 'co-temp-marker-data-'));
   try {
-    writeFileSync(markerFile, tempMarkerRoot, 'utf-8');
-    const { getCareerOpsRoot: getRootWithMarker } = await import(pathToFileURL(join(ROOT, 'path-resolver.mjs')).href + '?cachebust=' + Date.now());
+    copyFileSync(join(ROOT, 'path-resolver.mjs'), join(tempMarkerCode, 'path-resolver.mjs'));
+    const { getCareerOpsRoot: getRootWithMarker } = await import(pathToFileURL(join(tempMarkerCode, 'path-resolver.mjs')).href);
+    // The marker, and the default behind it, only apply when neither variable
+    // is set.
+    delete process.env.CAREER_OPS_ROOT;
+    delete process.env.CAREER_OPS_DATA_DIR;
+    const defaultRoot = getRootWithMarker();
+    if (defaultRoot === tempMarkerCode) {
+      pass('getCareerOpsRoot() defaults to codebase root when environment variables are unset');
+    } else {
+      fail(`getCareerOpsRoot() returned ${defaultRoot}, expected ${tempMarkerCode}`);
+    }
+
+    writeFileSync(join(tempMarkerCode, MARKER_FILE), tempMarkerRoot, 'utf-8');
     const resolved = getRootWithMarker();
     if (resolved === tempMarkerRoot) {
       pass('getCareerOpsRoot() respects .career-ops-data marker file');
@@ -17591,15 +17612,8 @@ try {
       fail(`getCareerOpsRoot() with marker returned ${resolved}, expected ${tempMarkerRoot}`);
     }
   } finally {
-    try {
-      if (originalMarkerExists) {
-        writeFileSync(markerFile, originalMarkerContent, 'utf-8');
-      } else {
-        unlinkSync(markerFile);
-      }
-    } catch {}
-    if (originalRootEnv) process.env.CAREER_OPS_ROOT = originalRootEnv;
-    if (originalDataDirEnv) process.env.CAREER_OPS_DATA_DIR = originalDataDirEnv;
+    pinSandboxDataRoot();
+    rmSync(tempMarkerCode, { recursive: true, force: true });
     rmSync(tempMarkerRoot, { recursive: true, force: true });
   }
 
