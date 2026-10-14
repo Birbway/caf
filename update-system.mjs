@@ -2185,7 +2185,7 @@ export async function snapshotConfiguredTemplateVariants({
   } catch (err) {
     if (!tolerateUnreadableProfile) throw err;
     configuredVariants = {};
-    warnings.push(`Skipped template variants from ${resolvedProfilePath}: ${err?.message || err}`);
+    warnings.push(`The profile at ${resolvedProfilePath} could not be parsed, so the template variants it names are not protected by this update.`);
   }
   const configuredVariantPaths = [];
   for (const [kind, name] of Object.entries(configuredVariants)) {
@@ -2241,6 +2241,22 @@ export async function snapshotConfiguredTemplateVariants({
       localFiles, remoteFiles, configuredVariants, localContents, remoteContents,
     ),
   };
+}
+
+/**
+ * Environment for the self-reexec child. It runs with the checkout as its cwd, so
+ * a relative CAREER_OPS_PROFILE would name another file there than in the user's
+ * shell; the parent resolves it here and passes the absolute path.
+ *
+ * @returns {Promise<{CAREER_OPS_PROFILE?: string}>}
+ */
+export async function reexecProfileEnv() {
+  try {
+    const { hasProfileOverride, getProfilePath } = await import('./path-resolver.mjs');
+    return hasProfileOverride() ? { CAREER_OPS_PROFILE: getProfilePath() } : {};
+  } catch {
+    return {}; // a target without path-resolver.mjs has no override to resolve
+  }
 }
 
 /**
@@ -4360,6 +4376,7 @@ async function apply() {
           timeout,
           env: {
             ...process.env,
+            ...await reexecProfileEnv(),
             CAREER_OPS_UPDATE_REEXEC_MARKER: marker.path,
             CAREER_OPS_UPDATE_REEXEC_TOKEN: marker.token,
             // Compatibility for target updaters before the authenticated

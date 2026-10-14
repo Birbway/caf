@@ -292,6 +292,28 @@ try {
     ? pass('updater: apply() hands both the override profile and the data-root profile to the template-variant snapshot (source check)')
     : failOnce(`updater: apply() does not pass [getProfilePath(), getProfilePath(dataRoot)] into the snapshot (takesProfile=${takesProfile}, call=${snapshotCall ? 'found' : 'missing'})`);
 
+  // 4c. The self-reexec child runs with the checkout as its cwd, so a relative
+  // CAREER_OPS_PROFILE would name a different file there than in the user's shell.
+  // The parent resolves it and hands the child the absolute path.
+  const reexecEnvFor = (profile) => JSON.parse(spawnSync(NODE, inline(
+    `const { reexecProfileEnv } = await import(${JSON.stringify(module('update-system.mjs'))}); console.log(JSON.stringify(await reexecProfileEnv()));`), {
+    cwd: decoyCwd, encoding: 'utf-8', timeout: 60_000,
+    env: { ...process.env, CAREER_OPS_ROOT: dataRoot, CAREER_OPS_DATA_DIR: '', CAREER_OPS_PROFILE: profile },
+  }).stdout);
+  const relEnv = reexecEnvFor('profiles/me.yml');
+  relEnv.CAREER_OPS_PROFILE === join(decoyCwd, 'profiles', 'me.yml') && Object.keys(reexecEnvFor('')).length === 0
+    ? pass('updater: the self-reexec child gets a relative CAREER_OPS_PROFILE resolved against the parent\'s cwd, and nothing when it is unset')
+    : failOnce(`updater: reexecProfileEnv() gave ${JSON.stringify(relEnv)} for a relative override from ${decoyCwd}`);
+  /\.\.\.await reexecProfileEnv\(\),/.test(updaterSource)
+    ? pass('updater: apply() passes reexecProfileEnv() into the self-reexec child (source check)')
+    : failOnce('updater: the self-reexec child env does not include reexecProfileEnv()');
+
+  // 4d. The skip warning for a profile the update cannot parse is printed by apply().
+  // Deleting the print leaves the skip silent, and nothing else would notice.
+  /for \(const warning of configuredSnapshot\.warnings\) console\.log\(/.test(updaterSource)
+    ? pass('updater: apply() prints the snapshot warnings (source check)')
+    : failOnce('updater: apply() no longer prints configuredSnapshot.warnings');
+
   // 3c. cv-sync-check's advice for a missing profile. With an override that names a
   // file that is not there, "copy the example into config/profile.yml" changes
   // nothing; the message has to name the variable and the path it points at.

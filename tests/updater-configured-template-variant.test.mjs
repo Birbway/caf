@@ -373,7 +373,9 @@ if (REEXEC_FALLBACK_FILES.includes('cv-templates.mjs')
       readRemoteContent: (file) => `<p>upstream ${file}</p>`,
     });
     if (JSON.stringify(tolerant.preservedPaths) === JSON.stringify(['templates/cv-template.alpha.html'])
-        && tolerant.warnings.length === 1 && tolerant.warnings[0].includes(brokenProfile)) {
+        && tolerant.warnings.length === 1 && tolerant.warnings[0].includes(brokenProfile)
+        && tolerant.warnings[0].split(brokenProfile).length === 2 && /not protected by this update/.test(tolerant.warnings[0])
+        && !/Fix the YAML/.test(tolerant.warnings[0])) {
       pass('an unparsable non-active profile is skipped with a warning and the active profile still protects its variant');
     } else {
       fail(`unparsable non-active profile gave preserved ${JSON.stringify(tolerant.preservedPaths)} and warnings ${JSON.stringify(tolerant.warnings)}`);
