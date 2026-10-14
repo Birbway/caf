@@ -279,8 +279,10 @@ export function extractKeywords(reportText) {
 export function archivedJdText(reportText, root) {
   const m = /^## Job Description\b[^\n]*\n([\s\S]*?)(?=^##\s|(?![\s\S]))/m.exec(String(reportText || ''));
   if (!m) return '';
-  const pointer = /^See (jds\/[A-Za-z0-9][\w.-]*) for the full archive\b/.exec(m[1].trim());
-  if (!pointer) return m[1];
+  const section = m[1].trim();
+  if (!/^See jds\/\S+ for the full archive\b/.test(section)) return m[1];
+  const pointer = /^See (jds\/[A-Za-z0-9][\w.-]*) for the full archive\b/.exec(section);
+  if (!pointer) return '';
   const jdPath = join(root, pointer[1]);
   return existsSync(jdPath) ? readFileSync(jdPath, 'utf-8') : '';
 }
