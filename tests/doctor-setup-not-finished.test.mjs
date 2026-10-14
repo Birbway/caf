@@ -75,3 +75,18 @@ test('a fresh checkout with a skill-entrypoint stub does not claim tools are rea
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a failing check still reports the missing setup files', () => {
+  const dir = checkout({ withSetup: false });
+  try {
+    writeFileSync(join(dir, 'data'), '');
+    const { status, out } = runDoctor(dir);
+    assert.equal(status, 1, out);
+    assert.match(out, /✗ data\/pipeline\.md could not be created/);
+    assert.match(out, /Result: 1 issue found\./);
+    assert.match(out, /Setup is not finished \(4 files missing: cv\.md, config\/profile\.yml, modes\/_profile\.md, portals\.yml\)\./);
+    assert.match(out, /Open your AI CLI in this folder \(claude, codex, gemini, opencode, qwen, agy or grok\) and it walks you through setup by chatting\./);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
