@@ -31,8 +31,15 @@ const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", apos: "'",
 
 /** @param {string} html */
 export function htmlText(html) {
-  return html
-    .replace(/<[^>]*>/g, "")
+  let text = String(html);
+  // Tags whose insides cannot hold another "<". Repeat until stable so a nested
+  // scrape like <scr<script>ipt> collapses; then drop any leftover angle brackets.
+  for (let prev = null; text !== prev; ) {
+    prev = text;
+    text = text.replace(/<\/?[a-zA-Z!][^<>]*>/g, "");
+  }
+  text = text.replace(/[<>]/g, " ");
+  return text
     .replace(/&(#\d+|#x[0-9a-f]+|[a-z]+);/gi, (m, e) => {
       if (ENTITIES[e]) return ENTITIES[e];
       if (e[0] === "#") return String.fromCodePoint(e[1] === "x" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10));

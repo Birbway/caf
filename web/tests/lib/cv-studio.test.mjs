@@ -202,3 +202,9 @@ test("wordDiff marks removed and inserted words", () => {
     { op: "same", text: " platform team" },
   ]);
 });
+
+test("htmlText collapses nested tag shapes so no live tag remains", () => {
+  assert.equal(htmlText("<scr<script>ipt>alert(1)</script>"), "alert(1)");
+  assert.equal(htmlText("<style>a{}</style>body"), "a{}body");
+  assert.equal(htmlText("<style>a{}</style>body").includes("<"), false);
+});

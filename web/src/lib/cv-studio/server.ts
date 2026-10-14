@@ -104,7 +104,13 @@ export async function loadStudio(n: string): Promise<StudioLoad> {
     for (const b of [...item.bullets].reverse()) out = out.slice(0, b.start - item.start) + out.slice(b.end - item.start);
     return htmlText(out);
   };
-  const fixedText = htmlText(renderBlocks(tree, { hidden: new Set([...itemIds, ...bulletIds]), order: {}, text: {} }).replace(/<style[\s\S]*?<\/style>/gi, ""));
+  let withoutStyle = renderBlocks(tree, { hidden: new Set([...itemIds, ...bulletIds]), order: {}, text: {} });
+  // Drop <style> blocks until stable so nested markers cannot leave a live tag.
+  for (let prev = null; withoutStyle !== prev; ) {
+    prev = withoutStyle;
+    withoutStyle = withoutStyle.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "");
+  }
+  const fixedText = htmlText(withoutStyle);
 
   const sourceHash = crypto.createHash("sha256").update(html).digest("hex").slice(0, 16);
   const doc = buildStudioDoc({ tree, base, keywords, sourceHash, keywordsIn, itemText, fixedText });
