@@ -30,7 +30,7 @@
  * independent exemption instead of relying on the preservedPaths detour.
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { pass, fail } from './helpers.mjs';
@@ -375,10 +375,29 @@ if (REEXEC_FALLBACK_FILES.includes('cv-templates.mjs')
     if (JSON.stringify(tolerant.preservedPaths) === JSON.stringify(['templates/cv-template.alpha.html'])
         && tolerant.warnings.length === 1 && tolerant.warnings[0].includes(brokenProfile)
         && tolerant.warnings[0].split(brokenProfile).length === 2 && /not protected by this update/.test(tolerant.warnings[0])
-        && !/Fix the YAML/.test(tolerant.warnings[0])) {
-      pass('an unparsable non-active profile is skipped with a warning and the active profile still protects its variant');
+        && !/Fix the YAML/.test(tolerant.warnings[0]) && /\(\d+:\d+\)/.test(tolerant.warnings[0])) {
+      pass('an unparsable non-active profile is skipped with a warning that keeps the parser location, and the active profile still protects its variant');
     } else {
       fail(`unparsable non-active profile gave preserved ${JSON.stringify(tolerant.preservedPaths)} and warnings ${JSON.stringify(tolerant.warnings)}`);
+    }
+    // An unreadable profile is not a YAML error, and the warning must say what it was.
+    if (process.getuid?.() !== 0) {
+      const lockedProfile = join(root, 'locked.yml');
+      writeFileSync(lockedProfile, 'cv:\n  template: gamma\n', 'utf-8');
+      chmodSync(lockedProfile, 0o000);
+      try {
+        const locked = await snapshotConfiguredTemplateVariantsAcrossProfiles({
+          dataRoot: root, profilePaths: [overrideProfile, lockedProfile], remoteFiles,
+          readRemoteContent: (file) => `<p>upstream ${file}</p>`,
+        });
+        if (locked.warnings.length === 1 && /EACCES/.test(locked.warnings[0]) && !/could not be parsed/.test(locked.warnings[0]) && /could not be loaded/.test(locked.warnings[0])) {
+          pass('an unreadable non-active profile is reported with its real reason, not as a YAML error');
+        } else {
+          fail(`unreadable non-active profile gave warnings ${JSON.stringify(locked.warnings)}`);
+        }
+      } finally {
+        chmodSync(lockedProfile, 0o600);
+      }
     }
     let activeRejected = false;
     try {

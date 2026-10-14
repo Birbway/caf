@@ -748,16 +748,17 @@ function prereqPresent(root, prereq) {
   return existsSync(prereqFile(root, prereq));
 }
 
-// The root's .env names a profile, but only scan.mjs loads it (the evaluators
-// read it only once they follow CAREER_OPS_PROFILE, in the next change). That is a split whether or not a data-root profile
-// exists, so it is reported either way. A shell value shadows the .env, so it
-// is not a split then.
+// The root's .env names a profile. scan.mjs loads it, and so do the evaluators,
+// which follow CAREER_OPS_PROFILE after a working-directory config(). The CV and
+// PDF builders and the other readers load no .env. That is a split whether or not
+// a data-root profile exists, so it is reported either way. A shell value shadows
+// the .env, so it is not a split then.
 function checkEnvFileProfile(root) {
   const fromEnvFile = explicitTarget || hasProfileOverride() ? null : profileFromEnvFile(root);
   if (!fromEnvFile) return null;
   return {
     warn: true,
-    label: `.env sets CAREER_OPS_PROFILE=${fromEnvFile}, but only scan.mjs loads .env for the profile; cv-sync-check, generate-pdf, upskill and the other readers use ${profilePathFor(root)}`,
+    label: `.env sets CAREER_OPS_PROFILE=${fromEnvFile}, but only scan.mjs and the evaluators load .env for the profile; cv-sync-check, generate-pdf, upskill and the other readers use ${profilePathFor(root)}`,
     fix: [`Export CAREER_OPS_PROFILE=${fromEnvFile} in your shell so every command reads the same file, or remove it from .env`],
   };
 }

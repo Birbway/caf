@@ -304,8 +304,8 @@ try {
   relEnv.CAREER_OPS_PROFILE === join(decoyCwd, 'profiles', 'me.yml') && Object.keys(reexecEnvFor('')).length === 0
     ? pass('updater: the self-reexec child gets a relative CAREER_OPS_PROFILE resolved against the parent\'s cwd, and nothing when it is unset')
     : failOnce(`updater: reexecProfileEnv() gave ${JSON.stringify(relEnv)} for a relative override from ${decoyCwd}`);
-  /\.\.\.await reexecProfileEnv\(\),/.test(updaterSource)
-    ? pass('updater: apply() passes reexecProfileEnv() into the self-reexec child (source check)')
+  /\.\.\.process\.env,\s*\.\.\.await reexecProfileEnv\(\),/.test(updaterSource)
+    ? pass('updater: apply() spreads reexecProfileEnv() into the self-reexec child env after process.env (source check)')
     : failOnce('updater: the self-reexec child env does not include reexecProfileEnv()');
 
   // 4d. The skip warning for a profile the update cannot parse is printed by apply().
@@ -313,6 +313,22 @@ try {
   /for \(const warning of configuredSnapshot\.warnings\) console\.log\(/.test(updaterSource)
     ? pass('updater: apply() prints the snapshot warnings (source check)')
     : failOnce('updater: apply() no longer prints configuredSnapshot.warnings');
+
+  // 4e. Doctor's .env warning has to be true at this change: the evaluators follow
+  // CAREER_OPS_PROFILE now, after their working-directory config(), so it names them
+  // beside scan.mjs as the commands that load a .env for the profile.
+  const envWarnRoot = join(scratch, 'env-warn-root');
+  mkdirSync(join(envWarnRoot, 'config'), { recursive: true });
+  writeFileSync(join(envWarnRoot, 'config', 'profile.yml'), profileBody('Root'), 'utf-8');
+  writeFileSync(join(envWarnRoot, '.env'), `CAREER_OPS_PROFILE=${profileB}\n`, 'utf-8');
+  const envWarnRun = spawnSync(NODE, [join(ROOT, 'doctor.mjs'), '--json'], {
+    cwd: decoyCwd, encoding: 'utf-8', timeout: 60_000,
+    env: { ...process.env, CAREER_OPS_ROOT: envWarnRoot, CAREER_OPS_DATA_DIR: '', CAREER_OPS_PROFILE: '' },
+  });
+  const envWarning = (JSON.parse(envWarnRun.stdout).warnings.find((w) => /\.env sets CAREER_OPS_PROFILE/.test(w))) ?? '';
+  /only scan\.mjs and the evaluators load \.env/.test(envWarning)
+    ? pass('doctor: the .env warning names the evaluators beside scan.mjs now that they follow the override')
+    : failOnce(`doctor: the .env warning is not true at this change: ${JSON.stringify(envWarning.slice(0, 160))}`);
 
   // 3c. cv-sync-check's advice for a missing profile. With an override that names a
   // file that is not there, "copy the example into config/profile.yml" changes

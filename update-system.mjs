@@ -2186,7 +2186,11 @@ export async function snapshotConfiguredTemplateVariants({
   } catch (err) {
     if (!tolerateUnreadableProfile) throw err;
     configuredVariants = {};
-    warnings.push(`The profile at ${resolvedProfilePath} could not be parsed, so the template variants it names are not protected by this update.`);
+    // The real reason, not "could not be parsed": a file-system error has a code
+    // (EACCES) and a YAML error has its line and column in the first message line.
+    const cause = err?.cause ?? err;
+    const reason = cause?.code || String(cause?.message ?? cause).split('\n')[0];
+    warnings.push(`The profile at ${resolvedProfilePath} could not be loaded (${reason}), so the template variants it names are not protected by this update.`);
   }
   const configuredVariantPaths = [];
   for (const [kind, name] of Object.entries(configuredVariants)) {
