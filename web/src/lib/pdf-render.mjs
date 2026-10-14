@@ -165,6 +165,20 @@ export function cleanupPdfScratch(scratchDir, prefix) {
 }
 
 /**
+ * Keep the rendered HTML beside its PDF. The CV Studio edits that HTML, and
+ * the scratch copy is deleted right after the render.
+ * @param {{html: string, finalPdf: string}} pdfPaths
+ * @param {string[]} warnings
+ */
+export function keepTailoredHtml(pdfPaths, warnings) {
+  try {
+    fs.copyFileSync(pdfPaths.html, pdfPaths.finalPdf.replace(/\.pdf$/i, ".html"));
+  } catch (err) {
+    warnings.push(`PDF rendered, but its HTML was not kept for the CV Studio: ${err.message}`);
+  }
+}
+
+/**
  * @typedef {Object} RenderFailedResult
  * @property {"render-failed"} kind
  * @property {string} error
@@ -192,6 +206,7 @@ export async function renderAndMarkPdf({ spawnFn, execPath, root, pdfPaths, form
   const warnings = [];
 
   const render = await spawnGeneratePdf({ spawnFn, execPath, root, html: pdfPaths.html, finalPdf: pdfPaths.finalPdf, format, reportNum });
+  if (render.ok) keepTailoredHtml(pdfPaths, warnings);
   cleanupPdfScratch(path.dirname(pdfPaths.html), `cv-web-${reportNum}.`);
 
   if (!render.ok) {
