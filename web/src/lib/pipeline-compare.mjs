@@ -25,10 +25,8 @@ export function compareIds(raw) {
  */
 export function summaryFields(body) {
   const strip = (s) => String(s ?? "").replace(/\*\*/g, "").trim();
-  for (const s of splitSections(body).sections) {
-    const table = parsePipeTable(s.content);
-    if (table?.header.length !== 2) continue;
-    return table.rows.map(([label, value]) => ({ label: strip(label), value: strip(value) })).filter((f) => f.label);
-  }
-  return [];
+  const tables = splitSections(body).sections.flatMap((s) => s.content.split(/\n(?![ \t]*\|)/).map(parsePipeTable));
+  const table = tables.find((t) => t?.header.length === 2);
+  if (!table) return [];
+  return table.rows.map(([label, value]) => ({ label: strip(label), value: strip(value) })).filter((f) => f.label);
 }

@@ -16,3 +16,21 @@ test("summaryFields reads the first two-column table of the report body", () => 
   ]);
   assert.deepEqual(summaryFields("No tables here."), []);
 });
+
+test("summaryFields skips a wider table earlier in the same section", () => {
+  const body = `## A) Role Summary
+
+| Area | Ask | Fit |
+|------|-----|-----|
+| Infra | Terraform | Strong |
+
+| Field | Value |
+|-------|-------|
+| Remote | Full |
+| Comp | 150k |
+`;
+  assert.deepEqual(summaryFields(body), [
+    { label: "Remote", value: "Full" },
+    { label: "Comp", value: "150k" },
+  ]);
+});
