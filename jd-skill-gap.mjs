@@ -398,12 +398,13 @@ const ANY_HEADING_RE = /^#{1,6}\s/;
 
 // Which headings open a named skills section (#4879). The heading is read
 // through lib/cv-markdown.mjs first, so `## **[Skills]{.smallcaps}**` counts.
-// "Skills" anywhere in the heading counts at any level ("Technical Skills",
-// "Skills & Tools"). "Tools" / "Technologies" / "Tech Stack" only count on a
+// "Skills" or "Competencies" anywhere in the heading counts at any level
+// ("Technical Skills", "Core Competencies", the title build-cv-html.mjs
+// renders for the competency grid). "Tools" / "Technologies" / "Tech Stack" only count on a
 // level-1 or level-2 heading: at level 3 they would also match an employer
 // such as "### Acme Technologies — Remote" and promote that job's prose into
 // named skills.
-const SKILLS_WORD_RE = /\bskills\b/i;
+const SKILLS_WORD_RE = /\b(?:skills|competenc(?:y|ies))\b/i;
 const TOOLS_WORD_RE = /\b(?:tools|technologies|tech\s+stack)\b/i;
 
 function isSkillsHeading(line) {
@@ -602,6 +603,12 @@ Python, Docker, Zookeeper
     eq(`"${heading}" opens a named skills section`,
       classifySkillGaps(['Python'], `${heading}\nPython\n`).existing, ['Python']);
   }
+  for (const heading of ['## Core Competencies', '## Competencies', '## Skills & Competencies', '### Key Competency Areas']) {
+    eq(`"${heading}" opens a named skills section`,
+      classifySkillGaps(['Python'], `${heading}\nPython\n`).existing, ['Python']);
+  }
+  eq('a "Competition Wins" heading is not a skills section',
+    classifySkillGaps(['Python'], '## Competition Wins\nPython\n').existing, []);
   const twoSectionsCv = '## Skills\nPython\n\n## Experience\nUsed Docker daily.\n\n## Tools\nTerraform\n';
   const twoSectionsResult = classifySkillGaps(['Python', 'Terraform', 'Docker'], twoSectionsCv);
   eq('every skills section counts, not just the first', twoSectionsResult.existing.sort(), ['Python', 'Terraform']);
@@ -1027,7 +1034,7 @@ if (selfTestMode) {
     // did not recognize (#4879).
     if (!splitSkillsSection(cvText).namedSkillsText.trim()) {
       console.log('');
-      console.log('  ℹ️  No skills section recognized in cv.md (a heading containing "Skills", or a top-level');
+      console.log('  ℹ️  No skills section recognized in cv.md (a heading containing "Skills" or "Competencies", or a top-level');
       console.log('     "Tools" / "Technologies" / "Tech Stack" heading), so nothing can be "already in Skills section".');
     }
 
