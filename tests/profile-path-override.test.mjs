@@ -273,9 +273,9 @@ try {
   // The onboarding steps act only on `missing`, so the warning changes nothing
   // unless AGENTS.md tells the agent to read it before copying the example profile.
   const agentsOnboarding = readFileSync(join(ROOT, 'AGENTS.md'), 'utf-8').split('#### Step 2: Profile')[1]?.split('#### Step 3')[0] ?? '';
-  /warnings/.test(agentsOnboarding) && /CAREER_OPS_PROFILE/.test(agentsOnboarding) && /export/.test(agentsOnboarding) && /restart/.test(agentsOnboarding)
+  /warnings/.test(agentsOnboarding) && /CAREER_OPS_PROFILE/.test(agentsOnboarding) && /export/.test(agentsOnboarding) && /restart/.test(agentsOnboarding) && /that starts the agent/.test(agentsOnboarding)
     ? pass('AGENTS.md onboarding Step 2 sends an agent to the doctor warning, and says an export needs a restarted session, before copying the example profile')
-    : fail('AGENTS.md onboarding Step 2 does not mention the doctor --json warning for a .env-set CAREER_OPS_PROFILE');
+    : fail('AGENTS.md onboarding Step 2 does not mention the doctor --json warning for a .env-set CAREER_OPS_PROFILE, or that a shell export needs a restarted agent session started from that shell');
 
   // --target diagnoses another checkout, so CAREER_OPS_PROFILE does not apply to
   // it: the missing-profile advice is the plain copy, not the variable's, and
