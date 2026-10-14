@@ -20,18 +20,24 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
-// The documents a CLI loads automatically. DATA_CONTRACT.md is included because
-// the agent instructions point at it as the authority on file ownership.
+// The documents a CLI loads automatically, plus the mode files and batch prompt
+// it follows. DATA_CONTRACT.md is included because the agent instructions point
+// at it as the authority on file ownership.
 const AGENT_DOCS = [
   'AGENTS.md', 'CLAUDE.md', 'CODEX.md', 'OPENCODE.md',
   'GEMINI.md', 'KIMI.md', 'DATA_CONTRACT.md',
+  'batch/batch-prompt.md',
+  ...readdirSync(join(ROOT, 'modes'), { recursive: true })
+    .filter((rel) => rel.endsWith('.md'))
+    .map((rel) => join('modes', rel))
+    .sort(),
 ];
 
 // Backticked only. Prose can discuss a script that a user might write, and a
