@@ -33,12 +33,14 @@ function runDoctor(dir) {
   return { status: r.status, out: `${r.stdout}${r.stderr}` };
 }
 
-test('a fresh checkout is told setup is not finished, not that it is ready', () => {
+test('a fresh checkout is told setup is not finished, not that tools are ready', () => {
   const dir = checkout({ withSetup: false });
   try {
     const { status, out } = runDoctor(dir);
     assert.equal(status, 0, out);
-    assert.match(out, /setup is not finished \(4 files missing: cv\.md, config\/profile\.yml, modes\/_profile\.md, portals\.yml\)/);
+    assert.match(out, /Setup is not finished \(4 files missing: cv\.md, config\/profile\.yml, modes\/_profile\.md, portals\.yml\)/);
+    assert.match(out, /\d+ warning/);
+    assert.doesNotMatch(out, /Your tools are ready/);
     assert.doesNotMatch(out, /ready to go/);
     assert.doesNotMatch(out, /Personalization files customized/);
   } finally {
@@ -52,7 +54,23 @@ test('a checkout with every setup file still reads as ready', () => {
     const { status, out } = runDoctor(dir);
     assert.equal(status, 0, out);
     assert.match(out, /You're ready to go! Open your AI CLI in this folder \(claude, codex, gemini, opencode, qwen, agy or grok\)/);
-    assert.doesNotMatch(out, /setup is not finished/);
+    assert.doesNotMatch(out, /setup is not finished/i);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a fresh checkout with a skill-entrypoint stub does not claim tools are ready', () => {
+  const dir = checkout({ withSetup: false });
+  try {
+    mkdirSync(join(dir, '.claude', 'skills', 'career-ops'), { recursive: true });
+    writeFileSync(join(dir, '.claude', 'skills', 'career-ops', 'SKILL.md'), '../../../.agents/skills/career-ops/SKILL.md\n');
+    const { status, out } = runDoctor(dir);
+    assert.equal(status, 0, out);
+    assert.match(out, /Setup is not finished \(4 files missing:/);
+    assert.match(out, /\d+ warning/);
+    assert.doesNotMatch(out, /Your tools are ready/);
+    assert.doesNotMatch(out, /ready to go/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

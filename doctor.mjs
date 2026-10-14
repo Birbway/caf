@@ -1042,7 +1042,10 @@ async function main() {
     const setupMissing = USER_LAYER_PREREQS.filter((prereq) => !prereqPresent(projectRoot, prereq));
     if (setupMissing.length > 0) {
       const n = setupMissing.length;
-      console.log(`Result: Your tools are ready, but setup is not finished (${n} file${n === 1 ? '' : 's'} missing: ${setupMissing.map(({ path }) => path).join(', ')}).`);
+      const missingList = setupMissing.map(({ path }) => path).join(', ');
+      // Missing user files always raise warn-level checks, so claiming "tools
+      // are ready" here lied whenever a stub or other warning was also active.
+      console.log(`Result: Setup is not finished (${n} file${n === 1 ? '' : 's'} missing: ${missingList})${warnNote}.`);
       console.log(`Open your AI CLI in this folder (${CLI_NAMES}) and it walks you through setup by chatting.`);
     } else {
       console.log(`Result: All checks passed${warnNote}. You're ready to go! Open your AI CLI in this folder (${CLI_NAMES}) to start.`);
