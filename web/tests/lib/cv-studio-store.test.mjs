@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { addVersion, openStudio, readState, writeState } from "../../src/lib/cv-studio/store.mjs";
+import { addVersion, openStudio, readState, reserveVersion, writeState } from "../../src/lib/cv-studio/store.mjs";
 import { applyEdits, emptyEdits, toggleHidden } from "../../src/lib/cv-studio/edits.mjs";
 import { buildHtml } from "../../src/lib/cv-studio/render.mjs";
 
@@ -41,8 +41,8 @@ test("a payload outside output/ is refused", () => {
 test("saved versions persist and the pinned source survives a re-pointed index", () => {
   const root = workspace();
   const opened = openStudio(root, "7", path.join(root, "output", "cv-jordan-northwind-2026-10-14.pdf"));
-  const first = addVersion(opened.state, toggleHidden(emptyEdits(), "experience.1"), "output/studio/7/v1/cv.pdf", new Date("2026-10-14T12:00:00Z"));
-  const second = addVersion(first.state, emptyEdits(), "output/studio/7/v2/cv.pdf", new Date("2026-10-14T12:05:00Z"));
+  const first = addVersion(opened.state, 1, toggleHidden(emptyEdits(), "experience.1"), "output/studio/7/v1/cv.pdf", new Date("2026-10-14T12:00:00Z"));
+  const second = addVersion(first.state, 2, emptyEdits(), "output/studio/7/v2/cv.pdf", new Date("2026-10-14T12:05:00Z"));
   writeState(root, "7", second.state);
   const reopened = openStudio(root, "7", path.join(root, "output", "studio", "7", "v2", "cv.pdf"));
   assert.equal(reopened.ok, true);
@@ -52,6 +52,19 @@ test("saved versions persist and the pinned source survives a re-pointed index",
     [2, "2026-10-14T12:05:00.000Z", []],
   ]);
   assert.equal(readState(root, "7").active, 2);
+});
+
+test("two saves that start from the same state both keep their version", () => {
+  const root = workspace();
+  const opened = openStudio(root, "7", path.join(root, "output", "cv-jordan-northwind-2026-10-14.pdf"));
+  const a = reserveVersion(root, "7", opened.state);
+  const b = reserveVersion(root, "7", opened.state);
+  assert.deepEqual([a.id, b.id], [1, 2]);
+  writeState(root, "7", addVersion(readState(root, "7") ?? opened.state, a.id, emptyEdits(), "output/studio/7/v1/cv.pdf").state);
+  writeState(root, "7", addVersion(readState(root, "7") ?? opened.state, b.id, toggleHidden(emptyEdits(), "summary"), "output/studio/7/v2/cv.pdf").state);
+  const saved = readState(root, "7");
+  assert.deepEqual(saved.versions.map((v) => [v.id, v.pdf]), [[1, "output/studio/7/v1/cv.pdf"], [2, "output/studio/7/v2/cv.pdf"]]);
+  assert.equal(saved.active, 2);
 });
 
 test("the core builder renders a hidden bullet out of the HTML", async () => {

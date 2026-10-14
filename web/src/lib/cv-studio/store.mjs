@@ -98,14 +98,27 @@ export function openStudio(root, report, indexedPdf) {
   return { ok: true, payload, state };
 }
 
-/** The id the next saved version gets. */
-export function nextVersionId(state) {
-  return state.versions.reduce((max, v) => Math.max(max, v.id), 0) + 1;
+/**
+ * Claim the next free version id for a save by creating its directory.
+ * mkdir fails on a directory that exists, so two saves that start from the
+ * same state get different ids.
+ * @returns {{ id: number, dir: string }}
+ */
+export function reserveVersion(root, report, state) {
+  fs.mkdirSync(path.join(root, "output", "studio", report), { recursive: true });
+  for (let id = state.versions.reduce((max, v) => Math.max(max, v.id), 0) + 1; ; id++) {
+    const dir = versionDir(root, report, id);
+    try {
+      fs.mkdirSync(dir);
+      return { id, dir };
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+    }
+  }
 }
 
 /** Append a version and make it the active one. Returns the new state and version. */
-export function addVersion(state, edits, pdf, now = new Date()) {
-  const id = nextVersionId(state);
+export function addVersion(state, id, edits, pdf, now = new Date()) {
   const version = { id, savedAt: now.toISOString(), edits, pdf };
-  return { state: { ...state, versions: [...state.versions, version], active: id }, version };
+  return { state: { ...state, versions: [...state.versions, version].sort((x, y) => x.id - y.id), active: id }, version };
 }

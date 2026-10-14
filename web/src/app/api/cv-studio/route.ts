@@ -8,7 +8,7 @@ import { resolveCvTemplate } from "@/lib/core/cv-template.mjs";
 import { readJsonObject } from "@/lib/json-body";
 import { applyEdits, outline, parseEdits } from "@/lib/cv-studio/edits.mjs";
 import type { CvPayload, StudioEdits } from "@/lib/cv-studio/edits.mjs";
-import { addVersion, nextVersionId, openStudio, reportKey, versionDir, writeState } from "@/lib/cv-studio/store.mjs";
+import { addVersion, openStudio, readState, reportKey, reserveVersion, writeState } from "@/lib/cv-studio/store.mjs";
 import { buildHtml, renderPdf } from "@/lib/cv-studio/render.mjs";
 import { studioCoverage } from "@/lib/cv-studio/coverage.mjs";
 import { factVerdict, isRewritableBullet, parseAsk, rewriteBullet } from "@/lib/cv-studio/rewrite.mjs";
@@ -144,7 +144,7 @@ export async function POST(req: Request) {
     return Response.json({ html: built.html, coverage: await coverageFor(report, built.html, generated.ok ? generated.html : built.html) });
   }
 
-  const dir = versionDir(root, report, nextVersionId(studio.state));
+  const { id, dir } = reserveVersion(root, report, studio.state);
   const pdfName = path.basename(studio.state.source).replace(/\.json$/i, ".pdf");
   const built = await buildHtml({ ...io, payload, template, htmlPath: path.join(dir, pdfName.replace(/\.pdf$/, ".html")) });
   if (!built.ok) return Response.json({ error: built.error }, { status: 422 });
@@ -152,7 +152,7 @@ export async function POST(req: Request) {
   const format = edits.format ?? (payload.page_format === "a4" ? "a4" : "letter");
   const rendered = await renderPdf({ ...io, htmlPath: built.htmlPath, pdfPath, format, report });
   if (!rendered.ok) return Response.json({ error: rendered.stderr || "PDF rendering failed" }, { status: 422 });
-  const { state, version } = addVersion(studio.state, edits, path.relative(root, pdfPath).split(path.sep).join("/"));
+  const { state, version } = addVersion(readState(root, report) ?? studio.state, id, edits, path.relative(root, pdfPath).split(path.sep).join("/"));
   writeState(root, report, state);
   return Response.json({ version, active: state.active, warnings: rendered.stderr ? rendered.stderr.split("\n").filter(Boolean) : [] });
 }
