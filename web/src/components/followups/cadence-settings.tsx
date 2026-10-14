@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Check, Loader2 } from "lucide-react";
 import { PROFILE_CADENCE_KEYS, type ProfileCadenceKey } from "@/lib/followups";
 import { cn } from "@/lib/cn";
@@ -19,6 +20,7 @@ const FIELDS: { key: ProfileCadenceKey; label: string; hint: string }[] = [
 ];
 
 export function CadenceSettings() {
+  const router = useRouter();
   const [values, setValues] = useState<Record<ProfileCadenceKey, string> | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -100,8 +102,9 @@ export function CadenceSettings() {
         setError(typeof j.error === "string" ? j.error : "Could not save.");
       } else {
         setEnabled(next);
-        // The nav is rendered on the server from the same setting.
-        window.location.reload();
+        // The nav is rendered on the server from the same setting. A router
+        // refresh re-renders it without unloading running jobs.
+        router.refresh();
       }
     } catch {
       setError("Could not save.");

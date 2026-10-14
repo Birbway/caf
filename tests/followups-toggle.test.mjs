@@ -102,3 +102,14 @@ for (const c of cases) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+{
+  const dir = makeRoot('follow_ups:\n  enabled: false\n');
+  try {
+    mkdirSync(join(dir, 'data', 'follow-ups.md'));
+    const cadence = run('followup-cadence.mjs', ['--json'], dir);
+    eq('off: an unreadable follow-ups file is never read', [cadence.code, JSON.parse(cadence.stdout).followupsEnabled], [0, false]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}

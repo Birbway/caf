@@ -1011,6 +1011,7 @@ export function analyzeFromContent(trackerContent, followupsContent = '', { enab
 
 // --- Main analysis (disk-backed CLI entry point) ---
 function analyze() {
+  if (!loadFollowupsEnabled()) return analyzeFromContent('', '', { enabled: false });
   const trackerContent = existsSync(APPS_FILE) ? readFileSync(APPS_FILE, 'utf-8') : '';
   const followupsContent = existsSync(FOLLOWUPS_FILE) ? readFileSync(FOLLOWUPS_FILE, 'utf-8') : '';
   return analyzeFromContent(trackerContent, followupsContent, { enabled: loadFollowupsEnabled() });
