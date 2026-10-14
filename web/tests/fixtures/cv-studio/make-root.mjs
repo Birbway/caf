@@ -5,8 +5,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const here = path.dirname(new URL(import.meta.url).pathname);
+const here = path.dirname(fileURLToPath(import.meta.url));
 const core = path.resolve(here, "../../../..");
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cv-studio-root-")));
 for (const dir of ["data", "reports", "output", "config"]) fs.mkdirSync(path.join(root, dir));

@@ -4,12 +4,15 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { addVersion, openStudio, readState, writeState } from "../../src/lib/cv-studio/store.mjs";
 import { applyEdits, emptyEdits, toggleHidden } from "../../src/lib/cv-studio/edits.mjs";
 import { buildHtml } from "../../src/lib/cv-studio/render.mjs";
 
 const fixture = new URL("../fixtures/cv-studio/payload.json", import.meta.url);
-const core = path.resolve(new URL("../../..", import.meta.url).pathname);
+const core = fileURLToPath(new URL("../../..", import.meta.url));
+// web CI installs only web/ dependencies, and build-cv-html.mjs needs the core ones.
+const coreInstalled = fs.existsSync(path.join(core, "node_modules", "js-yaml"));
 
 function workspace() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cv-studio-test-"));
@@ -54,7 +57,7 @@ test("saved versions persist and the pinned source survives a re-pointed index",
   assert.equal(readState(root, "7").active, 2);
 });
 
-test("the core builder renders a hidden bullet out of the HTML", async () => {
+test("the core builder renders a hidden bullet out of the HTML", { skip: !coreInstalled && "core dependencies are not installed" }, async () => {
   const root = workspace();
   const payload = JSON.parse(fs.readFileSync(fixture, "utf8"));
   const built = await buildHtml({
@@ -65,7 +68,7 @@ test("the core builder renders a hidden bullet out of the HTML", async () => {
     payload: applyEdits(payload, toggleHidden(emptyEdits(), "experience.0.bullets.2")),
     template: "templates/cv-template.html",
   });
-  assert.equal(built.ok, true);
+  assert.equal(built.ok, true, built.error);
   assert.match(built.html, /Cut deploy time 40% by moving CI to Kubernetes/);
   assert.doesNotMatch(built.html, /quarterly hackathon/);
   fs.rmSync(root, { recursive: true, force: true });
