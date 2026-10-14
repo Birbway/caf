@@ -33,6 +33,7 @@ function runBatch({ offers, args = [] }) {
       'last="${@: -1}"',
       'id=$(printf \'%s\' "$last" | grep -oE \'Batch ID: [0-9]+\' | grep -oE \'[0-9]+\')',
       'if [[ "$id" == 1 && ! -f "$FIXTURE_DIR/limited" ]]; then',
+      '  sleep 0.5',
       '  : > "$FIXTURE_DIR/limited"',
       '  echo "Error: 429 Too Many Requests"',
       '  exit 1',
