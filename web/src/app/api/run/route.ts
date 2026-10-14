@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from "@/lib/clis";
 import { localISODate } from "@/lib/followups";
-import { accumulateTokens, hasNewCompletedReport, isFatalGenericStderr, killMsForKind, newCompletedReportNum, timeoutMessage } from "@/lib/run-cli-support.mjs";
+import { accumulateTokens, createAgentTextJoiner, hasNewCompletedReport, isFatalGenericStderr, killMsForKind, newCompletedReportNum, timeoutMessage } from "@/lib/run-cli-support.mjs";
 import { spawnHeadlessCli } from "@/lib/spawn-cli.mjs";
 import { careerOpsRoot, readMemory, findReportFile, readInbox, readScanDates, readLanguageConfig } from "@/lib/career-ops";
 import { resolvePdfPaths, type PdfPaths } from "@/lib/pdf-paths.mjs";
@@ -359,15 +359,17 @@ export async function POST(req: Request) {
       // Shared with the close-time flush below, so a final JSONL line the CLI never
       // newline-terminates before exiting isn't dropped along with the usage event
       // it carries.
+      const joinAgentText = createAgentTextJoiner();
       const processParsedLine = (line: string) => {
         if (!spec.parseEvent) return;
         const ev = spec.parseEvent(line);
-        if (ev?.text) {
+        const text = joinAgentText(ev);
+        if (text) {
           emittedText = true;
           // sendAgentText, NEVER send: pdf's CV arrives inside the agent's text as a
           // <<cv-html>> envelope, so parsed text has to reach cvFilter too or the
           // backend has nothing to save and the 25 KB body floods the run log (#2185).
-          sendAgentText(ev.text);
+          sendAgentText(text);
         }
         if (ev?.tool) send({ type: "tool", name: ev.tool });
         if (ev?.status) send({ type: "status", label: ev.status });
