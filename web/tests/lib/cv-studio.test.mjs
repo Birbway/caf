@@ -214,3 +214,18 @@ test("parseEdits fills missing custom.keywords so shown.keywords.forEach cannot 
   const { edits } = parseEdits(raw, "h1");
   assert.deepEqual(edits.use.s0i0b0, { kind: "custom", text: "rewrote", keywords: [] });
 });
+
+test("parseEdits returns null for a body that is not a v1 edits object", () => {
+  assert.equal(parseEdits({}, "h1"), null);
+  assert.equal(parseEdits(undefined, "h1"), null);
+  assert.equal(parseEdits({ v: 1, hidden: ["s2i0b0"] }, "h1"), null);
+  assert.deepEqual(parseEdits({ v: 1, sourceHash: "h1" }, "h1"), { edits: emptyEdits("h1"), stale: false });
+});
+
+test("a summary section whose summary-text is not a div parses with no items", () => {
+  const html = HTML.replace('<div class="summary-text">Applied AI engineer shipping MLOps systems.</div>', '<p class="summary-text">Applied AI engineer shipping MLOps systems.</p>');
+  const summary = parseBlocks(html).sections[0];
+  assert.equal(summary.title, "Professional Summary");
+  assert.equal(summary.kind, "summary");
+  assert.deepEqual(summary.items, []);
+});

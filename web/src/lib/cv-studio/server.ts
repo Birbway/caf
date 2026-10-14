@@ -9,7 +9,7 @@ import { matchesTailoredCv, sortNewestFirst } from "@/lib/apply/cv-match.mjs";
 import { markTrackerReady, spawnGeneratePdf } from "@/lib/pdf-render.mjs";
 import { htmlText, parseBlocks, renderBlocks, type BlockTree } from "./html-blocks.mjs";
 import { parseBaseCv } from "./base-cv.mjs";
-import { buildStudioDoc, parseEdits, resolveStudio, type StudioDoc, type StudioEdits } from "./studio.mjs";
+import { buildStudioDoc, emptyEdits, parseEdits, resolveStudio, type StudioDoc, type StudioEdits } from "./studio.mjs";
 
 const EDITED_SUFFIX = "-edited";
 
@@ -90,8 +90,8 @@ export async function loadStudio(n: string): Promise<StudioLoad> {
   let cvMd = "";
   try {
     cvMd = fs.readFileSync(path.join(careerOpsRoot(), "cv.md"), "utf8");
-  } catch {
-    cvMd = "";
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
   const base = parseBaseCv(cvMd, await coreModule("lib/cv-markdown"));
 
@@ -120,9 +120,8 @@ export async function loadStudio(n: string): Promise<StudioLoad> {
     raw = JSON.parse(fs.readFileSync(editsPath(id.reportNum), "utf8"));
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-    raw = null;
   }
-  const { edits, stale } = parseEdits(raw, sourceHash);
+  const { edits, stale } = parseEdits(raw, sourceHash) ?? { edits: emptyEdits(sourceHash), stale: false };
   return { ok: true, reportNum: id.reportNum, company: companyOf(reportText, id.slug), file: path.basename(file), tree, doc, edits, stale, hasBase: base.entries.length > 0 || base.summary !== null };
 }
 
@@ -159,6 +158,6 @@ export async function renderEditedPdf(load: Extract<StudioLoad, { ok: true }>, e
   if (!render.ok) return { ok: false, error: render.stderr || "PDF rendering failed." };
   const warnings = render.stderr.split("\n").map((l: string) => l.trim()).filter(Boolean);
   const mark = await markTrackerReady({ spawnFn: spawn, execPath: process.execPath, root, reportNum: load.reportNum });
-  if (!mark.ok) warnings.push("PDF rendered, but the tracker's PDF column was not updated.");
+  if (!mark.ok) warnings.push(`PDF rendered, but the tracker's PDF column was not updated${mark.data?.error ? `: ${mark.data.error}` : "."}`);
   return { ok: true, pdf: path.basename(editedPdf), warnings };
 }

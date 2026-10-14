@@ -117,7 +117,7 @@ export function spawnGeneratePdf({ spawnFn, execPath, root, html, finalPdf, form
  * a failure exit when --json is passed) so a caller can surface the specific
  * reason (not-found / ambiguous / lock-timeout / ...) rather than raw stderr.
  * @param {{spawnFn: Function, execPath: string, root: string, reportNum: string}} args
- * @returns {Promise<{ok: boolean, data: object | null, stderr: string}>}
+ * @returns {Promise<{ok: boolean, data: {error?: string} | null, stderr: string}>}
  */
 export function markTrackerReady({ spawnFn, execPath, root, reportNum }) {
   return new Promise((resolve) => {

@@ -116,8 +116,10 @@ export function parseBlocks(html) {
     let items = [];
     if (kind === "summary") {
       const t = elementsWithClass(html, el.open, el.end, "div", "summary-text")[0];
-      const inner = innerOf(t, "div");
-      items = [{ id: `${id}i0`, kind: "text", label: title, start: t.start, end: t.end, bullets: [{ id: `${id}i0b0`, start: t.start, end: t.end, inner, text: htmlText(html.slice(...inner)) }] }];
+      if (t) {
+        const inner = innerOf(t, "div");
+        items = [{ id: `${id}i0`, kind: "text", label: title, start: t.start, end: t.end, bullets: [{ id: `${id}i0b0`, start: t.start, end: t.end, inner, text: htmlText(html.slice(...inner)) }] }];
+      }
     } else if (kind === "competencies") {
       items = elementsWithClass(html, el.open, el.end, "span", "competency-tag").map((t, k) => ({ id: `${id}i${k}`, kind: "tag", label: htmlText(html.slice(t.open, t.end)), start: t.start, end: t.end, bullets: [] }));
     } else {

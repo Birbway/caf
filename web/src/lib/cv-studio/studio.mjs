@@ -129,15 +129,16 @@ export function emptyEdits(sourceHash) {
 
 /**
  * Edits saved against another version of the tailored CV are dropped rather
- * than misapplied to whatever bullets now sit at the same ids.
+ * than misapplied to whatever bullets now sit at the same ids. Null when `raw`
+ * is not a v1 edits object at all.
  *
  * @param {unknown} raw
  * @param {string} sourceHash
- * @returns {{edits: StudioEdits, stale: boolean}}
+ * @returns {{edits: StudioEdits, stale: boolean} | null}
  */
 export function parseEdits(raw, sourceHash) {
   const r = /** @type {any} */ (raw);
-  if (!r || r.v !== 1 || typeof r.sourceHash !== "string") return { edits: emptyEdits(sourceHash), stale: false };
+  if (!r || r.v !== 1 || typeof r.sourceHash !== "string") return null;
   if (r.sourceHash !== sourceHash) return { edits: emptyEdits(sourceHash), stale: true };
   const strings = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
   const record = (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
