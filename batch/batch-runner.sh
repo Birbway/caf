@@ -1058,6 +1058,31 @@ process_offer() {
       fi
   fi
 
+  # ATS API fallback (#4246). When the static fetch above left $jd_file empty
+  # (thin JS shell, curl failure, curl absent), ask the ATS's own public API
+  # through fetch-jd.mjs before the worker falls back to WebFetch, which hits
+  # the same unrendered shell on Ashby and embedded Greenhouse boards.
+  # The call lives here and not in the worker prompt on purpose: the offer URL
+  # is untrusted, and here it travels as one argv element ("$url"), never as
+  # text inside a shell command the worker composes. fetch-jd.mjs only talks to
+  # the known ATS API hosts it resolves from the URL, so a private or unknown
+  # host is a miss (exit 1), not a request.
+  local jd_api_words=0
+  if [[ ! -s "$jd_file" && -f "$PROJECT_DIR/fetch-jd.mjs" ]]; then
+    local jd_api_tmp
+    jd_api_tmp="$(mktemp "${TMPDIR:-/tmp}/batch-jd-api.XXXXXX")"
+    if node "$PROJECT_DIR/fetch-jd.mjs" "$url" > "$jd_api_tmp" 2>/dev/null; then
+      jd_api_words=$(wc -w < "$jd_api_tmp" 2>/dev/null) || jd_api_words=0
+      jd_api_words="${jd_api_words//[^0-9]/}"
+      jd_api_words="${jd_api_words:-0}"
+      if [[ "$jd_api_words" -ge "$prefetch_min_words" ]]; then
+        cat "$jd_api_tmp" > "$jd_file"
+        echo "    ℹ️  JD prefetch: ${jd_api_words} words from the ATS API (fetch-jd.mjs)"
+      fi
+    fi
+    rm -f "$jd_api_tmp"
+  fi
+
   echo "--- Processing offer #$id: $url (report $report_num, attempt $((retries + 1)))"
 
   # Build the prompt with placeholders replaced
