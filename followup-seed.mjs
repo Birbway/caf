@@ -69,7 +69,7 @@ import {
   isMkdirContention, isRmContention, rmLockArtifactSync, createLockWaitPolicy,
   sameLockDirectory, lockRecoveryVerdict, RECOVER_STALE,
 } from './pipeline-lock.mjs';
-import { renameSyncWithRetry } from './tracker-utils.mjs';
+import { makeCliFailWith, renameSyncWithRetry } from './tracker-utils.mjs';
 import { tmpdir } from 'os';
 import { resolveColumns, parseTrackerRow } from './tracker-parse.mjs';
 import { localToday } from './lib/local-today.mjs';
@@ -743,12 +743,6 @@ const EXIT_CODES = {
   LOCK_TIMEOUT: 4,
 };
 
-function failWith(exitCode, code, message, json) {
-  if (json) console.log(JSON.stringify({ error: message, code }));
-  console.error(`❌ ${message}`);
-  process.exit(exitCode);
-}
-
 /**
  * How the apply date was arrived at, for the human-readable line — empty for a
  * date that was actually measured.
@@ -791,11 +785,14 @@ function reportBackfill(result, json) {
 async function main() {
   const argv = process.argv.slice(2);
   const jsonRequested = argv.includes('--json');
+  // Bound from the raw argv rather than from opts.json: a parse that fails mid-argv
+  // never settles opts.json, and the two disagree for `--date --json` (#5198).
+  const failWith = makeCliFailWith(jsonRequested);
   let opts;
   try {
     opts = parseCliArgs(argv);
   } catch (err) {
-    failWith(EXIT_CODES[err.code] ?? 1, err.code || 'USAGE', err.message, jsonRequested);
+    failWith(EXIT_CODES[err.code] ?? 1, err.code || 'USAGE', err.message);
     return;
   }
 
@@ -811,7 +808,7 @@ async function main() {
   } catch (err) {
     const code = err.code || 'ERROR';
     const exitCode = EXIT_CODES[code] ?? 1;
-    failWith(exitCode, code, err.message, opts.json);
+    failWith(exitCode, code, err.message);
   }
 }
 
