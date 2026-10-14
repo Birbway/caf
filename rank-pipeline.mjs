@@ -301,6 +301,10 @@ async function main(args) {
 
   const dryRun = hasFlag(args, '--dry-run');
   const limit = flagValue(args, '--limit') ?? DEFAULT_LIMIT;
+  if (!/^\d+$/.test(String(limit)) || !Number.isSafeInteger(Number(limit)) || Number(limit) <= 0) {
+    console.error('--limit must be a positive integer.');
+    return 1;
+  }
   const model = flagValue(args, '--model');
   const forced = flagValue(args, '--cli') ?? process.env.CAREER_OPS_RANK_CLI;
 
