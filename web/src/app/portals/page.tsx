@@ -1,7 +1,20 @@
 import { Radar } from "lucide-react";
+import path from "node:path";
 import { PortalsView } from "@/components/portals-view";
+import { careerOpsRoot } from "@/lib/career-ops";
+import { loadPortalsDocument, watchedCompanies, type WatchedCompany } from "@/lib/portals-config.mjs";
 
 export const dynamic = "force-dynamic";
+
+function readWatched(): WatchedCompany[] {
+  const root = careerOpsRoot();
+  try {
+    const { doc, seeded } = loadPortalsDocument(path.join(root, "portals.yml"), path.join(root, "templates", "portals.example.yml"));
+    return seeded ? [] : watchedCompanies(doc);
+  } catch {
+    return [];
+  }
+}
 
 export default function PortalsPage() {
   return (
@@ -18,7 +31,7 @@ export default function PortalsPage() {
         Backed by <code className="text-muted">portals.yml</code> — edit it directly or ask the assistant.
       </p>
       <div className="mt-6">
-        <PortalsView />
+        <PortalsView watched={readWatched()} />
       </div>
     </div>
   );
