@@ -46,6 +46,7 @@ import { normalizeUrl, isAggregatorUrl, aggregatorPostingId } from './url-key.mj
 import { validateFlags } from './lib/cli-flags.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { syncTrackerPdfFlags } from './sync-pdf-flags.mjs';
+import { withPipelineLock } from './pipeline-lock.mjs';
 
 const MERGE_TRACKER_USAGE = `Usage: node merge-tracker.mjs [options]
 
@@ -723,8 +724,10 @@ export async function mergeTracker(options = {}) {
     );
   }
 
-  function rekeyLivePdf(pdfIndex, oldReportNum, newReportNum) {
-    const kindOf = (fields) => ((fields[5] ?? '').trim() === 'cover' ? 'cover' : 'cv');
+  // generate-pdf.mjs owns the manifest row rules (applyManifestRow) and the lock
+  // around its read-modify-write. It is imported here, on the rare re-key path
+  // only, because it loads Playwright.
+  async function rekeyLivePdf(pdfIndex, oldReportNum, newReportNum) {
     const oldKey = normNum(oldReportNum);
     const newKey = normNum(newReportNum);
     if (!oldKey || !newKey || oldKey === newKey) return;
@@ -732,35 +735,24 @@ export async function mergeTracker(options = {}) {
     const pdfPath = pdfIndex.get(oldKey);
 
     if (!DRY_RUN) {
-      if (!existsSync(PDF_INDEX_FILE)) return;
-      const lines = readFileSync(PDF_INDEX_FILE, 'utf-8').split(/\r?\n/);
-      if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-      let moved = null;
-      for (const line of lines) {
-        if (!line.trim() || line.startsWith('#')) continue;
-        const fields = line.split('\t');
-        if (normNum(fields[0]) === oldKey && fields[1] === pdfPath) {
-          moved = fields;
-          break;
-        }
-      }
+      const { applyManifestRow } = await import('./generate-pdf.mjs');
+      const moved = await withPipelineLock(PDF_INDEX_FILE, () => {
+        if (!existsSync(PDF_INDEX_FILE)) return false;
+        const lines = readFileSync(PDF_INDEX_FILE, 'utf-8').split(/\r?\n/);
+        const row = lines
+          .filter((line) => line.trim() && !line.startsWith('#'))
+          .map((line) => line.split('\t'))
+          .find((fields) => normNum(fields[0]) === oldKey && fields[1] === pdfPath);
+        if (!row) return false;
+        const kept = applyManifestRow(lines, {
+          reportNum: newKey, pdf: row[1], html: row[2], format: row[3], date: row[4],
+          kind: (row[5] ?? '').trim() === 'cover' ? 'cover' : 'cv',
+        });
+        const header = lines.filter((line) => line.startsWith('#'));
+        writeFileAtomic(PDF_INDEX_FILE, `${[...header, ...kept].join('\n')}\n`);
+        return true;
+      });
       if (!moved) return;
-      const movedKind = kindOf(moved);
-      const kept = [];
-      for (const line of lines) {
-        if (!line.trim() || line.startsWith('#')) {
-          kept.push(line);
-          continue;
-        }
-        const fields = line.split('\t');
-        const key = normNum(fields[0]);
-        if ((key === oldKey || key === newKey) && kindOf(fields) === movedKind) continue;
-        kept.push(line);
-      }
-      const rewritten = moved.slice();
-      rewritten[0] = newKey;
-      kept.push(rewritten.join('\t'));
-      writeFileAtomic(PDF_INDEX_FILE, `${kept.join('\n')}\n`);
     }
 
     pdfIndex.delete(oldKey);
@@ -2179,7 +2171,7 @@ export async function mergeTracker(options = {}) {
         // with a check is what an entry looks like before it is evaluated. Both
         // absent stays unchanged.
         const reportChanged = String(reportNum ?? '') !== String(oldReportNum ?? '');
-        if (reportChanged) rekeyLivePdf(pdfIndex, oldReportNum, reportNum);
+        if (reportChanged) await rekeyLivePdf(pdfIndex, oldReportNum, reportNum);
         const pdf = reportNum && pdfIndex.has(String(reportNum))
           ? '✅'
           : (reportChanged ? '❌' : duplicate.pdf);

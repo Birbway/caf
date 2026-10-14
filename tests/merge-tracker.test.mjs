@@ -895,7 +895,7 @@ try {
   const reportCell = (row) => (row.split('|')[8] || '').trim();
   const priorOnly = runManifestMerge({ ...goneReeval, pdfs: ['acme-1.pdf'] });
   const priorOnlyCell = pdfCellOf(priorOnly.tracker, '| 3 ');
-  const priorOnlyIndex = INDEX_HEADER + '2\toutput/acme-1.pdf\t\t\t2026-01-04\n';
+  const priorOnlyIndex = INDEX_HEADER + '2\toutput/acme-1.pdf\t\t\t2026-01-04\tcv\n';
   if (/^\[2\]/.test(reportCell(priorOnlyCell.row)) && priorOnlyCell.pdf === '✅' && priorOnly.index === priorOnlyIndex) {
     pass('a re-eval with only the prior PDF on disk links report 2, checks the cell, and keys that PDF under report 2');
   } else {
