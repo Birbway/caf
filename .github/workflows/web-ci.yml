@@ -8,10 +8,12 @@ on:
   pull_request:
     paths:
       - 'web/**'
+      - '.github/workflows/web-ci.yml'
   push:
     branches: [main]
     paths:
       - 'web/**'
+      - '.github/workflows/web-ci.yml'
 
 permissions:
   contents: read
@@ -30,6 +32,9 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Install core dependencies for integration tests
+        run: npm install --ignore-scripts
+        working-directory: .
       - run: npm ci
       - run: npm test
       - run: npx tsc --noEmit
