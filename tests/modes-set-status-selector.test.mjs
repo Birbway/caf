@@ -7,19 +7,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { listTree } from '../lib/walk-tree.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-
-function markdownUnder(dir) {
-  return readdirSync(dir).flatMap((name) => {
-    const path = join(dir, name);
-    if (statSync(path).isDirectory()) return markdownUnder(path);
-    return name.endsWith('.md') ? [path] : [];
-  });
-}
 
 const CALL = /node set-status\.mjs ([^\s`]+)/g;
 
@@ -28,7 +21,7 @@ function bareReportPlaceholders(src) {
 }
 
 test('mode files never pass a report id as a bare set-status selector', () => {
-  const offenders = markdownUnder(join(ROOT, 'modes'))
+  const offenders = listTree(join(ROOT, 'modes'), { match: /\.md$/ })
     .filter((path) => bareReportPlaceholders(readFileSync(path, 'utf-8')).length > 0)
     .map((path) => relative(ROOT, path));
   assert.deepEqual(offenders, []);
