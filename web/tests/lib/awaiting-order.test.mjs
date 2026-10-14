@@ -10,7 +10,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pickAwaitingDecision } from "../../src/lib/home/awaiting.mjs";
+import { pickAwaitingDecision, groupAwaiting } from "../../src/lib/home/awaiting.mjs";
 
 // The real parser is lib/format.ts's scoreNum, which a .mjs test cannot import.
 // This stub must stay behaviourally identical for the cases below: a leading
@@ -117,4 +117,23 @@ test("a terminal status is still excluded, and prefix-matching is not the reason
     row("2026-08-02", "4.0/5", "Evaluated"),
   ];
   assert.deepEqual(pickAwaitingDecision(rows, scoreOf).map((r) => r.date), ["2026-08-02"]);
+});
+
+test("an unscored row gets its own group, not Below the apply line", () => {
+  const rows = [row("2026-08-04", "4.2/5"), row("2026-08-03", "3.1/5"), row("2026-08-02", ""), row("2026-08-01", "n/a")];
+  assert.deepEqual(
+    groupAwaiting(pickAwaitingDecision(rows, scoreOf)).map(([label, group]) => [label, group.map((r) => r.date)]),
+    [
+      ["Recommended", ["2026-08-04"]],
+      ["Below the apply line", ["2026-08-03"]],
+      ["Not scored yet", ["2026-08-02", "2026-08-01"]],
+    ],
+  );
+});
+
+test("an empty group is left out", () => {
+  assert.deepEqual(
+    groupAwaiting([row("2026-08-01", "")]).map(([label]) => label),
+    ["Not scored yet"],
+  );
 });

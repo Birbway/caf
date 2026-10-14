@@ -15,8 +15,7 @@ import type { CardReason } from "@/lib/machine-summary.mjs";
 import { QuickEvaluate } from "@/components/quick-evaluate";
 import { FollowupsDueSectionSkeleton } from "@/components/page-loading-skeletons";
 import { scoreNum } from "@/lib/format";
-import { pickAwaitingDecision } from "@/lib/home/awaiting.mjs";
-import { applyLineLabel } from "@/lib/report-sections.mjs";
+import { pickAwaitingDecision, groupAwaiting } from "@/lib/home/awaiting.mjs";
 import { companyPresentation } from "@/lib/company-presentation.mjs";
 import { resolveHeroState, mayClaimAllClear, showsQueue, missingSourceLabel, displayCounts } from "@/lib/home/hero-state.mjs";
 
@@ -114,11 +113,8 @@ export function TodayDashboard({
   // ordering lives in lib/home/awaiting.mjs so it can be tested — see the file
   // for why "first six in the array" was a bug waiting for #3529.
   const awaiting = useMemo(() => pickAwaitingDecision(applications, scoreNum), [applications]);
-  const recommended = awaiting.filter((a) => applyLineLabel(a.score) === "Recommended");
-  const awaitingGroups: [string, Application[]][] = [
-    ["Recommended", recommended],
-    ["Below the apply line", awaiting.filter((a) => applyLineLabel(a.score) !== "Recommended")],
-  ];
+  const awaitingGroups = useMemo(() => groupAwaiting(awaiting), [awaiting]);
+  const recommended = awaitingGroups.find(([label]) => label === "Recommended")?.[1] ?? [];
 
   const newThisWeek = freshCount;
   const dataLoading = followupsLoading || freshLoading;
@@ -253,18 +249,16 @@ export function TodayDashboard({
               Apply next · {companyPresentation(recommended[0]).label} {recommended[0].score} <ArrowRight className="size-4" />
             </Link>
           )}
-          {awaitingGroups.map(([label, group]) =>
-            group.length > 0 && (
-              <div key={label} className="mb-3">
-                <h3 className="mb-2 text-xs font-medium text-faint">{label}</h3>
-                <div className="grid gap-2.5 sm:grid-cols-2">
-                  {group.map((a) => (
-                    <DecisionCard key={a.n} app={a} reason={reasons[a.n]} />
-                  ))}
-                </div>
+          {awaitingGroups.map(([label, group]) => (
+            <div key={label} className="mb-3">
+              <h3 className="mb-2 text-xs font-medium text-faint">{label}</h3>
+              <div className="grid gap-2.5 sm:grid-cols-2">
+                {group.map((a) => (
+                  <DecisionCard key={a.n} app={a} reason={reasons[a.n]} />
+                ))}
               </div>
-            ),
-          )}
+            </div>
+          ))}
         </Section>
       )}
 

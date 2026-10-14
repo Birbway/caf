@@ -1,4 +1,5 @@
 import { canonStatus } from "../status-alias.mjs";
+import { applyLineLabel } from "../report-sections.mjs";
 
 // states.yml forbids a date in the status cell, but real trackers carry one
 // anyway ("Evaluated 2026-08-21") and /^evaluat/i tolerated that. canonStatus()
@@ -59,4 +60,21 @@ export function pickAwaitingDecision(applications, scoreOf, limit = 6) {
     // comparisons are descending, so either one lands at the end.
     .sort((a, b) => rank(b.score) - rank(a.score) || (b.date || "").localeCompare(a.date || ""))
     .slice(0, limit);
+}
+
+const AWAITING_GROUPS = ["Recommended", "Below the apply line", "Not scored yet"];
+
+/**
+ * Splits the ranked queue into the groups the Today page renders, keeping the
+ * order inside each group. A row with no score has not been judged against the
+ * apply line, so it gets its own group instead of "Below the apply line".
+ *
+ * @template {{score?: string}} T
+ * @param {T[]} awaiting  output of pickAwaitingDecision
+ * @returns {[string, T[]][]}  only the non-empty groups, in display order
+ */
+export function groupAwaiting(awaiting) {
+  return AWAITING_GROUPS
+    .map((label) => /** @type {[string, T[]]} */ ([label, awaiting.filter((a) => (applyLineLabel(a.score) ?? "Not scored yet") === label)]))
+    .filter(([, group]) => group.length > 0);
 }
