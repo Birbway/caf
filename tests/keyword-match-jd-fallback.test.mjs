@@ -74,6 +74,13 @@ try {
     assert.deepEqual(JSON.parse(r.stdout).missing, ['Kubernetes']);
   });
 
+  check('an archive pointer that leaves jds/ is not read', () => {
+    writeFileSync(join(dir, 'outside.md'), 'Kubernetes and Docker\n');
+    const r = run('## Job Description (archived verbatim)\nSee jds/../outside.md for the full archive (archive-posting.mjs --report=007).\n');
+    assert.equal(r.status, 1);
+    assert.equal(r.stdout, '');
+  });
+
   check('a report with neither section exits 1 and names both', () => {
     const r = run('# Evaluation\n\n## A) Role Summary\nNothing else.\n');
     assert.equal(r.status, 1);
