@@ -20,6 +20,10 @@ elapsed-time cadence case — see `confirmed_time_noshow` in `modes/email.md`
 - `config/profile.yml` — User profile (name, identity)
 - `cv.md` — CV for proof points in drafts
 
+## Step 0: Check that follow-ups are on
+
+If `config/profile.yml` sets `follow_ups.enabled: false`, stop here. Tell the user follow-ups are turned off and that they can turn them back on with `follow_ups.enabled: true` in `config/profile.yml` or the "Track follow-ups" checkbox on the web Config page. Do not run the cadence script or draft follow-up messages. The `contacto` mode is a first outreach, not a follow-up, so it still works when follow-ups are off. `followup-cadence.mjs --json` also reports `"followupsEnabled": false` with no entries in that case.
+
 ## Step 1 — Run Cadence Script
 
 Execute:
