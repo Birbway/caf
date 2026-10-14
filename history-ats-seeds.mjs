@@ -75,7 +75,7 @@ function linkedReportNumbers(reportCell, notesCell) {
   return validated.length === 1 ? validated : [];
 }
 
-function reportUrlForNumbers(reportNumbers, reportsRoot) {
+export function reportUrlForNumbers(reportNumbers, reportsRoot, accept = atsVendorOf) {
   if (!reportsRoot || !existsSync(reportsRoot) || reportNumbers.length === 0) return null;
   let filenames;
   try { filenames = readdirSync(reportsRoot); } catch { return null; }
@@ -86,8 +86,8 @@ function reportUrlForNumbers(reportNumbers, reportsRoot) {
     try { report = readFileSync(path.join(reportsRoot, reportName), 'utf-8'); } catch { continue; }
     const match = report.match(/\*\*URL:\*\*[ \t]*(\S+)/);
     if (!match) continue;
-    const url = match[1].replace(/^<|>$/g, '').replace(/[),.;]+$/, '');
-    if (atsVendorOf(url)) return url;
+    const url = match[1].replace(/[),.;]+$/, '').replace(/^<|>$/g, '');
+    if (accept(url)) return url;
   }
   return null;
 }

@@ -296,7 +296,6 @@ const SYSTEM_PATHS = [
   'lib/gemini-node-floor.mjs',
   'lib/node-floor.mjs',
   'lib/local-today.mjs',
-  'lib/tracker-liveness.mjs',
   'lib/parse-date.mjs',
   'lib/reply-proposals.mjs',
   'lib/placeholder-cell.mjs',

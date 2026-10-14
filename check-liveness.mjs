@@ -29,15 +29,14 @@ import {
   sleep,
 } from './liveness-browser.mjs';
 import { checkLivenessViaApi } from './liveness-api.mjs';
-import { planExpiredHistoryRows } from './liveness-core.mjs';
+import { planExpiredHistoryRows, trackerLivenessTargets, DEFAULT_TRACKER_STATUSES } from './liveness-core.mjs';
 import { appendToScanHistory, normalizeUrlForDedup, SCAN_HISTORY_PATH } from './scan.mjs';
 import { withPipelineLock } from './pipeline-lock.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { localToday } from './lib/local-today.mjs';
-import { existsSync, readFileSync, readdirSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { getCareerOpsRoot, resolveTrackerPath } from './path-resolver.mjs';
-import { trackerLivenessTargets, DEFAULT_TRACKER_STATUSES } from './lib/tracker-liveness.mjs';
 
 const USAGE = `Usage:
   node check-liveness.mjs [--no-fallback] [--throttle[=ms]] [--no-record] <url1> [url2] ...
@@ -146,13 +145,7 @@ async function main() {
       return;
     }
     const statuses = statusArg ? statusArg.slice('--status='.length).split(',') : DEFAULT_TRACKER_STATUSES;
-    const reportsDir = join(root, 'reports');
-    const reportFiles = existsSync(reportsDir) ? readdirSync(reportsDir) : [];
-    const readReport = (n) => {
-      const name = reportFiles.find((f) => f.endsWith('.md') && new RegExp(`^0*${n}-`).test(f));
-      return name ? readFileSync(join(reportsDir, name), 'utf-8') : null;
-    };
-    const { targets, noUrl } = trackerLivenessTargets(readFileSync(trackerPath, 'utf-8'), { statuses, readReport });
+    const { targets, noUrl } = trackerLivenessTargets(readFileSync(trackerPath, 'utf-8'), { statuses, reportsRoot: join(root, 'reports') });
     console.log(`Tracker rows with status ${statuses.join(' or ')}: ${targets.length} with a posting URL${noUrl.length ? `, ${noUrl.length} without (${noUrl.map((n) => `#${n}`).join(' ')})` : ''}`);
     for (const t of targets) labels.set(t.url, `#${t.num} ${t.company} · ${t.role} (${t.status})`);
     urls = targets.map((t) => t.url);
