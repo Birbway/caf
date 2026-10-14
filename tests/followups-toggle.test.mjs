@@ -113,3 +113,11 @@ for (const c of cases) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+{
+  const apply = readFileSync(join(ROOT, 'modes', 'apply.md'), 'utf-8');
+  const steps = apply.slice(apply.indexOf('If the candidate confirms that they submitted the application:')).split('\n\n')[0].split('\n').slice(1);
+  const skipped = steps.map((s) => s.includes('follow_ups.enabled: false'));
+  eq('apply.md: only the seeding step is skipped when follow-ups are off', skipped, [false, true, false, false]);
+  eq('apply.md: the contacto step still runs when follow-ups are off', /contacto.*even when `follow_ups\.enabled` is `false`/.test(steps[3]), true);
+}

@@ -134,6 +134,7 @@ language:
 
 # Optional. Set enabled to false to turn follow-ups off: no follow-up dates
 # are scheduled or computed, and the web app hides the Follow-ups page.
+# The first LinkedIn outreach suggestion (`contacto`) stays on.
 # follow_ups:
 #   enabled: true
 
