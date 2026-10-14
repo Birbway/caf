@@ -395,12 +395,14 @@ async function checkPlaywright() {
 // Per-CLI MCP config registry. `plugins: true` marks a CLI whose MCP servers
 // can also arrive from outside the project root: from .claude.json or from an
 // installed plugin (see isPlaywrightMcpFromClaudeJson, isPlaywrightMcpFromPlugin).
+// `userFiles` marks a CLI whose USER-level config can also carry servers
+// (see opencodeUserConfigFiles).
 const MCP_CONFIGS = [
   { cli: 'claude',   files: ['.mcp.json', '.claude/settings.json', '.claude/settings.local.json'], plugins: true },
   // opencode.jsonc is JSONC: OpenCode accepts comments and trailing commas
   // there, and JSON.parse throwing on them used to read as "no MCP server
   // configured" (#2252).
-  { cli: 'opencode', files: ['opencode.json', 'opencode.jsonc'] },
+  { cli: 'opencode', files: ['opencode.json', 'opencode.jsonc'], userFiles: () => opencodeUserConfigFiles() },
 ];
 
 // Server qualifies if its definition references the @playwright/mcp package,
@@ -438,6 +440,63 @@ function readConfigIfPresent(file) {
 // the tests point it at a tmpdir so this never reads the real machine.
 function claudeConfigDir() {
   return process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+}
+
+// OpenCode's USER-level config sources, in ASCENDING precedence order
+// (opencode.ai/docs/config#precedence-order: global → $OPENCODE_CONFIG →
+// project): ~/.config/opencode/opencode.json[c] (XDG_CONFIG_HOME honored),
+// then $OPENCODE_CONFIG_DIR as a second config-directory candidate, then the
+// $OPENCODE_CONFIG file. Config sources MERGE — the custom directory is
+// loaded after the global config and overrides it, it never replaces it — so
+// setting $OPENCODE_CONFIG_DIR must not take the default global dir out of
+// the scan. Same reasoning as isPlaywrightMcpFromClaudeJson: a server
+// installed at user level is installed and working, so a project-only scan
+// would report a machine that has Playwright MCP as unconfigured. Missing or
+// malformed files read as null.
+function opencodeUserConfigFiles() {
+  const names = ['opencode.json', 'opencode.jsonc'];
+  const files = [];
+  const globalDir = process.env.XDG_CONFIG_HOME
+    ? join(process.env.XDG_CONFIG_HOME, 'opencode')
+    : join(homedir(), '.config', 'opencode');
+  for (const name of names) files.push(join(globalDir, name));
+  const customDir = process.env.OPENCODE_CONFIG_DIR;
+  if (customDir && customDir !== globalDir) {
+    for (const name of names) files.push(join(customDir, name));
+  }
+  if (process.env.OPENCODE_CONFIG) files.push(process.env.OPENCODE_CONFIG);
+  return files;
+}
+
+// The MCP server map one OpenCode config source contributes: the documented
+// flat shape (`mcp: { name: {...} }`), the `mcp: { servers: {...} }` wrapper
+// seen in the wild, and — for configs copied between CLIs — Claude's
+// `mcpServers` bucket.
+function opencodeServerMap(cfg) {
+  if (!cfg || typeof cfg !== 'object') return {};
+  const mcp = (cfg.mcp && typeof cfg.mcp === 'object') ? cfg.mcp : {};
+  const { servers, ...flat } = mcp;
+  return {
+    ...(cfg.mcpServers && typeof cfg.mcpServers === 'object' ? cfg.mcpServers : {}),
+    ...(servers && typeof servers === 'object' ? servers : {}),
+    ...flat,
+  };
+}
+
+// OpenCode MERGES config sources — "Configuration files are merged together,
+// not replaced", later sources overriding earlier ones per SERVER NAME, with
+// `enabled: false` keeping a server from starting (opencode.ai/docs/config,
+// opencode.ai/docs/mcp-servers). So an any-file-contains scan is wrong in
+// both directions: a project file that redefines the inherited `playwright`
+// name — as a disable or as a replacement — must win over a user-level
+// server, and a user-level server must still count when the project file
+// never mentions it. Configs arrive in ASCENDING precedence order; the
+// answer is about the EFFECTIVE entry.
+function hasPlaywrightInMergedOpenCode(configs) {
+  const effective = {};
+  for (const cfg of configs) Object.assign(effective, opencodeServerMap(cfg));
+  return Object.values(effective)
+    .some((def) => def && def.enabled !== false && isPlaywrightServer(def));
 }
 
 // A Claude Code plugin declares its MCP servers in its own .mcp.json, which
@@ -511,6 +570,16 @@ function isPlaywrightMcpFromClaudeJson(root) {
 function isPlaywrightMcpConfigured(root, activeCli) {
   const entry = MCP_CONFIGS.find((c) => c.cli === activeCli);
   if (!entry) return false; // known CLI but no MCP file mapping; caller warns
+  // OpenCode reads every source below (user-level configs, then the project)
+  // and MERGES them, so the question is about the effective server map — not
+  // whether any one file mentions the package (hasPlaywrightInMergedOpenCode).
+  if (entry.userFiles) {
+    const configs = [
+      ...entry.userFiles(),
+      ...entry.files.map((rel) => join(root, ...rel.split('/'))),
+    ].map(readConfigIfPresent).filter(Boolean);
+    return hasPlaywrightInMergedOpenCode(configs);
+  }
   const inProject = entry.files.some((rel) => {
     const file = join(root, ...rel.split('/'));
     return hasPlaywrightIn(readConfigIfPresent(file));
@@ -523,10 +592,11 @@ function isPlaywrightMcpConfigured(root, activeCli) {
 }
 
 // CLI resolution: --cli flag > $CAREER_OPS_CLI > .env (CAREER_OPS_CLI=...) >
-// default ('claude'). An unknown value at ANY level returns the sentinel
-// 'unknown' and produces no output — CLI-dependent checks are silently
-// skipped. .env parsing is best-effort: missing file is normal, malformed
-// values are caught per call below.
+// runtime marker (OPENCODE=1 → opencode) > checkout hint (an opencode.json
+// with no Claude MCP config beside it) > default ('claude'). An unknown value
+// at ANY level returns the sentinel 'unknown' and produces no output —
+// CLI-dependent checks are silently skipped. .env parsing is best-effort:
+// missing file is normal, malformed values are caught per call below.
 function resolveActiveCli() {
   if (cliFlag !== undefined && cliFlag !== null) {
     if (!VALID_CLIS.includes(cliFlag)) {
@@ -551,6 +621,26 @@ function resolveActiveCli() {
       return { cli: 'unknown', source: '.env', warning: `CAREER_OPS_CLI in .env is not a recognized CLI. Valid: ${VALID_CLIS.join(', ')}.` };
     }
     return { cli: process.env.CAREER_OPS_CLI, source: '.env' };
+  }
+  // Runtime marker: OpenCode stamps OPENCODE=1 on every process it runs.
+  // Without this, doctor started from inside OpenCode falls through to the
+  // claude default and then scans Claude's MCP configs — reporting "Playwright
+  // MCP not detected" on a machine where it is configured in opencode.json.
+  // Exact match: a user who sets OPENCODE=0 to opt out keeps the default.
+  if (process.env.OPENCODE === '1') {
+    return { cli: 'opencode', source: 'auto' };
+  }
+  // Checkout hint: an opencode.json/opencode.jsonc in the launch directory
+  // with NO Claude MCP config beside it means this checkout is driven from
+  // OpenCode (shell runs inside OpenCode are already caught by the marker
+  // above; a checkout carrying .mcp.json/.claude config stays on the claude
+  // default, so dual-config checkouts behave exactly as before).
+  const cwd = process.cwd();
+  const hasOpenCodeCfg = ['opencode.json', 'opencode.jsonc'].some((f) => existsSync(join(cwd, f)));
+  const hasClaudeCfg = ['.mcp.json', '.claude/settings.json', '.claude/settings.local.json']
+    .some((f) => existsSync(join(cwd, f)));
+  if (hasOpenCodeCfg && !hasClaudeCfg) {
+    return { cli: 'opencode', source: 'auto' };
   }
   return { cli: 'claude', source: 'default' };
 }
@@ -583,7 +673,7 @@ function checkPlaywrightMcp(root, activeCli) {
         ? `No project-level MCP config, no server in .claude.json (~/.claude.json, or $CLAUDE_CONFIG_DIR/.claude.json when set), and no enabled plugin providing one, was detected for ${activeCli}.`
         : `No project-level MCP config was detected for ${activeCli}.`,
       activeCli === 'opencode'
-        ? 'Add the Playwright MCP server to opencode.json (see opencode.example.json) or pass --cli <name> if you actually run a different CLI.'
+        ? 'Add the Playwright MCP server to opencode.json (project; see opencode.example.json) or to the global ~/.config/opencode/opencode.json[c] (or $OPENCODE_CONFIG), or pass --cli <name> if you actually run a different CLI.'
         : `Add the Playwright MCP server to your ${activeCli} config, or install a plugin that provides it (e.g. /plugin install playwright@claude-plugins-official).`,
     ],
   };
@@ -636,6 +726,7 @@ const USER_LAYER_PREREQS = [
   },
   {
     path: 'portals.yml',
+    env: 'CAREER_OPS_PORTALS',
     fix: [
       'Run: cp templates/portals.example.yml portals.yml',
       'Then customize with your target companies',
@@ -643,9 +734,18 @@ const USER_LAYER_PREREQS = [
   },
 ];
 
-function prereqPresent(root, path) {
-  if (path === 'config/profile.yml') return existsSync(profilePathFor(root));
-  return existsSync(join(root, ...path.split('/')));
+// The lane variables (CAREER_OPS_PORTALS, CAREER_OPS_PIPELINE) move one file
+// out of the data root, and the scanner reads them (path-resolver.mjs), so
+// doctor has to look where a scan would.
+const PORTALS_PREREQ = USER_LAYER_PREREQS.find(({ path }) => path === 'portals.yml');
+
+function prereqFile(root, { path, env }) {
+  if (path === 'config/profile.yml') return profilePathFor(root);
+  return (env && process.env[env]) || join(root, ...path.split('/'));
+}
+
+function prereqPresent(root, prereq) {
+  return existsSync(prereqFile(root, prereq));
 }
 
 // The root's .env names a profile, but only scan.mjs, the evaluators and
@@ -662,8 +762,9 @@ function checkEnvFileProfile(root) {
   };
 }
 
-function checkPrereq({ path, fix }) {
-  if (prereqPresent(projectRoot, path)) {
+function checkPrereq(prereq) {
+  const { path, fix } = prereq;
+  if (prereqPresent(projectRoot, prereq)) {
     return { pass: true, label: `${path} found` };
   }
   if (path === 'config/profile.yml' && !explicitTarget && hasProfileOverride()) {
@@ -736,7 +837,7 @@ function checkAutoDir(name) {
 // verify-portals.mjs so there is one probing implementation. Network-bound,
 // hence opt-in.
 async function checkPortalSlugs(root) {
-  const portalsPath = join(root, 'portals.yml');
+  const portalsPath = prereqFile(root, PORTALS_PREREQ);
   if (!existsSync(portalsPath)) {
     return { pass: true, label: 'Portal entries: no portals.yml yet (skipped)' };
   }
@@ -790,18 +891,22 @@ Paste job URLs below as \`- [ ] {url}\` then run \`/career-ops pipeline\`.
 `;
 
 function checkPipelineFile() {
-  const filePath = join(projectRoot, 'data', 'pipeline.md');
+  const filePath = process.env.CAREER_OPS_PIPELINE || join(projectRoot, 'data', 'pipeline.md');
+  const shown = process.env.CAREER_OPS_PIPELINE ? filePath : 'data/pipeline.md';
   if (existsSync(filePath)) {
-    return { pass: true, label: 'data/pipeline.md ready' };
+    return { pass: true, label: `${shown} ready` };
   }
   try {
+    mkdirSync(dirname(filePath), { recursive: true });
     writeFileSync(filePath, PIPELINE_SKELETON, 'utf-8');
-    return { pass: true, label: 'data/pipeline.md ready (auto-created)' };
+    return { pass: true, label: `${shown} ready (auto-created)` };
   } catch {
     return {
       pass: false,
-      label: 'data/pipeline.md could not be created',
-      fix: 'Run: mkdir -p data && touch data/pipeline.md',
+      label: `${shown} could not be created`,
+      fix: process.env.CAREER_OPS_PIPELINE
+        ? `Run: mkdir -p "$(dirname "$CAREER_OPS_PIPELINE")" && touch "$CAREER_OPS_PIPELINE"`
+        : 'Run: mkdir -p data && touch data/pipeline.md',
     };
   }
 }
@@ -945,7 +1050,7 @@ async function main() {
     checkAutoDir('reports'),
     checkPlugins(projectRoot),
     // checkPrereq already explains the .env case when the profile is missing.
-    prereqPresent(projectRoot, 'config/profile.yml') ? checkEnvFileProfile(projectRoot) : null,
+    prereqPresent(projectRoot, { path: 'config/profile.yml' }) ? checkEnvFileProfile(projectRoot) : null,
   ].filter(Boolean);
 
   // Network-bound portals.yml reachability probe — only under --strict.
@@ -1076,7 +1181,7 @@ function checkPersonalization(root) {
 function titleFilterConflicts(root) {
   // Same override the scanner honours (scan.mjs PORTALS_PATH), so a diagnosis
   // describes the file a scan would actually read, not the default one.
-  const portalsPath = process.env.CAREER_OPS_PORTALS || join(root, 'portals.yml');
+  const portalsPath = prereqFile(root, PORTALS_PREREQ);
   if (!existsSync(portalsPath)) return null;
   let config;
   try {
@@ -1133,7 +1238,7 @@ function onboardingState(root) {
     }
   }
   const missing = USER_LAYER_PREREQS
-    .filter(({ path }) => !prereqPresent(root, path))
+    .filter((prereq) => !prereqPresent(root, prereq))
     .map(({ path }) => path);
 
   const { cli: activeCli, source: cliSource, warning: cliWarning } = resolveActiveCli();
