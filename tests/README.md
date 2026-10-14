@@ -122,3 +122,27 @@ import { pass, fail, ROOT } from '../helpers.mjs';   // tests/providers/*.test.m
 ```
 
 See `CONTRIBUTING.md` for the full contribution flow.
+
+## The suite's data root
+
+The suite is run inside real workspaces, so it never reads or writes the
+developer's data. When `helpers.mjs` loads it creates a scratch directory, pins
+`CAREER_OPS_ROOT` to it (clearing `CAREER_OPS_DATA_DIR`, as it clears
+`CAREER_OPS_TRACKER`), and removes it at exit. Every script a test spawns
+inherits that, so the default for a new test is already safe.
+
+- **A test that needs data** writes it under a `mkdtemp` directory and passes
+  that directory to the child: `env: { ...process.env, CAREER_OPS_ROOT: dir,
+  CAREER_OPS_DATA_DIR: '' }`. Never write a fixture over a file under `ROOT`
+  and put the original back afterwards — an interrupted run does not reach the
+  `finally`, and `data/` is not in git.
+- **A test that copies scripts into a temp directory** and expects the copy to
+  be its own data root spawns it with `env: ownRootEnv()`.
+- **A test that must change the variable in-process** calls
+  `pinSandboxDataRoot()` when it is done, rather than `delete`.
+- `SANDBOX_DATA_ROOT` is the scratch root, for a fixture that has to sit under
+  the data root's `output/` or `jds/`.
+
+`data-root-guard.mjs` fingerprints the real user layer before the run and at
+exit — including an exit by Ctrl-C — and fails the run, naming each path, if
+anything differs.

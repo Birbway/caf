@@ -1,3 +1,6 @@
+import { reportUrlForNumbers } from './history-ats-seeds.mjs';
+import { resolveColumns, parseTrackerRow, extractTrackerReportNumbers } from './tracker-parse.mjs';
+
 // Portals write closure banners with typographic punctuation and accents:
 // WTTJ renders "Cette offre n’est plus disponible." with U+2019, not ASCII "'".
 // A pattern spelled with a plain apostrophe silently never matches, so a clearly
@@ -374,4 +377,36 @@ export function planExpiredHistoryRows(scanHistoryText = '', verdicts = [], norm
     }
   }
   return rows;
+}
+
+export const DEFAULT_TRACKER_STATUSES = ['evaluated', 'applied'];
+
+const isWebUrl = (url) => /^https?:\/\//i.test(url);
+
+/**
+ * Which tracker rows a liveness sweep checks, and at which posting URL: the
+ * row's own URL cell, else the **URL:** of its report.
+ *
+ * @param {string} trackerText applications.md contents
+ * @param {{statuses?: string[], reportsRoot?: string}} options
+ * @returns {{targets: {num: number, company: string, role: string, status: string, url: string}[], noUrl: number[]}}
+ */
+export function trackerLivenessTargets(trackerText, { statuses = DEFAULT_TRACKER_STATUSES, reportsRoot } = {}) {
+  const wanted = new Set(statuses.map((s) => s.trim().toLowerCase()).filter(Boolean));
+  const lines = String(trackerText ?? '').split(/\r?\n/);
+  const colmap = resolveColumns(lines);
+  const targets = [];
+  const noUrl = [];
+  const seen = new Set();
+  for (const line of lines) {
+    const row = parseTrackerRow(line, colmap);
+    if (!row || !wanted.has(row.status.trim().toLowerCase())) continue;
+    const url = isWebUrl(row.url) ? row.url
+      : reportUrlForNumbers(extractTrackerReportNumbers(row.report, row.notes), reportsRoot, isWebUrl);
+    if (!url) { noUrl.push(row.num); continue; }
+    if (seen.has(url)) continue;
+    seen.add(url);
+    targets.push({ num: row.num, company: row.company, role: row.role, status: row.status, url });
+  }
+  return { targets, noUrl };
 }
