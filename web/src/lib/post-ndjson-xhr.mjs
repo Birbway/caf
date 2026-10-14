@@ -41,11 +41,6 @@ export function postNdjsonXhr(url, body, onEvent) {
         const ev = readEvent(line);
         if (ev !== undefined) onEvent(ev);
       }
-      if (finished && carry.trim()) {
-        const ev = readEvent(carry.trim());
-        if (ev !== undefined) onEvent(ev);
-        carry = "";
-      }
     };
 
     xhr.onprogress = () => consume(false);
