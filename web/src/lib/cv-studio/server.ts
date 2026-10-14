@@ -154,8 +154,9 @@ export async function renderEditedPdf(load: Extract<StudioLoad, { ok: true }>, e
   const { view, added } = resolveStudio(load.doc, edits);
   const html = renderBlocks(load.tree, view, { added });
   const outDir = path.join(root, "output");
-  const editedHtml = path.join(outDir, load.file.replace(/\.html$/i, `${EDITED_SUFFIX}.html`));
-  const editedPdf = editedHtml.replace(/\.html$/, ".pdf");
+  const editedStem = path.join(outDir, load.file.replace(/\.html$/i, EDITED_SUFFIX));
+  const editedHtml = `${editedStem}.html`;
+  const editedPdf = `${editedStem}.pdf`;
   const previousHtml = fs.existsSync(editedHtml) ? fs.readFileSync(editedHtml, "utf8") : null;
   atomicWrite(editedHtml, html);
   const format = /size:\s*a4/i.test(html) ? "a4" : "letter";
