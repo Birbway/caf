@@ -56,6 +56,8 @@ const HEADING_LETTER = /^(?:Block\s+([A-Z])(?:[).:]|\s)|([A-Z])[).:])/i;
  * @param {string} h
  * @returns {string}
  */
+import { isStarTableHeader, parsePipeTable } from "./report-tables.mjs";
+
 export function cleanHeading(h) {
   const stripped = h
     .replace(HEADING_PREFIX, "")
@@ -226,4 +228,35 @@ export function splitSections(body) {
   }
   if (cur) sections.push({ heading: cur.heading, letter: cur.letter, content: cur.lines.join("\n").trim() });
   return { intro: intro.join("\n").trim(), sections };
+}
+
+const PREVIEW_MAX = 96;
+
+/**
+ * One-line preview for a collapsed report section. A STAR table gets its story
+ * count, then prose wins. A section that is only a table gets "Field: value"
+ * pairs for a two-column table or a row count otherwise, never the raw
+ * `| --- |` separator.
+ *
+ * @param {string} md
+ * @returns {string}
+ */
+export function sectionPreview(md) {
+  const clip = (s) => (s.length > PREVIEW_MAX ? s.slice(0, PREVIEW_MAX).trimEnd() + "…" : s);
+  const plain = (s) => s.replace(/[*_`>#|]/g, "").replace(/\s+/g, " ").trim();
+  const table = parsePipeTable(md);
+  const n = table?.rows.length ?? 0;
+  if (table && isStarTableHeader(table.header)) return `${n} interview stor${n === 1 ? "y" : "ies"}`;
+  const text = plain(
+    md
+      .replace(/^#+\s.*$/gm, "")
+      .replace(/```[\s\S]*?```/g, "")
+      .replace(/^\s*\|.*$/gm, ""),
+  );
+  if (text) return clip(text.split(/(?<=[.!?])\s/)[0] ?? text);
+  if (!table) return "";
+  if (table.header.length === 2) {
+    return clip(table.rows.map(([k, v]) => `${plain(k ?? "")}: ${plain(v ?? "")}`).join(" · "));
+  }
+  return `${n} row${n === 1 ? "" : "s"}`;
 }

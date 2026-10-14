@@ -10,10 +10,10 @@ import {
   cleanHeading,
   isLeadSection,
   isVerdictHeading,
+  sectionPreview,
   splitSections,
   verdictReason,
 } from "@/lib/report-sections.mjs";
-import { isStarTableHeader, parsePipeTable } from "@/lib/report-tables.mjs";
 import { StatusSelect } from "@/components/status-select";
 import { CompanyLogo } from "@/components/company-logo";
 import { ScoreMethodology } from "@/components/score-methodology";
@@ -39,22 +39,6 @@ function isMachine(heading: string): boolean {
 function httpUrl(url?: string | null): string | undefined {
   if (!url) return undefined;
   return /^https?:\/\//i.test(url) ? url : undefined;
-}
-
-function preview(md: string): string {
-  const table = parsePipeTable(md);
-  if (table && isStarTableHeader(table.header)) {
-    const n = table.rows.length;
-    return `${n} interview stor${n === 1 ? "y" : "ies"}`;
-  }
-  const text = md
-    .replace(/^#+\s.*$/gm, "")
-    .replace(/```[\s\S]*?```/g, "")
-    .replace(/[*_`>#|]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  const sentence = text.split(/(?<=[.!?])\s/)[0] ?? text;
-  return sentence.length > 96 ? sentence.slice(0, 96).trimEnd() + "…" : sentence;
 }
 
 export function ReportView({
@@ -226,7 +210,7 @@ export function ReportView({
                     <details key={i} className="group mt-3 overflow-hidden rounded-xl border border-border bg-surface/30">
                       <summary className="flex min-h-[44px] cursor-pointer list-none items-center gap-2 px-4 py-3 transition-colors hover:bg-surface-hover">
                         <span className="text-sm font-medium">{cleanHeading(s.heading)}</span>
-                        <span className="hidden truncate text-xs text-faint sm:inline">{preview(s.content)}</span>
+                        <span className="hidden truncate text-xs text-faint sm:inline">{sectionPreview(s.content)}</span>
                         <ChevronDown className="ml-auto size-4 shrink-0 text-faint transition-transform group-open:rotate-180" />
                       </summary>
                       <div className="report-prose border-t border-border px-4 py-3">
