@@ -1,0 +1,30 @@
+{
+  "lang": "en",
+  "page_format": "letter",
+  "candidate": { "name": "Jordan Rivera", "title": "Platform Engineer", "location": "Remote" },
+  "summary": "Platform engineer who ships reliable infrastructure for product teams.",
+  "competencies": ["Kubernetes", "Go", "Observability"],
+  "experience": [
+    {
+      "company": "Northwind Labs",
+      "role": "Senior Platform Engineer",
+      "dates": "2022 - Present",
+      "bullets": [
+        "Cut deploy time 40% by moving CI to Kubernetes",
+        "Led a team of 5 engineers on the billing rewrite",
+        "Organized the quarterly hackathon"
+      ]
+    },
+    {
+      "company": "Contoso Systems",
+      "role": "Software Engineer",
+      "dates": "2019 - 2022",
+      "bullets": ["Built the internal metrics pipeline in Go"]
+    }
+  ],
+  "education": [{ "title": "B.S. Computer Science", "org": "State University", "year": "2019" }],
+  "skills": [
+    { "category": "Languages", "items": "Go, TypeScript, Python" },
+    { "category": "Tools", "items": ["Terraform", "Prometheus"] }
+  ]
+}
