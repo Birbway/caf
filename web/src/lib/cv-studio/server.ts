@@ -138,12 +138,13 @@ export async function keywordsInText(n: string, text: string): Promise<string[] 
   return km.extractKeywords(fs.readFileSync(id.file, "utf8")).filter((k) => km.keywordCount(k, text) > 0);
 }
 
-export type RenderOutcome = { ok: true; pdf: string; warnings: string[] } | { ok: false; error: string };
+export type RenderOutcome = { ok: true; pdf: string; indexed: boolean; warnings: string[] } | { ok: false; error: string };
 
 /**
  * Write the edited CV beside the original and render it through the same
  * generate-pdf.mjs the pdf flow uses, so the fact gate runs on every edit and
- * data/pdf-index.tsv points Apply at the edited PDF.
+ * data/pdf-index.tsv points Apply at the edited PDF. `indexed` is false when
+ * the render succeeded but the index still names another PDF.
  */
 export async function renderEditedPdf(load: Extract<StudioLoad, { ok: true }>, edits: StudioEdits): Promise<RenderOutcome> {
   const root = careerOpsRoot();
@@ -159,5 +160,6 @@ export async function renderEditedPdf(load: Extract<StudioLoad, { ok: true }>, e
   const warnings = render.stderr.split("\n").map((l: string) => l.trim()).filter(Boolean);
   const mark = await markTrackerReady({ spawnFn: spawn, execPath: process.execPath, root, reportNum: load.reportNum });
   if (!mark.ok) warnings.push(`PDF rendered, but the tracker's PDF column was not updated${mark.data?.error ? `: ${mark.data.error}` : "."}`);
-  return { ok: true, pdf: path.basename(editedPdf), warnings };
+  const index = await pdfPathStatusForReport(load.reportNum);
+  return { ok: true, pdf: path.basename(editedPdf), indexed: index.status === "found" && index.path === path.resolve(editedPdf), warnings };
 }
