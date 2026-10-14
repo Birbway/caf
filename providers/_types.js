@@ -198,6 +198,15 @@
  *                              A provider whose extra language versions cost extra
  *                              requests fetches them only when this is true; otherwise
  *                              the scan keeps one version per posting and drops the rest.
+ * @property {(language: string) => number} [preferredLanguageRank] Present only when
+ *                              portals.yml sets `preferred_languages`: the place of a
+ *                              language code in that list, best first, or -1 when it is
+ *                              not there. It compares codes by the scan's own rules
+ *                              (`en-GB` = `en`), so a provider passes its codes as the
+ *                              source names them. A provider that returns language
+ *                              versions selectively also returns the ranked ones, after
+ *                              each posting's default version; scan.mjs then keeps the
+ *                              best-ranked version where it keeps one per posting.
  */
 
 /**
