@@ -17,11 +17,18 @@ const SCRIPT = join(ROOT, 'followup-seed.mjs');
 
 // A throwaway sandbox: the invalid-date error is raised before any tracker is
 // opened, and pointing every path at a temp dir keeps the real workspace out of
-// the way. Returns { code, stdout, stderr }, like the other CLI suites.
+// the way. CAREER_OPS_ROOT and CAREER_OPS_PROFILE are pinned for the same
+// reason tests/helpers.mjs blanks CAREER_OPS_TRACKER: followup-seed.mjs resolves
+// the data root at module load (getCareerOpsRoot, line 88), so a developer whose
+// shell already exports one would have this child read their real data root and
+// profile. Pinning ROOT also outranks CAREER_OPS_DATA_DIR, the other alias that
+// resolver honours. Returns { code, stdout, stderr }, like the other CLI suites.
 function run(args) {
   const dir = mkdtempSync(join(tmpdir(), 'co-seed-json-'));
   const env = {
     ...process.env,
+    CAREER_OPS_ROOT: dir,
+    CAREER_OPS_PROFILE: join(dir, 'profile.yml'),
     CAREER_OPS_TRACKER: join(dir, 'applications.md'),
     CAREER_OPS_FOLLOWUPS: join(dir, 'follow-ups.md'),
     CAREER_OPS_FOLLOWUPS_LOCK: join(dir, `career-ops-followups-json-${Math.random().toString(36).slice(2)}.lock`),
