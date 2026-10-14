@@ -3,6 +3,8 @@ package data
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -89,6 +91,59 @@ func TestParseApplicationsReadsBatchFilesFromTheCheckout(t *testing.T) {
 		t.Fatalf("the data root must have no batch/ directory for this test, stat err = %v", err)
 	}
 	assertBatchTierURLs(t, dataRoot)
+}
+
+// writeStaleBatchDataRoot gives the data root its own batch files, whose URLs
+// differ from the checkout's, so a test can tell which copy was read.
+func writeStaleBatchDataRoot(t *testing.T, root string) {
+	t.Helper()
+	stale := func(s string) string { return strings.ReplaceAll(s, "jobs.example.com", "stale.example.com") }
+	writeTestFile(t, filepath.Join(root, "batch", "batch-input.tsv"), stale(batchInputFixture))
+	writeTestFile(t, filepath.Join(root, "batch", "batch-state.tsv"), stale(batchStateFixture))
+}
+
+func TestParseApplicationsPrefersCheckoutBatchFilesOverDataRootCopies(t *testing.T) {
+	t.Setenv("CAREER_OPS_TRACKER", "")
+
+	checkout := t.TempDir()
+	writeBatchCheckout(t, checkout)
+	dataRoot := t.TempDir()
+	writeBatchDataRoot(t, dataRoot)
+	writeStaleBatchDataRoot(t, dataRoot)
+	chdirForTest(t, checkout)
+
+	assertBatchTierURLs(t, dataRoot)
+}
+
+func TestParseApplicationsDoesNotFallBackWhenTheCheckoutBatchFileIsUnreadable(t *testing.T) {
+	// Only a missing checkout file falls back. Any other stat error must not
+	// swap in the data root's older copy.
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions do not block stat on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	t.Setenv("CAREER_OPS_TRACKER", "")
+
+	checkout := t.TempDir()
+	writeBatchCheckout(t, checkout)
+	dataRoot := t.TempDir()
+	writeBatchDataRoot(t, dataRoot)
+	writeStaleBatchDataRoot(t, dataRoot)
+	chdirForTest(t, checkout)
+
+	batchDir := filepath.Join(checkout, "batch")
+	if err := os.Chmod(batchDir, 0o000); err != nil {
+		t.Fatalf("chmod checkout batch/: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(batchDir, 0o755) })
+
+	for i, app := range mustParseApplications(t, dataRoot) {
+		if strings.Contains(app.JobURL, "stale.example.com") {
+			t.Errorf("row %d: JobURL = %q came from the data root's copy", i+1, app.JobURL)
+		}
+	}
 }
 
 func TestParseApplicationsReadsBatchFilesInTheDefaultLayout(t *testing.T) {

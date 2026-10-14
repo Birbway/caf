@@ -339,17 +339,18 @@ func ParseApplications(careerOpsPath string) ([]model.CareerApplication, error) 
 // CAREER_OPS_ROOT, CAREER_OPS_DATA_DIR or a .career-ops-data marker put the
 // data root somewhere else (#5115, #5116). Reading them only from the data
 // root found nothing under that layout, so rows that rely on the batch tiers
-// lost their job URL. The checkout's copy wins when it exists; otherwise the
-// data root's is used, which covers files kept there by hand and the case
-// where no checkout can be found. In the default layout both are the same
-// file.
+// lost their job URL. The checkout's copy wins when it exists. Only when it
+// does not exist is the data root's used, which covers files kept there by
+// hand and the case where no checkout can be found. Any other stat error
+// keeps the checkout path, so the read fails instead of picking up an older
+// copy from the data root. In the default layout both are the same file.
 //
 // A FindRepoRoot error is not reported here: main.go already warns about it
 // at startup, and the data root is the path this read used before.
 func batchFilePath(careerOpsPath, name string) string {
 	if root, err := FindRepoRoot(); err == nil && root != "" {
 		checkoutPath := filepath.Join(root, "batch", name)
-		if _, statErr := os.Stat(checkoutPath); statErr == nil {
+		if _, statErr := os.Stat(checkoutPath); !errors.Is(statErr, fs.ErrNotExist) {
 			return checkoutPath
 		}
 	}
