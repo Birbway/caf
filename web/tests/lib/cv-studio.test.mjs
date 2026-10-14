@@ -229,3 +229,24 @@ test("a summary section whose summary-text is not a div parses with no items", (
   assert.equal(summary.kind, "summary");
   assert.deepEqual(summary.items, []);
 });
+
+test("hiding a whole section drops it from the render and from the coverage", () => {
+  const { tree, doc } = studio();
+  const edits = studioReducer(emptyEdits("h1"), { type: "toggle", id: "s1" }, doc);
+  const { view, added, coverage } = resolveStudio(doc, edits);
+  const text = htmlText(renderBlocks(tree, view, { added }));
+  assert.equal(text.includes("Core Competencies"), false);
+  assert.equal(text.includes("Kubernetes"), false);
+  assert.deepEqual(coverage.missing, ["Kubernetes", "on-call"]);
+});
+
+test("an entry the tailor left without bullets offers no base bullets to restore", () => {
+  const html = HTML.replace(/<ul>\s*<li>Built NLP pipeline<\/li>\s*<\/ul>/, "");
+  const tree = parseBlocks(html);
+  const base = parseBaseCv(CV_MD, cvMarkdown);
+  const doc = buildStudioDoc({ tree, base, keywords: KEYWORDS, sourceHash: "h1", keywordsIn, itemText: () => "", fixedText: "" });
+  const entry = doc.sections[2].items[1];
+  assert.equal(entry.label.includes("DataStartup"), true);
+  assert.deepEqual(entry.bullets, []);
+  assert.deepEqual(entry.restorable, []);
+});

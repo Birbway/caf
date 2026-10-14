@@ -115,7 +115,7 @@ export function buildStudioDoc({ tree, base, keywords, sourceHash, keywordsIn, i
         label: item.label,
         ownKeywords,
         bullets: item.bullets.map((b, k) => bullet(b, pairs[k] === null ? null : originals[pairs[k]], scores[k])),
-        restorable: unused.map((j) => ({ text: originals[j], keywords: keywordsIn(originals[j]) })),
+        restorable: item.bullets.length ? unused.map((j) => ({ text: originals[j], keywords: keywordsIn(originals[j]) })) : [],
       };
     }),
   }));
