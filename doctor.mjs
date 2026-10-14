@@ -705,6 +705,7 @@ const USER_LAYER_PREREQS = [
   },
   {
     path: 'portals.yml',
+    env: 'CAREER_OPS_PORTALS',
     fix: [
       'Run: cp templates/portals.example.yml portals.yml',
       'Then customize with your target companies',
@@ -712,12 +713,22 @@ const USER_LAYER_PREREQS = [
   },
 ];
 
-function prereqPresent(root, path) {
-  return existsSync(join(root, ...path.split('/')));
+// The lane variables (CAREER_OPS_PORTALS, CAREER_OPS_PIPELINE) move one file
+// out of the data root, and the scanner reads them (path-resolver.mjs), so
+// doctor has to look where a scan would.
+const PORTALS_PREREQ = USER_LAYER_PREREQS.find(({ path }) => path === 'portals.yml');
+
+function prereqFile(root, { path, env }) {
+  return (env && process.env[env]) || join(root, ...path.split('/'));
 }
 
-function checkPrereq({ path, fix }) {
-  if (prereqPresent(projectRoot, path)) {
+function prereqPresent(root, prereq) {
+  return existsSync(prereqFile(root, prereq));
+}
+
+function checkPrereq(prereq) {
+  const { path, fix } = prereq;
+  if (prereqPresent(projectRoot, prereq)) {
     return { pass: true, label: `${path} found` };
   }
   return { warn: true, label: `${path} not found (user setup required)`, fix };
@@ -774,7 +785,7 @@ function checkAutoDir(name) {
 // verify-portals.mjs so there is one probing implementation. Network-bound,
 // hence opt-in.
 async function checkPortalSlugs(root) {
-  const portalsPath = join(root, 'portals.yml');
+  const portalsPath = prereqFile(root, PORTALS_PREREQ);
   if (!existsSync(portalsPath)) {
     return { pass: true, label: 'Portal entries: no portals.yml yet (skipped)' };
   }
@@ -828,18 +839,22 @@ Paste job URLs below as \`- [ ] {url}\` then run \`/career-ops pipeline\`.
 `;
 
 function checkPipelineFile() {
-  const filePath = join(projectRoot, 'data', 'pipeline.md');
+  const filePath = process.env.CAREER_OPS_PIPELINE || join(projectRoot, 'data', 'pipeline.md');
+  const shown = process.env.CAREER_OPS_PIPELINE ? filePath : 'data/pipeline.md';
   if (existsSync(filePath)) {
-    return { pass: true, label: 'data/pipeline.md ready' };
+    return { pass: true, label: `${shown} ready` };
   }
   try {
+    mkdirSync(dirname(filePath), { recursive: true });
     writeFileSync(filePath, PIPELINE_SKELETON, 'utf-8');
-    return { pass: true, label: 'data/pipeline.md ready (auto-created)' };
+    return { pass: true, label: `${shown} ready (auto-created)` };
   } catch {
     return {
       pass: false,
-      label: 'data/pipeline.md could not be created',
-      fix: 'Run: mkdir -p data && touch data/pipeline.md',
+      label: `${shown} could not be created`,
+      fix: process.env.CAREER_OPS_PIPELINE
+        ? `Run: mkdir -p "$(dirname "$CAREER_OPS_PIPELINE")" && touch "$CAREER_OPS_PIPELINE"`
+        : 'Run: mkdir -p data && touch data/pipeline.md',
     };
   }
 }
@@ -1112,7 +1127,7 @@ function checkPersonalization(root) {
 function titleFilterConflicts(root) {
   // Same override the scanner honours (scan.mjs PORTALS_PATH), so a diagnosis
   // describes the file a scan would actually read, not the default one.
-  const portalsPath = process.env.CAREER_OPS_PORTALS || join(root, 'portals.yml');
+  const portalsPath = prereqFile(root, PORTALS_PREREQ);
   if (!existsSync(portalsPath)) return null;
   let config;
   try {
@@ -1169,7 +1184,7 @@ function onboardingState(root) {
     }
   }
   const missing = USER_LAYER_PREREQS
-    .filter(({ path }) => !prereqPresent(root, path))
+    .filter((prereq) => !prereqPresent(root, prereq))
     .map(({ path }) => path);
 
   const { cli: activeCli, source: cliSource, warning: cliWarning } = resolveActiveCli();
