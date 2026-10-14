@@ -436,6 +436,7 @@ const SYSTEM_PATHS = [
   'calibrate.mjs',
   'upskill.mjs',
   'skill-extract.mjs',
+  'skip-blockers.mjs',
   'intake.mjs',
   'stats.mjs',
   'funnel-stages.mjs',
