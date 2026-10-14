@@ -7,6 +7,9 @@ import type { CvPayload, OutlineItem, StudioEdits } from "@/lib/cv-studio/edits.
 import { coverageModel } from "@/lib/keyword-coverage.mjs";
 import type { CoverageModel } from "@/lib/keyword-coverage.mjs";
 import { CoverageView } from "@/components/keyword-coverage";
+import { resolveCliId } from "@/lib/saved-cli";
+import { BulletRewrite, RewriteButton } from "./bullet-rewrite";
+import type { RewriteContext } from "./bullet-rewrite";
 
 type Version = { id: number; savedAt: string; edits: StudioEdits; pdf: string };
 type Loaded =
@@ -34,6 +37,11 @@ export function CvStudio({ n }: { n: string }) {
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveResult, setSaveResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [cliId, setCliId] = useState<string | null>(null);
+
+  useEffect(() => {
+    resolveCliId().then(setCliId);
+  }, []);
 
   useEffect(() => {
     fetch(`/api/cv-studio?n=${encodeURIComponent(n)}`)
@@ -90,6 +98,8 @@ export function CvStudio({ n }: { n: string }) {
   const { payload, versions, active } = loaded;
   const hidden = new Set(edits.hidden);
   const format = edits.format ?? (payload.page_format === "a4" ? "a4" : "letter");
+  const keywords = coverage?.model.tiers.filter((t) => t.key !== "covered").flatMap((t) => t.terms) ?? [];
+  const ai: RewriteContext | null = cliId ? { n, cliId, keywords, edits } : null;
   const dirty = JSON.stringify(edits) !== JSON.stringify(versions.find((v) => v.id === active)?.edits ?? emptyEdits());
 
   async function save() {
@@ -172,6 +182,7 @@ export function CvStudio({ n }: { n: string }) {
                   listPath={section.list}
                   edits={edits}
                   setEdits={setEdits}
+                  ai={ai}
                 />
               ))}
             </ul>
@@ -221,6 +232,7 @@ function Row({
   listPath,
   edits,
   setEdits,
+  ai,
   depth = 0,
 }: {
   item: OutlineItem;
@@ -230,11 +242,14 @@ function Row({
   listPath: string | null;
   edits: StudioEdits;
   setEdits: (e: StudioEdits) => void;
+  ai: RewriteContext | null;
   depth?: number;
 }) {
-  const [editing, setEditing] = useState(false);
   const off = hidden.has(item.id);
   const original = item.original;
+  const [editing, setEditing] = useState(false);
+  const [rewriting, setRewriting] = useState(false);
+  const rewritable = ai !== null && original !== undefined && /\.bullets\.\d+$/.test(item.id) && !off;
 
   return (
     <li className={depth ? "ml-5" : ""}>
@@ -267,8 +282,21 @@ function Row({
             </p>
           )}
           {item.detail && <p className="text-xs text-faint">{item.detail}</p>}
+          {rewriting && ai && original !== undefined && (
+            <BulletRewrite
+              id={item.id}
+              current={item.label}
+              ctx={ai}
+              onClose={() => setRewriting(false)}
+              onAccept={(text) => {
+                setEdits(setText(edits, item.id, text, original));
+                setRewriting(false);
+              }}
+            />
+          )}
         </div>
         <span className="flex shrink-0 gap-0.5 opacity-60 group-hover:opacity-100">
+          {rewritable && !editing && !rewriting && <RewriteButton label={item.label} onClick={() => setRewriting(true)} />}
           {original !== undefined && !editing && (
             <button aria-label={`Edit ${item.label}`} onClick={() => setEditing(true)} className="p-0.5 text-faint hover:text-brand">
               <Pencil className="size-3.5" />
@@ -289,7 +317,7 @@ function Row({
       {item.children && item.childList !== undefined && (
         <ul className="space-y-0.5">
           {item.children.map((child, k) => (
-            <Row key={child.id} item={child} hidden={hidden} index={k} count={item.children!.length} listPath={item.childList ?? null} edits={edits} setEdits={setEdits} depth={depth + 1} />
+            <Row key={child.id} item={child} hidden={hidden} index={k} count={item.children!.length} listPath={item.childList ?? null} edits={edits} setEdits={setEdits} ai={ai} depth={depth + 1} />
           ))}
         </ul>
       )}
