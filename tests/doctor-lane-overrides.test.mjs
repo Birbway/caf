@@ -48,6 +48,25 @@ test('doctor finds the portals.yml CAREER_OPS_PORTALS names', (t) => {
 test('doctor does not create a stray data/pipeline.md when CAREER_OPS_PIPELINE is set', (t) => {
   const { dataRoot, env } = fixture(t);
   const human = runDoctor(env);
-  assert.match(human.stdout, /✓ data\/pipeline\.md ready/);
+  const escaped = env.CAREER_OPS_PIPELINE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  assert.match(human.stdout, new RegExp(`✓ ${escaped} ready`));
+  assert.doesNotMatch(human.stdout, /✓ data\/pipeline\.md ready/);
+  assert.equal(existsSync(join(dataRoot, 'data', 'pipeline.md')), false);
+});
+
+test('doctor creates the CAREER_OPS_PIPELINE parent when the override file is missing', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'career-ops-lanes-miss-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dataRoot = join(dir, 'root');
+  mkdirSync(join(dataRoot, 'data'), { recursive: true });
+  const portals = join(dir, 'lanes', 'portals.yml');
+  mkdirSync(join(dir, 'lanes'));
+  copyFileSync(join(root, 'templates', 'portals.example.yml'), portals);
+  const pipeline = join(dir, 'deep', 'nested', 'pipeline.md');
+  const env = { CAREER_OPS_ROOT: dataRoot, CAREER_OPS_DATA_DIR: '', CAREER_OPS_PORTALS: portals, CAREER_OPS_PIPELINE: pipeline };
+  const human = runDoctor(env);
+  assert.equal(existsSync(pipeline), true, human.stdout + human.stderr);
+  const escaped = pipeline.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  assert.match(human.stdout, new RegExp(`${escaped} ready \\(auto-created\\)`));
   assert.equal(existsSync(join(dataRoot, 'data', 'pipeline.md')), false);
 });

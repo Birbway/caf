@@ -840,17 +840,21 @@ Paste job URLs below as \`- [ ] {url}\` then run \`/career-ops pipeline\`.
 
 function checkPipelineFile() {
   const filePath = process.env.CAREER_OPS_PIPELINE || join(projectRoot, 'data', 'pipeline.md');
+  const shown = process.env.CAREER_OPS_PIPELINE ? filePath : 'data/pipeline.md';
   if (existsSync(filePath)) {
-    return { pass: true, label: 'data/pipeline.md ready' };
+    return { pass: true, label: `${shown} ready` };
   }
   try {
+    mkdirSync(dirname(filePath), { recursive: true });
     writeFileSync(filePath, PIPELINE_SKELETON, 'utf-8');
-    return { pass: true, label: 'data/pipeline.md ready (auto-created)' };
+    return { pass: true, label: `${shown} ready (auto-created)` };
   } catch {
     return {
       pass: false,
-      label: 'data/pipeline.md could not be created',
-      fix: 'Run: mkdir -p data && touch data/pipeline.md',
+      label: `${shown} could not be created`,
+      fix: process.env.CAREER_OPS_PIPELINE
+        ? `Run: mkdir -p "$(dirname "$CAREER_OPS_PIPELINE")" && touch "$CAREER_OPS_PIPELINE"`
+        : 'Run: mkdir -p data && touch data/pipeline.md',
     };
   }
 }
