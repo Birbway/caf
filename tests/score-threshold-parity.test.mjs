@@ -18,8 +18,8 @@ const agents = readFileSync(join(ROOT, 'AGENTS.md'), 'utf-8');
 const threshold = agents.match(/Below (\d\.\d)\/5, explicitly recommend against applying/)?.[1];
 
 const sharedCopies = ['_shared.md', ...readdirSync(join(ROOT, 'modes'))
-  .map((dir) => join(dir, '_shared.md'))
-  .filter((rel) => rel !== '_shared.md' && existsSync(join(ROOT, 'modes', rel)))];
+  .map((dir) => `${dir}/_shared.md`)
+  .filter((rel) => existsSync(join(ROOT, 'modes', ...rel.split('/'))))];
 
 test('AGENTS.md states the threshold', () => {
   assert.equal(threshold, '4.0');
@@ -27,7 +27,7 @@ test('AGENTS.md states the threshold', () => {
 
 for (const rel of sharedCopies) {
   test(`modes/${rel} names the AGENTS.md threshold in its 3.5-3.9 band`, () => {
-    const src = readFileSync(join(ROOT, 'modes', rel), 'utf-8');
+    const src = readFileSync(join(ROOT, 'modes', ...rel.split('/')), 'utf-8');
     const band = src.split('\n').find((line) => /3\.5 ?[-–] ?3\.9/.test(line));
     if (!band) return;
     // The Russian band points at the threshold paragraph right after it.
