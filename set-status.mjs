@@ -902,13 +902,13 @@ if ((statusChanged || flags.repairFollowup) && newStatus === 'Applied') {
     const seed = await seedFollowup(target.num, {
       trackerPath: APPS_FILE,
       followupsPath: join(dirname(APPS_FILE), 'follow-ups.md'),
-      // The day the application was sent: --on, or today, the same day the
-      // status log records. Left unset, seedFollowup falls back to the
-      // tracker's date column, which is the evaluation date, so a row
-      // evaluated weeks ago got a follow-up that was already overdue. A repair
-      // retry keeps the seeder's own fallback because the apply happened on
-      // an earlier run.
-      date: flags.on ?? (statusChanged ? localToday() : undefined),
+      // --on is the day the user says the application was sent. Without it,
+      // a fresh transition passes today as the status-change date, which
+      // resolveAppliedDate ranks below an "Applied YYYY-MM-DD" in the notes and
+      // above the evaluation-date column. A repair retry passes neither,
+      // because the apply happened on an earlier run.
+      date: flags.on,
+      statusChangeDate: statusChanged ? localToday() : undefined,
       dryRun: flags.dryRun,
       // assumeApplied on a DRY RUN only, and deliberately not `force`.
       // seedFollowup refuses a row that is not Applied, and on a dry run the

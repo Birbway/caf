@@ -25,7 +25,7 @@ import { localToday } from '../lib/local-today.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
-function sandbox(status = 'Evaluated') {
+function sandbox(status = 'Evaluated', notes = 'notes') {
   const dir = mkdtempSync(join(tmpdir(), 'career-ops-seed-'));
   mkdirSync(join(dir, 'data'), { recursive: true });
   writeFileSync(join(dir, 'data', 'applications.md'), [
@@ -33,7 +33,7 @@ function sandbox(status = 'Evaluated') {
     '',
     '| # | Date | Company | Role | Score | Status | PDF | Report | Notes |',
     '|---|------|---------|------|-------|--------|-----|--------|-------|',
-    `| 7 | 2026-02-01 | Acme | Backend Engineer | 4.4/5 | ${status} | ✅ | [7](../reports/007-acme-2026-02-01.md) | notes |`,
+    `| 7 | 2026-02-01 | Acme | Backend Engineer | 4.4/5 | ${status} | ✅ | [7](../reports/007-acme-2026-02-01.md) | ${notes} |`,
     '',
   ].join('\n'));
   return dir;
@@ -177,6 +177,19 @@ test('--on anchors the follow-up on the day the application was really sent', ()
     );
   } finally {
     for (const d of [withOn, withoutOn]) rmSync(d, { recursive: true, force: true, maxRetries: 10 });
+  }
+});
+
+test('an apply date in the notes outranks today when --on is absent', () => {
+  const fromNotes = sandbox('Evaluated', 'Applied 2026-09-20');
+  const fromOn = sandbox();
+  try {
+    const noted = jsonOf(setStatus(fromNotes, ['--row', '7', 'Applied', '--json']));
+    const explicit = jsonOf(setStatus(fromOn, ['--row', '7', 'Applied', '--on', '2026-09-20', '--json']));
+    assert.equal(noted.followupSeeded.nextDate, explicit.followupSeeded.nextDate);
+  } finally {
+    rmSync(fromNotes, { recursive: true, force: true, maxRetries: 10 });
+    rmSync(fromOn, { recursive: true, force: true, maxRetries: 10 });
   }
 });
 

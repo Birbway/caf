@@ -168,10 +168,13 @@ export function isValidCalendarDate(str) {
  *
  * @param {{num?: number, notes?: string, date?: string}} row - Parsed tracker row.
  * @param {string|null|undefined} explicitDate - `--date` value, already validated.
- * @returns {{appliedDate: string, appDateSource: 'explicit'|'notes'|'evaluation-date'|'today'}}
+ * @param {string|null|undefined} [statusChangeDate] - The day a caller moved the row
+ *   to Applied. It ranks below the notes date, which the user wrote on purpose, and
+ *   above the evaluation-date column, which is only a proxy.
+ * @returns {{appliedDate: string, appDateSource: 'explicit'|'notes'|'status-change'|'evaluation-date'|'today'}}
  * @throws {SeedError} INVALID_DATE when the notes carry an impossible date.
  */
-export function resolveAppliedDate(row, explicitDate) {
+export function resolveAppliedDate(row, explicitDate, statusChangeDate) {
   if (explicitDate) return { appliedDate: explicitDate, appDateSource: 'explicit' };
   const notesDate = parseAppliedDate(row?.notes);
   if (notesDate) {
@@ -180,6 +183,7 @@ export function resolveAppliedDate(row, explicitDate) {
     }
     return { appliedDate: notesDate, appDateSource: 'notes' };
   }
+  if (statusChangeDate) return { appliedDate: statusChangeDate, appDateSource: 'status-change' };
   // Only a usable calendar date qualifies: a blank or malformed `date` cell
   // must not become a pin with a "null" next-date, which is the same failure
   // the notes branch throws over.
@@ -460,6 +464,7 @@ function appendPins(existingContent, pinLines) {
  * @param {number} appNum
  * @param {object} [options]
  * @param {string} [options.date] - Explicit apply date (YYYY-MM-DD), already validated.
+ * @param {string} [options.statusChangeDate] - The day the row moved to Applied, see resolveAppliedDate.
  * @param {boolean} [options.force] - Bypass idempotency guard and the Applied-status guard.
  * @param {boolean} [options.assumeApplied] - Relax the Applied-status guard ONLY, keeping
  *   idempotency intact. For a caller that is about to make the row Applied and wants a
@@ -559,7 +564,7 @@ export async function seedFollowup(appNum, options = {}) {
   // appDateSource travels with the result so a caller can tell a measured apply
   // date from a proxy or a guess — the same contract followup-cadence.mjs and
   // company-history.mjs already expose.
-  const { appliedDate, appDateSource } = resolveAppliedDate(row, options.date);
+  const { appliedDate, appDateSource } = resolveAppliedDate(row, options.date, options.statusChangeDate);
   const cadence = resolveCadenceConfig({ profilePath: options.profilePath });
   const nextDate = addDays(parseDate(appliedDate), cadence.applied_first);
   const setDate = todayStr();
