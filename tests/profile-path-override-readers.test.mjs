@@ -306,7 +306,7 @@ try {
     : failOnce(`updater: reexecProfileEnv() gave ${JSON.stringify(relEnv)} for a relative override from ${decoyCwd}`);
   /\.\.\.process\.env,\s*\.\.\.await reexecProfileEnv\(\),/.test(updaterSource)
     ? pass('updater: apply() spreads reexecProfileEnv() into the self-reexec child env after process.env (source check)')
-    : failOnce('updater: the self-reexec child env does not include reexecProfileEnv()');
+    : failOnce('updater: the self-reexec child env does not spread reexecProfileEnv() after process.env');
 
   // 4d. The skip warning for a profile the update cannot parse is printed by apply().
   // Deleting the print leaves the skip silent, and nothing else would notice.
@@ -326,8 +326,8 @@ try {
     env: { ...process.env, CAREER_OPS_ROOT: envWarnRoot, CAREER_OPS_DATA_DIR: '', CAREER_OPS_PROFILE: '' },
   });
   const envWarning = (JSON.parse(envWarnRun.stdout).warnings.find((w) => /\.env sets CAREER_OPS_PROFILE/.test(w))) ?? '';
-  /only scan\.mjs and the evaluators load \.env/.test(envWarning)
-    ? pass('doctor: the .env warning names the evaluators beside scan.mjs now that they follow the override')
+  /only scan\.mjs, the evaluators, openai-tailor\.mjs and openrouter-runner\.mjs load \.env/.test(envWarning)
+    ? pass('doctor: the .env warning names scan.mjs, the evaluators, openai-tailor.mjs and openrouter-runner.mjs as the .env loaders')
     : failOnce(`doctor: the .env warning is not true at this change: ${JSON.stringify(envWarning.slice(0, 160))}`);
 
   // 3c. cv-sync-check's advice for a missing profile. With an override that names a

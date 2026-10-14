@@ -375,8 +375,8 @@ if (REEXEC_FALLBACK_FILES.includes('cv-templates.mjs')
     if (JSON.stringify(tolerant.preservedPaths) === JSON.stringify(['templates/cv-template.alpha.html'])
         && tolerant.warnings.length === 1 && tolerant.warnings[0].includes(brokenProfile)
         && tolerant.warnings[0].split(brokenProfile).length === 2 && /not protected by this update/.test(tolerant.warnings[0])
-        && !/Fix the YAML/.test(tolerant.warnings[0]) && /\(\d+:\d+\)/.test(tolerant.warnings[0])) {
-      pass('an unparsable non-active profile is skipped with a warning that keeps the parser location, and the active profile still protects its variant');
+        && !/Fix the YAML/.test(tolerant.warnings[0]) && /\(\d+:\d+\)/.test(tolerant.warnings[0]) && !/\n/.test(tolerant.warnings[0])) {
+      pass('an unparsable non-active profile is skipped with a warning that keeps the parser location on one line, and the active profile still protects its variant');
     } else {
       fail(`unparsable non-active profile gave preserved ${JSON.stringify(tolerant.preservedPaths)} and warnings ${JSON.stringify(tolerant.warnings)}`);
     }
