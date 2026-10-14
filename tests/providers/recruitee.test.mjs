@@ -186,6 +186,102 @@ try {
     fail(`rows 1-2 = ${JSON.stringify(descOffers.slice(1))}`);
   }
 
+  // The list payload splits the body in two: `description` holds the
+  // introduction and `requirements` the tasks and candidate profile. Both reach
+  // the description, introduction first, so content_filter / visa_filter see
+  // the whole posting; either one alone is enough.
+  const bodyOffers = parseRecruiteeResponse(
+    {
+      offers: [
+        {
+          title: 'Both fields',
+          careers_url: 'https://x.recruitee.com/o/both',
+          description: '<p>Acme builds checkout software.</p>',
+          requirements: '<ul><li>Playwright and TypeScript</li><li>German is not required</li></ul>',
+        },
+        { title: 'Requirements only', careers_url: 'https://x.recruitee.com/o/req-only', description: '', requirements: '<p>API testing</p>' },
+        { title: 'Null requirements', careers_url: 'https://x.recruitee.com/o/null-req', description: '<p>Intro only</p>', requirements: null },
+      ],
+    },
+    'X',
+  );
+  if (bodyOffers[0]?.description === 'Acme builds checkout software. Playwright and TypeScript German is not required') {
+    pass('parseRecruiteeResponse joins description and requirements, introduction first');
+  } else {
+    fail(`both-fields description = ${JSON.stringify(bodyOffers[0]?.description)}`);
+  }
+  if (bodyOffers[1]?.description === 'API testing' && bodyOffers[2]?.description === 'Intro only') {
+    pass('parseRecruiteeResponse keeps a body carried by only one of description / requirements');
+  } else {
+    fail(`single-field descriptions = ${JSON.stringify(bodyOffers.slice(1).map(o => o.description))}`);
+  }
+
+  // ── postedAt from published_at ──
+  // Recruitee writes `YYYY-MM-DD HH:MM:SS UTC`; anything else is omitted
+  // rather than guessed.
+  const dateOffers = parseRecruiteeResponse(
+    {
+      offers: [
+        { title: 'Published', careers_url: 'https://x.recruitee.com/o/published', published_at: '2026-10-13 06:29:35 UTC' },
+        { title: 'Null date', careers_url: 'https://x.recruitee.com/o/null-date', published_at: null },
+        { title: 'Garbage date', careers_url: 'https://x.recruitee.com/o/garbage-date', published_at: 'yesterday' },
+        { title: 'Impossible date', careers_url: 'https://x.recruitee.com/o/impossible-date', published_at: '2026-13-45 06:29:35 UTC' },
+      ],
+    },
+    'X',
+  );
+  if (dateOffers[0]?.postedAt === Date.UTC(2026, 9, 13, 6, 29, 35)) {
+    pass('parseRecruiteeResponse reads published_at ("YYYY-MM-DD HH:MM:SS UTC") into postedAt epoch ms');
+  } else {
+    fail(`published postedAt = ${JSON.stringify(dateOffers[0]?.postedAt)}`);
+  }
+  if (dateOffers.slice(1).every(o => !('postedAt' in o))) {
+    pass('parseRecruiteeResponse omits postedAt for a null, malformed or impossible published_at');
+  } else {
+    fail(`bad-date rows = ${JSON.stringify(dateOffers.slice(1))}`);
+  }
+
+  // ── salary annualized by period ──
+  // Shapes observed on live tenants: string bounds, year / month / hour
+  // periods, a one-sided range, and a period-less object.
+  const salaryOffers = parseRecruiteeResponse(
+    {
+      offers: [
+        { title: 'Yearly', careers_url: 'https://x.recruitee.com/o/yearly', salary: { min: '60000', max: '70000', period: 'year', currency: 'EUR' } },
+        { title: 'Monthly', careers_url: 'https://x.recruitee.com/o/monthly', salary: { min: '5000', max: '6000', period: 'month', currency: 'eur' } },
+        { title: 'Hourly max only', careers_url: 'https://x.recruitee.com/o/hourly', salary: { min: null, max: '15', period: 'hour', currency: 'EUR' } },
+        { title: 'Min only', careers_url: 'https://x.recruitee.com/o/min-only', salary: { min: '80000', max: null, period: 'year', currency: 'EUR' } },
+        { title: 'No period', careers_url: 'https://x.recruitee.com/o/no-period', salary: { min: '60000', max: '70000', period: null, currency: 'EUR' } },
+        { title: 'Unknown period', careers_url: 'https://x.recruitee.com/o/unknown-period', salary: { min: '500', max: '600', period: 'fortnight', currency: 'EUR' } },
+        { title: 'Empty salary', careers_url: 'https://x.recruitee.com/o/empty', salary: { min: null, max: null, period: null, currency: null } },
+        { title: 'Non-numeric', careers_url: 'https://x.recruitee.com/o/non-numeric', salary: { min: 'competitive', max: '', period: 'year', currency: 'EUR' } },
+      ],
+    },
+    'X',
+  );
+  const salaryOf = (i) => JSON.stringify(salaryOffers[i]?.salary);
+  if (salaryOf(0) === JSON.stringify({ min: 60000, max: 70000, currency: 'EUR' })) {
+    pass('parseRecruiteeResponse keeps a yearly salary as is, string bounds read as numbers');
+  } else {
+    fail(`yearly salary = ${salaryOf(0)}`);
+  }
+  if (salaryOf(1) === JSON.stringify({ min: 60000, max: 72000, currency: 'EUR' })) {
+    pass('parseRecruiteeResponse annualizes a monthly salary (×12) and upper-cases the currency');
+  } else {
+    fail(`monthly salary = ${salaryOf(1)}`);
+  }
+  if (salaryOf(2) === JSON.stringify({ min: 31200, max: 31200, currency: 'EUR' })
+    && salaryOf(3) === JSON.stringify({ min: 80000, max: 80000, currency: 'EUR' })) {
+    pass('parseRecruiteeResponse annualizes an hourly salary (×2080) and fills a one-sided range from the other bound');
+  } else {
+    fail(`one-sided salaries = ${salaryOf(2)}, ${salaryOf(3)}`);
+  }
+  if (salaryOffers.slice(4).every(o => !('salary' in o))) {
+    pass('parseRecruiteeResponse omits salary with no period, an unknown period, or no numeric bound');
+  } else {
+    fail(`unusable salary rows = ${JSON.stringify(salaryOffers.slice(4).map(o => o.salary))}`);
+  }
+
   // ── Demo-tenant filtering (#4190) ──────────────────────────────────────────
   // Recruitee itself stamps "(Sample)" on its own seeded posting — captured
   // live, byte-identical, from two unrelated tenants (adecco, accenture).

@@ -169,11 +169,71 @@ function assembleLocation(j) {
   return [city, country, remote].filter(Boolean).join(', ');
 }
 
+// Recruitee publishes a timestamp as `YYYY-MM-DD HH:MM:SS UTC`, which is not an
+// ISO 8601 string, so it is rewritten to one before parsing rather than left to
+// Date.parse's implementation-defined handling of non-ISO input.
+const RECRUITEE_TIMESTAMP_RE = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) UTC$/;
+
+/**
+ * Epoch ms of a Recruitee timestamp, or undefined when absent or unparseable.
+ *
+ * @param {unknown} value
+ * @returns {number|undefined}
+ */
+function toEpochMs(value) {
+  if (typeof value !== 'string') return undefined;
+  const m = RECRUITEE_TIMESTAMP_RE.exec(value.trim());
+  if (!m) return undefined;
+  const parsed = Date.parse(`${m[1]}T${m[2]}Z`);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+// Annualization multipliers for the `salary.period` values Recruitee tenants
+// publish. A period not listed here, or none at all, leaves the salary off:
+// guessing a period would turn a monthly or hourly figure into a wrong annual one.
+const PERIOD_MULTIPLIERS = {
+  hour: 2080,
+  month: 12,
+  year: 1,
+};
+
+/**
+ * Annualized salary of an offer, or null when it carries no usable figure.
+ *
+ * Recruitee returns `salary: { min, max, period, currency }` with the bounds as
+ * strings (`"60000"`), either of them null, and every field null when the
+ * tenant publishes no salary. A one-sided range fills the other bound from it,
+ * like `ashby.mjs`'s parseCompensation.
+ *
+ * @param {any} salary
+ * @returns {{min: number, max: number, currency: string}|null}
+ */
+function parseSalary(salary) {
+  if (!salary || typeof salary !== 'object') return null;
+  const period = typeof salary.period === 'string' ? salary.period.trim().toLowerCase() : '';
+  if (!Object.hasOwn(PERIOD_MULTIPLIERS, period)) return null;
+  const multiplier = PERIOD_MULTIPLIERS[/** @type {keyof typeof PERIOD_MULTIPLIERS} */ (period)];
+  /** @param {unknown} v */
+  const toNumber = (v) => {
+    if (v == null || (typeof v === 'string' && v.trim() === '')) return null;
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n * multiplier : null;
+  };
+  const min = toNumber(salary.min);
+  const max = toNumber(salary.max);
+  if (min == null && max == null) return null;
+  const low = /** @type {number} */ (min ?? max);
+  const high = /** @type {number} */ (max ?? min);
+  const currency = typeof salary.currency === 'string' ? salary.currency.trim().toUpperCase() : '';
+  return { min: Math.min(low, high), max: Math.max(low, high), currency };
+}
+
 /**
  * Parse a Recruitee /api/offers/ response. Exported for unit tests.
  *
  * Recruitee returns:
- *   { offers: [{ title, careers_url?, url?, city?, country?, remote?, location?, locations? }] }
+ *   { offers: [{ title, careers_url?, url?, city?, country?, remote?, location?, locations?,
+ *                description?, requirements?, published_at?, salary? }] }
  *
  * - url: tries `careers_url` first, falling back to `url` when `careers_url`
  *   is absent or invalid — each candidate validated independently, so one bad
@@ -191,10 +251,16 @@ function assembleLocation(j) {
  *   name already says so), else the explicit `location` field plus `country`
  *   when it isn't already named there, else assembled
  *   from city/country, appending "Remote" when `remote` is true.
- * - description: Recruitee's list payload embeds each offer's full HTML body
- *   for free (same request — verified against a live board), so it is
- *   stripped to plain text here and feeds scan.mjs's content_filter /
- *   visa_filter. Omitted when the offer carries no usable body.
+ * - description: Recruitee's list payload embeds each offer's HTML body for
+ *   free (same request — verified against a live board) in two fields:
+ *   `description` (the introduction) and `requirements` (the tasks and the
+ *   candidate profile, usually the longer one). Both are joined in that order
+ *   and stripped to plain text here, so scan.mjs's content_filter /
+ *   visa_filter see the whole posting. Omitted when neither carries a body.
+ * - postedAt: `published_at` (`YYYY-MM-DD HH:MM:SS UTC`) → epoch ms; omitted
+ *   when absent or unparseable.
+ * - salary: `salary` annualized by its `period` (see parseSalary); omitted
+ *   when the offer states no figure or no known period.
  * - a posting Recruitee itself marks "(Sample)" in the title is dropped
  *   entirely (see isRecruiteeSamplePosting, #4190), so a tenant serving only
  *   its seeded sample posting resolves as empty rather than as a live board.
@@ -214,7 +280,7 @@ function assembleLocation(j) {
  *
  * @param {any} json
  * @param {string} companyName
- * @returns {Array<{title: string, url: string, company: string, location: string, description?: string}>}
+ * @returns {Array<{title: string, url: string, company: string, location: string, description?: string, postedAt?: number, salary?: {min: number, max: number, currency: string}}>}
  */
 export function parseRecruiteeResponse(json, companyName) {
   const offers = json?.offers;
@@ -252,7 +318,10 @@ export function parseRecruiteeResponse(json, companyName) {
     if (!url) continue;
 
     const location = assembleLocation(j);
-    const description = htmlToText(j.description);
+    const body = [j.description, j.requirements].filter(part => typeof part === 'string' && part.trim());
+    const description = htmlToText(body.join('\n'));
+    const postedAt = toEpochMs(j.published_at);
+    const salary = parseSalary(j.salary);
 
     out.push({
       title,
@@ -260,6 +329,8 @@ export function parseRecruiteeResponse(json, companyName) {
       location,
       company: companyName,
       ...(description ? { description } : {}),
+      ...(postedAt !== undefined ? { postedAt } : {}),
+      ...(salary ? { salary } : {}),
     });
   }
   return out;
