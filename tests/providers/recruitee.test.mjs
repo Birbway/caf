@@ -438,6 +438,37 @@ try {
     fail(`fetch language switch: default=${fetchedDefault.length}, all=${fetchedAll.length}`);
   }
 
+  // portals.yml preferred_languages reaches the provider as
+  // ctx.preferredLanguageRank. Without the switch, the preferred translations
+  // come back next to the default version, and no other language does.
+  const trilingual = {
+    ...bilingual,
+    translations: {
+      ...bilingual.translations,
+      fr: { title: 'Ingénieur QA senior (h/f)', description: '<p>Acme crée des logiciels.</p>', requirements: '<p>Playwright</p>' },
+    },
+  };
+  const rankOf = (...languages) => (language) => languages.indexOf(language);
+  const preferredOnly = parseRecruiteeResponse({ offers: [trilingual] }, 'Acme', { preferredLanguageRank: rankOf('fr') });
+  if (JSON.stringify(preferredOnly.map(v => v.language)) === JSON.stringify(['de', 'fr'])) {
+    pass('parseRecruiteeResponse with preferred languages returns the default version and the preferred one only');
+  } else {
+    fail(`preferred-only versions = ${JSON.stringify(preferredOnly.map(v => v.language))}`);
+  }
+  const noPreferredTranslation = parseRecruiteeResponse({ offers: [bilingual] }, 'Acme', { preferredLanguageRank: rankOf('fr') });
+  if (JSON.stringify(noPreferredTranslation.map(v => v.language)) === JSON.stringify(['de'])) {
+    pass('parseRecruiteeResponse with preferred languages returns the default version alone when no translation is preferred');
+  } else {
+    fail(`no preferred translation = ${JSON.stringify(noPreferredTranslation.map(v => v.language))}`);
+  }
+  const fetchedPreferred = await recruitee.fetch({ name: 'Acme', careers_url: 'https://acme.recruitee.com' },
+    { fetchJson: async () => ({ offers: [trilingual] }), preferredLanguageRank: rankOf('en') });
+  if (JSON.stringify(fetchedPreferred.map(v => v.language)) === JSON.stringify(['de', 'en'])) {
+    pass('recruitee.fetch() reads the preferred languages from ctx.preferredLanguageRank');
+  } else {
+    fail(`fetch preferred languages = ${JSON.stringify(fetchedPreferred.map(v => v.language))}`);
+  }
+
   // ── Demo-tenant filtering ──────────────────────────────────────────────────
   // Recruitee itself stamps "(Sample)" on its own seeded posting — captured
   // live, byte-identical, from two unrelated tenants (adecco, accenture).

@@ -54,7 +54,10 @@ export default {
     if (!apiUrl) throw new Error(`recruitee: cannot derive API URL for ${entry.name}`);
     assertRecruiteeUrl(apiUrl);
     const json = await ctx.fetchJson(apiUrl, { redirect: 'error' });
-    return parseRecruiteeResponse(json, entry.name, { allLanguages: ctx?.dedupIncludeLanguage === true });
+    return parseRecruiteeResponse(json, entry.name, {
+      allLanguages: ctx?.dedupIncludeLanguage === true,
+      preferredLanguageRank: typeof ctx?.preferredLanguageRank === 'function' ? ctx.preferredLanguageRank : null,
+    });
   },
 };
 
@@ -90,16 +93,19 @@ function withLanguage(url, language) {
  * no translation matches, the language is unknown and the offer comes back
  * once, from its top-level fields, with no `language`.
  *
- * Further translations are returned only when `allLanguages` is true. A
- * translation that would come out as the same Job text as a version already
- * returned — same trimmed title and same plain-text description — is a copy
- * under another label, not a translation, and is skipped.
+ * Further translations are returned when `allLanguages` is true; otherwise
+ * only those in a preferred language (`rank` ≥ 0), so scan.mjs can keep the
+ * preferred version over the default one. A translation that would come out as
+ * the same Job text as a version already returned — same trimmed title and
+ * same plain-text description — is a copy under another label, not a
+ * translation, and is skipped.
  *
  * @param {any} j - One offer.
  * @param {boolean} allLanguages
+ * @param {((language: string) => number)|null} rank - ctx.preferredLanguageRank, if set.
  * @returns {Array<{title: string, description: string, language?: string}>}
  */
-function languageVersions(j, allLanguages) {
+function languageVersions(j, allLanguages, rank) {
   const top = versionText(j.title, j.description, j.requirements);
   const translations = j.translations && typeof j.translations === 'object' ? j.translations : {};
   const entries = Object.entries(translations)
@@ -107,11 +113,12 @@ function languageVersions(j, allLanguages) {
   const defaultEntry = entries.find(([, t]) => t.title === j.title && t.description === j.description);
   if (!defaultEntry) return [top];
   const versions = [{ ...top, language: defaultEntry[0] }];
-  if (!allLanguages) return versions;
+  if (!allLanguages && !rank) return versions;
   const versionKey = (v) => JSON.stringify([v.title, v.description]);
   const seen = new Set([versionKey(top)]);
   for (const [code, t] of entries) {
     if (code === defaultEntry[0]) continue;
+    if (!allLanguages && /** @type {(language: string) => number} */ (rank)(code) < 0) continue;
     const version = versionText(t.title, t.description, t.requirements);
     if (!version.title || seen.has(versionKey(version))) continue;
     seen.add(versionKey(version));
@@ -355,8 +362,10 @@ function parseSalary(salary) {
  *   top-level fields. With `allLanguages` (scan_history.dedup_include_language)
  *   each further translation comes back as its own Job, after the default
  *   one, with its own title and description and the same location, date and
- *   salary. Every Job that carries a `language` carries it as `?lang=` on its
- *   URL too, so the language versions of one offer share a dedup key in
+ *   salary; without it, only the translations `preferredLanguageRank`
+ *   (portals.yml preferred_languages) ranks do. Every Job that carries a
+ *   `language` carries it as `?lang=` on its URL too, so the language
+ *   versions of one offer share a dedup key in
  *   scan.mjs and are told apart by `language`. The translations ship in the
  *   same response, so no request is added.
  * - a posting Recruitee itself marks "(Sample)" in the title is dropped
@@ -384,10 +393,10 @@ function parseSalary(salary) {
  *
  * @param {any} json
  * @param {string} companyName
- * @param {{allLanguages?: boolean}} [options]
+ * @param {{allLanguages?: boolean, preferredLanguageRank?: ((language: string) => number)|null}} [options]
  * @returns {Array<{title: string, url: string, company: string, location: string, description?: string, postedAt?: number, salary?: {min: number, max: number, currency: string}, language?: string}>}
  */
-export function parseRecruiteeResponse(json, companyName, { allLanguages = false } = {}) {
+export function parseRecruiteeResponse(json, companyName, { allLanguages = false, preferredLanguageRank = null } = {}) {
   const offers = json && typeof json === 'object' && Array.isArray(json.offers) ? json.offers : null;
   if (!offers) {
     const got = json && typeof json === 'object' ? Object.keys(json).join(', ') : typeof json;
@@ -429,7 +438,7 @@ export function parseRecruiteeResponse(json, companyName, { allLanguages = false
     const postedAt = toEpochMs(j.published_at);
     const salary = parseSalary(j.salary);
 
-    for (const version of languageVersions(j, allLanguages)) {
+    for (const version of languageVersions(j, allLanguages, preferredLanguageRank)) {
       out.push({
         title: version.title,
         url: version.language ? withLanguage(url, version.language) : url,
