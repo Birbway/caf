@@ -82,6 +82,7 @@ import {
   parseDate,
   addDays,
 } from './followup-cadence.mjs';
+import { flagValue } from './lib/cli-flags.mjs';
 import { getCareerOpsRoot, canonicalizeTrackerPath, resolveTrackerPath as sharedResolveTrackerPath } from './path-resolver.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 
@@ -689,15 +690,29 @@ export async function seedBackfill(options = {}) {
 
 // --- CLI ---------------------------------------------------------------
 
+const USAGE = `Usage:
+  node followup-seed.mjs <appNum> [--date YYYY-MM-DD] [--force] [--dry-run] [--json]
+  node followup-seed.mjs --backfill [--force] [--dry-run] [--json]
+
+  --date <YYYY-MM-DD>  override applied date (single-app only)
+  --backfill           seed all Applied rows lacking pins/logs
+  --force              re-seed even if already pinned/logged
+  --dry-run            compute without writing follow-ups.md
+  --json               machine-readable JSON output
+  --help, -h           print this and exit`;
+
 function parseCliArgs(argv) {
-  const opts = { force: false, dryRun: false, json: false, backfill: false, date: null, appNum: null };
+  const opts = { force: false, dryRun: false, json: false, backfill: false, date: null, appNum: null, help: false };
   const positionals = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--date') {
-      i++;
-      if (argv[i] === undefined) throw new SeedError('USAGE', '--date requires a value');
-      opts.date = argv[i];
+    if (a === '--date' || a.startsWith('--date=')) {
+      const val = flagValue(argv.slice(i, i + 2), '--date');
+      if (val === undefined) throw new SeedError('USAGE', '--date requires a value');
+      opts.date = val;
+      if (a === '--date') i++;
+    } else if (a === '--help' || a === '-h') {
+      opts.help = true;
     } else if (a === '--force') {
       opts.force = true;
     } else if (a === '--dry-run') {
@@ -712,6 +727,8 @@ function parseCliArgs(argv) {
       positionals.push(a);
     }
   }
+
+  if (opts.help) return opts;
 
   if (opts.backfill) {
     if (positionals.length !== 0) {
@@ -794,6 +811,11 @@ async function main() {
   } catch (err) {
     failWith(EXIT_CODES[err.code] ?? 1, err.code || 'USAGE', err.message);
     return;
+  }
+
+  if (opts.help) {
+    console.log(USAGE);
+    process.exit(0);
   }
 
   try {
