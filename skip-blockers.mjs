@@ -26,7 +26,7 @@ const UNMET = new Set(['missing', 'partial']);
 // A requirement that names a skill from skill-extract.mjs groups under the
 // skill first. Anything else that matches no theme groups by its own wording.
 const THEMES = [
-  ['People management', /\bpeople manage|\bmanag(?:e|es|ed|ing)\s+(?:\S+\s+){0,2}(?:teams?|engineers|managers|people|direct reports)\b|\bdirect reports\b/i],
+  ['People management', /\b(?:people|team) manage|\bmanag(?:e|es|ed|ing)\s+(?:\S+\s+){0,2}(?:teams?|engineers|managers|people|direct reports)\b|\bdirect reports\b/i],
   ['Pre-sales', /\bpre-?sales\b/i],
   ['Security clearance', /\bclearance\b|\bTS\/SCI\b/i],
   ['PhD', /\bph\.?d\b|\bdoctorate\b/i],
@@ -61,7 +61,7 @@ export function blockerGroups(requirement) {
  */
 export function rankSkipBlockers(reports, { window = SKIP_WINDOW, minSkips = 2, limit = 5 } = {}) {
   const recent = reports
-    .filter((r) => SKIP_STATES.has(r.state) && r.requirements.length > 0)
+    .filter((r) => SKIP_STATES.has(r.state))
     .sort((a, b) => b.date.localeCompare(a.date) || b.num - a.num)
     .slice(0, window);
 

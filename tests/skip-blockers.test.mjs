@@ -26,10 +26,12 @@ const report = (num, date, state, score, requirements) => ({ num, date, state, s
 check('a tool name groups under its skill, a known theme under the theme, the rest under its wording', [
   blockerGroups('Production Kubernetes at scale (EKS or GKE)'),
   blockerGroups('Five years managing ML teams'),
+  blockerGroups('Team management'),
   blockerGroups('Enterprise pre-sales experience'),
   blockerGroups('Distributed  training on GPUs'),
 ], [
   [{ key: 'skill:Kubernetes', label: 'Kubernetes', kind: 'skill' }],
+  [{ key: 'theme:People management', label: 'People management', kind: 'theme' }],
   [{ key: 'theme:People management', label: 'People management', kind: 'theme' }],
   [{ key: 'theme:Pre-sales', label: 'Pre-sales', kind: 'theme' }],
   [{ key: 'requirement:distributed training on gpus', label: 'Distributed training on GPUs', kind: 'requirement' }],
@@ -47,17 +49,18 @@ check('project management is not people management', blockerGroups('Project mana
     report(6, '2026-09-06', 'skip', 2.2, []),
     report(7, '2026-08-01', 'skip', 3.6, [req('Kubernetes in production', 'high', 'partial')]),
   ];
-  const result = rankSkipBlockers(reports, { window: 4 });
-  check('ranks blockers across the newest skips that carry requirement data', result, {
-    window: 4,
-    skips: 4,
+  const result = rankSkipBlockers(reports, { window: 5 });
+  check('ranks blockers across the newest skips', result, {
+    window: 5,
+    skips: 5,
     blockers: [
       { label: 'Kubernetes', kind: 'skill', skips: 2, missing: 1, partial: 1, closeCalls: 1, reports: [2, 1], wordings: ['CKA or equivalent Kubernetes depth', 'Running Kubernetes clusters', 'Kubernetes operators in production'], nudge: 'evidence' },
       { label: 'People management', kind: 'theme', skips: 2, missing: 2, partial: 0, closeCalls: 1, reports: [3, 1], wordings: ['Managing managers', 'People management of 6+ engineers'], nudge: 'learn' },
     ],
   });
 
-  check('a wider window reaches the older skip', rankSkipBlockers(reports, { window: 5 }).blockers[0].reports, [2, 1, 7]);
+  check('a skip without requirement rows still takes its window slot', rankSkipBlockers(reports, { window: 4 }), { window: 4, skips: 4, blockers: [] });
+  check('a wider window reaches the older skip', rankSkipBlockers(reports, { window: 6 }).blockers[0].reports, [2, 1, 7]);
 }
 
 check('parses requirement rows and drops malformed ones', parseRequirementImportance([
