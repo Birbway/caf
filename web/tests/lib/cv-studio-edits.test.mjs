@@ -79,4 +79,11 @@ test("outline lists sections with labels the user recognizes", () => {
   assert.deepEqual(sections.map((s) => s.key), ["summary", "competencies", "experience", "education", "skills"]);
   assert.equal(sections[2].items[0].label, "Senior Platform Engineer · Northwind Labs");
   assert.equal(sections[2].items[0].detail, "2022 - Present");
+  assert.equal(sections[2].items[0].childList, "experience.0.bullets");
+});
+
+test("outline shows edited text and keeps the generated text beside it", () => {
+  const edits = setText(emptyEdits(), "competencies.1", "Golang", "Go");
+  const item = outline(payload, edits).find((s) => s.key === "competencies").items[1];
+  assert.deepEqual(item, { id: "competencies.1", label: "Golang", original: "Go" });
 });

@@ -18,7 +18,15 @@
  * @property {PageFormat | null} format
  */
 
-/** @typedef {{ id: string, label: string, detail?: string, children?: OutlineItem[] }} OutlineItem */
+/**
+ * @typedef {Object} OutlineItem
+ * @property {string} id
+ * @property {string} label - Text as the CV shows it, edits applied.
+ * @property {string} [original] - Generated text, set on items the user can rewrite.
+ * @property {string} [detail]
+ * @property {string} [childList] - List path of `children`, for reordering them.
+ * @property {OutlineItem[]} [children]
+ */
 /** @typedef {{ key: string, title: string, list: string | null, items: OutlineItem[] }} OutlineSection */
 
 /** @returns {StudioEdits} */
@@ -79,7 +87,7 @@ export function outline(payload, edits = emptyEdits()) {
   const titles = { ...SECTION_TITLES, ...(payload.sections ?? {}) };
   const sections = [];
   if (typeof payload.summary === "string" && payload.summary.trim()) {
-    sections.push({ key: "summary", title: titles.summary, list: null, items: [{ id: "summary", label: edits.text.summary ?? payload.summary }] });
+    sections.push({ key: "summary", title: titles.summary, list: null, items: [{ id: "summary", label: edits.text.summary ?? payload.summary, original: payload.summary }] });
   }
   for (const [key, spec] of Object.entries(LISTS)) {
     const entries = Array.isArray(payload[key]) ? payload[key] : [];
@@ -87,13 +95,17 @@ export function outline(payload, edits = emptyEdits()) {
     const items = orderOf(edits, key, entries.length).map((i) => {
       const id = `${key}.${i}`;
       const entry = entries[i];
-      const item = { id, label: String(spec.label(entry) ?? ""), detail: spec.detail?.(entry) || undefined };
+      /** @type {OutlineItem} */
+      const item = typeof entry === "string"
+        ? { id, label: edits.text[id] ?? entry, original: entry }
+        : { id, label: String(spec.label(entry) ?? ""), detail: spec.detail?.(entry) || undefined };
       if (spec.children) {
         const kids = childList(entry, spec.children);
         const listPath = `${id}.${spec.children}`;
+        item.childList = listPath;
         item.children = orderOf(edits, listPath, kids.length).map((k) => {
           const kidId = `${listPath}.${k}`;
-          return { id: kidId, label: edits.text[kidId] ?? kids[k] };
+          return { id: kidId, label: edits.text[kidId] ?? kids[k], original: kids[k] };
         });
       }
       return item;
