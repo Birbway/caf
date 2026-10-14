@@ -1795,7 +1795,7 @@ main() {
         break
       fi
 
-      if (( PARALLEL > 1 )) && [[ -f "$THROTTLE_FILE" ]]; then
+      if (( PARALLEL > 1 )) && [[ -f "${THROTTLE_FILE:-}" ]]; then
         PARALLEL=1
         echo "=== Rate limited: running the remaining offers on 1 worker. ==="
       fi
