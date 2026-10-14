@@ -76,7 +76,7 @@ try {
 
   check('an archive pointer that leaves jds/ is not read', () => {
     writeFileSync(join(dir, 'outside.md'), 'Kubernetes and Docker\n');
-    const r = run('## Job Description (archived verbatim)\nSee jds/../outside.md for the full archive (archive-posting.mjs --report=007).\n');
+    const r = run('## Job Description (archived verbatim)\nSee jds/../Kubernetes.md for the full archive (archive-posting.mjs --report=007).\n');
     assert.equal(r.status, 1);
     assert.equal(r.stdout, '');
   });
