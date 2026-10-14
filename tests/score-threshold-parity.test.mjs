@@ -30,7 +30,8 @@ for (const rel of sharedCopies) {
     const src = readFileSync(join(ROOT, 'modes', rel), 'utf-8');
     const band = src.split('\n').find((line) => /3\.5 ?[-–] ?3\.9/.test(line));
     if (!band) return;
-    const after = src.slice(src.indexOf(band), src.indexOf(band) + band.length + 800);
-    assert.ok(after.includes(threshold), band);
+    // The Russian band points at the threshold paragraph right after it.
+    const scope = rel === 'ru/_shared.md' ? src.slice(src.indexOf(band), src.indexOf(band) + band.length + 800) : band;
+    assert.ok(scope.includes(threshold), band);
   });
 }
