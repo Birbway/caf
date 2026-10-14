@@ -41,6 +41,8 @@ test("findApplication matches a zero-padded id the same way findReportFile does"
 test("findApplication returns null for a non-numeric or unknown id", () => {
   withTracker(() => {
     assert.equal(findApplication("abc"), null);
+    assert.equal(findApplication("7abc"), null);
+    assert.equal(findApplication("7.5"), null);
     assert.equal(findApplication("99"), null);
     assert.equal(findApplication(""), null);
   });
