@@ -55,36 +55,41 @@
 # scan_history:
 #   dedup_include_location: true
 
-# -- Language versions of one posting (optional, opt-in) --
+# -- Language-aware duplicate roles (optional, opt-in) --
 # An employer can publish one requisition in more than one language (for
 # example German and English), with the same title and location in each. By
 # default those are ONE role and the scan keeps whichever version the ATS
-# returned first — usually the posting's default language.
+# returned first — usually the posting's default language; to choose which
+# version that is, see preferred_languages below.
 #
-# preferred_languages names the languages you want a posting in, best first.
-# Where a posting has a version in one of them, the scan keeps that version;
-# otherwise it keeps the default one, as before. Use it when you apply in some
-# languages and discard the rest (for example, skip every JD written in German):
-# you get the English version of a posting that has one, and still one row per
-# posting. Regional variants count as one language (en-GB equals en).
+# Set dedup_include_language: true when you read several languages and want
+# every version of a posting, each as its own row. Regional variants count as
+# one language (en-GB equals en), and a posting whose language the ATS doesn't
+# report is compared as before.
 #
-# preferred_languages: [en]
-#
-# Set dedup_include_language: true instead (or as well) when you read several
-# languages and want every version of a posting, each as its own row; the
-# preferred languages then come first. A posting whose language the ATS
-# doesn't report is compared as before.
+# Some ATSes (Personio, Recruitee) serve every language version of a posting
+# under one URL. With the switch off they return each posting once, in its own
+# default language (plus the preferred_languages versions, below); with it on
+# they return every version — Personio at one extra request per further
+# language, Recruitee from the response it already fetches.
 #
 # scan_history:
 #   dedup_include_language: true
+
+# -- Preferred posting languages (optional) --
+# The languages you want a posting in, best first. Where a posting has a
+# version in one of them, the scan keeps that version; otherwise it keeps the
+# default one, as before. Use it when you apply in some languages and discard
+# the rest (for example, skip every JD written in German): you get the English
+# version of a posting that has one, and still one row per posting. With
+# dedup_include_language on as well, every version is kept and the preferred
+# ones come first. Regional variants count as one language (en-GB equals en).
 #
-# Some ATSes (Personio, Recruitee) serve every language version of a posting
-# under one URL. With neither setting they return each posting once, in its
-# own default language. With preferred_languages they also return the version
-# in a preferred language — Personio at one extra request per preferred
-# language, Recruitee from the response it already fetches. With
-# dedup_include_language they return every version. A `?language=xx` on one
-# Personio careers_url overrides preferred_languages for that entry.
+# Personio fetches one more careers page per preferred language; Recruitee
+# needs no extra request. A `?language=xx` on one Personio careers_url
+# overrides this list for that entry.
+#
+# preferred_languages: [en]
 
 # -- Interamt.de searches (optional, German public sector) --
 # Read by scan-interamt.mjs (`npm run scan:interamt`), a separate Playwright
@@ -1920,7 +1925,7 @@ search_queries:
 # reads the public no-auth careers page (XML feed at /xml as the fallback).
 # Postings come back in their own default language; to get them in another
 # language wherever a posting has one, set the top-level preferred_languages
-# (see "Language versions of one posting" above) rather than a per-entry param:
+# (see "Preferred posting languages" above) rather than a per-entry param:
 #
 #   - name: Example GmbH
 #     careers_url: https://example-gmbh.jobs.personio.de/
