@@ -189,6 +189,7 @@ test("archetype IT operations bucket matches admin as a word", () => {
 
 test("archetype buckets match ai and pm as words, not inside other words", () => {
   assert.equal(canonicalizeArchetype("Supply Chain Product Manager"), "Product & Program Mgmt");
+  assert.equal(canonicalizeArchetype("GenAI Product Manager"), "Technical AI PM");
   assert.equal(canonicalizeArchetype("Software Development"), "Other / Cross-Functional");
   assert.equal(canonicalizeArchetype("Domain Expert"), "Other / Cross-Functional");
   assert.equal(canonicalizeArchetype("AI PM"), "Technical AI PM");

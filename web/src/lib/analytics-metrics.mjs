@@ -141,7 +141,7 @@ export function canonicalizeArchetype(raw) {
   if (value.includes("solutions architect") || value.includes("forward deployed") || value.includes("deployment architect")) return "AI Solutions & FDE";
   // "ai" and "pm" are whole words here: as substrings they match "supply chain"
   // and "development", which sent unrelated roles into the PM buckets.
-  const hasAi = /\bai\b/.test(value);
+  const hasAi = /\b(gen)?ai\b/.test(value);
   const hasPm = /\bpm\b/.test(value);
   if (value.includes("technical ai pm") || (hasAi && hasPm) || (hasAi && value.includes("product manager"))) return "Technical AI PM";
   if (value.includes("llmops") || value.includes("mlops") || value.includes("platform") || value.includes("infrastructure")) return "AI Platform & LLMOps";
