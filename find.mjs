@@ -28,6 +28,7 @@ import { readFileSync, existsSync, statSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { resolveColumns, parseTrackerRow } from './tracker-parse.mjs';
+import { validateFlags } from './lib/cli-flags.mjs';
 import { resolvePdfIndexPath, resolveWorkspaceRootFor, pathIsInside, pathIsInsideCanonical } from './tracker-utils.mjs';
 import { roleFuzzyMatch } from './role-matcher.mjs';
 import { getCareerOpsRoot, resolveTrackerPath } from './path-resolver.mjs';
@@ -190,18 +191,7 @@ const USAGE = `Usage:
 
 function parseArgs(argv) {
   const args = argv.slice(2);
-
-  if (args.includes('--help') || args.includes('-h')) {
-    console.log(USAGE);
-    process.exit(0);
-  }
-
-  const unknownFlags = args.filter(a => a.startsWith('-') && !KNOWN_FLAGS.includes(a));
-  if (unknownFlags.length) {
-    console.error(`Error: unrecognized flag(s): ${unknownFlags.join(', ')}. Valid flags: ${KNOWN_FLAGS.join(', ')}`);
-    console.error(USAGE);
-    process.exit(1);
-  }
+  validateFlags(args, KNOWN_FLAGS, USAGE);
 
   const json = args.includes('--json');
   const query = args.filter(a => a !== '--json').join(' ').trim();
