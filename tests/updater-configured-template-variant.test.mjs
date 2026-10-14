@@ -30,7 +30,7 @@
  * independent exemption instead of relying on the preservedPaths detour.
  */
 
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { pass, fail } from './helpers.mjs';
@@ -380,24 +380,20 @@ if (REEXEC_FALLBACK_FILES.includes('cv-templates.mjs')
     } else {
       fail(`unparsable non-active profile gave preserved ${JSON.stringify(tolerant.preservedPaths)} and warnings ${JSON.stringify(tolerant.warnings)}`);
     }
-    // An unreadable profile is not a YAML error, and the warning must say what it was.
-    if (process.getuid?.() !== 0) {
-      const lockedProfile = join(root, 'locked.yml');
-      writeFileSync(lockedProfile, 'cv:\n  template: gamma\n', 'utf-8');
-      chmodSync(lockedProfile, 0o000);
-      try {
-        const locked = await snapshotConfiguredTemplateVariantsAcrossProfiles({
-          dataRoot: root, profilePaths: [overrideProfile, lockedProfile], remoteFiles,
-          readRemoteContent: (file) => `<p>upstream ${file}</p>`,
-        });
-        if (locked.warnings.length === 1 && /EACCES/.test(locked.warnings[0]) && !/could not be parsed/.test(locked.warnings[0]) && /could not be loaded/.test(locked.warnings[0])) {
-          pass('an unreadable non-active profile is reported with its real reason, not as a YAML error');
-        } else {
-          fail(`unreadable non-active profile gave warnings ${JSON.stringify(locked.warnings)}`);
-        }
-      } finally {
-        chmodSync(lockedProfile, 0o600);
-      }
+    // An unreadable profile is not a YAML error, and the warning must say what it
+    // was. A directory where the file should be fails to read on every platform
+    // (chmod 000 does nothing on Windows), with the code EISDIR.
+    const unreadableProfile = join(root, 'unreadable.yml');
+    mkdirSync(unreadableProfile);
+    const unreadable = await snapshotConfiguredTemplateVariantsAcrossProfiles({
+      dataRoot: root, profilePaths: [overrideProfile, unreadableProfile], remoteFiles,
+      readRemoteContent: (file) => `<p>upstream ${file}</p>`,
+    });
+    if (unreadable.warnings.length === 1 && /EISDIR/.test(unreadable.warnings[0])
+        && /could not be loaded/.test(unreadable.warnings[0]) && !/could not be parsed/.test(unreadable.warnings[0])) {
+      pass('an unreadable non-active profile is reported with its real reason, not as a YAML error');
+    } else {
+      fail(`unreadable non-active profile gave warnings ${JSON.stringify(unreadable.warnings)}`);
     }
     let activeRejected = false;
     try {
