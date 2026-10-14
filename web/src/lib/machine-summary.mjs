@@ -89,3 +89,21 @@ export function scoreLevers(s) {
     strengths: s.strengths,
   };
 }
+
+/**
+ * @typedef {{ decision: string, plus: string | null, minus: string | null }} CardReason
+ */
+
+/**
+ * The one-line reason a Today card shows: the evaluator's call, the strongest
+ * match, and the biggest thing holding the score down.
+ * @param {string} report
+ * @returns {CardReason | null}
+ */
+export function cardReason(report) {
+  const s = readMachineSummary(report);
+  if (!s) return null;
+  const { holding, close } = scoreLevers(s);
+  const reason = { decision: s.decision, plus: s.strengths[0] ?? null, minus: (holding[0] ?? close[0])?.text ?? null };
+  return reason.decision || reason.plus || reason.minus ? reason : null;
+}

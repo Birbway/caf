@@ -11,6 +11,7 @@ import type { DiscoveredOffer } from "@/lib/explore";
 import { DiscoveryCard } from "@/components/explore/discovery-card";
 import { FollowUpCard, type FollowUp } from "@/components/home/follow-up-card";
 import { DecisionCard } from "@/components/home/decision-card";
+import type { CardReason } from "@/lib/machine-summary.mjs";
 import { QuickEvaluate } from "@/components/quick-evaluate";
 import { FollowupsDueSectionSkeleton } from "@/components/page-loading-skeletons";
 import { scoreNum } from "@/lib/format";
@@ -24,10 +25,12 @@ import { resolveHeroState, mayClaimAllClear, showsQueue, missingSourceLabel, dis
 // canonical files — every action dispatches a real registry action / route.
 export function TodayDashboard({
   applications,
+  reasons,
   inbox,
   inBetween,
 }: {
   applications: Application[];
+  reasons: Record<string, CardReason>;
   inbox: Pick<InboxJob, "url" | "done">[];
   inBetween: boolean;
 }) {
@@ -233,7 +236,7 @@ export function TodayDashboard({
         <Section icon={CircleHelp} title="Awaiting your decision" hint="Scored — apply or skip">
           <div className="grid gap-2.5 sm:grid-cols-2">
             {awaiting.map((a) => (
-              <DecisionCard key={a.n} app={a} />
+              <DecisionCard key={a.n} app={a} reason={reasons[a.n]} />
             ))}
           </div>
         </Section>

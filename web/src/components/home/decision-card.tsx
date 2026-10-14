@@ -9,10 +9,18 @@ import { CompanyLogo } from "@/components/company-logo";
 import { scoreNum, scoreTone } from "@/lib/format";
 import { companyPresentation } from "@/lib/company-presentation.mjs";
 import type { Application } from "@/lib/career-ops";
+import type { CardReason } from "@/lib/machine-summary.mjs";
+
+const DECISION_TONE: Record<string, string> = {
+  Apply: "text-emerald-600 dark:text-emerald-400",
+  Consider: "text-sky-600 dark:text-sky-400",
+  "Research first": "text-amber-600 dark:text-amber-400",
+  Skip: "text-muted",
+};
 
 // Awaiting-decision row: a scored role with no terminal status. Primary action
 // opens the report (PDF + Apply live there). Skip / Applied still write status.
-export function DecisionCard({ app }: { app: Application }) {
+export function DecisionCard({ app, reason }: { app: Application; reason?: CardReason }) {
   const router = useRouter();
   const [busy, setBusy] = useState<"" | "Applied" | "Discarded">("");
   const [done, setDone] = useState<string | null>(null);
@@ -54,6 +62,13 @@ export function DecisionCard({ app }: { app: Application }) {
           </span>
         )}
       </div>
+      {reason && (
+        <div data-testid="card-reason" className="space-y-0.5 text-xs leading-snug">
+          {reason.decision && <p className={cn("font-medium", DECISION_TONE[reason.decision] ?? "text-muted")}>{reason.decision}</p>}
+          {reason.plus && <p className="line-clamp-1 text-muted"><span className="text-emerald-600 dark:text-emerald-400">+</span> {reason.plus}</p>}
+          {reason.minus && <p className="line-clamp-1 text-muted"><span className="text-red-600 dark:text-red-400">−</span> {reason.minus}</p>}
+        </div>
+      )}
       <div className="flex items-center gap-2">
         {/* Primary is the report (PDF + Apply live there). Marking Applied from
             Today skipped that path and wrote a status with no application. */}

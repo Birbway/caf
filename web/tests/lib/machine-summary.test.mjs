@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readMachineSummary, scoreLevers } from "../../src/lib/machine-summary.mjs";
+import { cardReason, readMachineSummary, scoreLevers } from "../../src/lib/machine-summary.mjs";
 
 const report = (yaml) => `# Evaluation: Northwind Labs -- Platform Engineer
 
@@ -92,4 +92,25 @@ test("requirements with an unknown importance band are dropped", () => {
     importance: "high"
     match: "missing"`));
   assert.deepEqual(s.requirements, [{ requirement: "SQL", importance: "high", match: "missing" }]);
+});
+
+test("a card reason names the call, the top strength, and the top blocker", () => {
+  assert.deepEqual(cardReason(full), {
+    decision: "Consider",
+    plus: "Five years of Python services",
+    minus: "Requires on-site in a city outside the profile",
+  });
+});
+
+test("a card reason falls back to a close call when nothing is missing", () => {
+  const r = cardReason(report(`final_decision: "Apply"
+requirement_importance:
+  - requirement: "Mentoring"
+    importance: "high"
+    match: "partial"`));
+  assert.deepEqual(r, { decision: "Apply", plus: null, minus: "Mentoring" });
+});
+
+test("a report without a summary gives no card reason", () => {
+  assert.equal(cardReason("# Evaluation: Old -- Role\n"), null);
 });
