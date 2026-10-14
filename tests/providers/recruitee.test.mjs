@@ -263,6 +263,8 @@ try {
         { title: 'Null date', careers_url: 'https://x.recruitee.com/o/null-date', published_at: null },
         { title: 'Garbage date', careers_url: 'https://x.recruitee.com/o/garbage-date', published_at: 'yesterday' },
         { title: 'Impossible date', careers_url: 'https://x.recruitee.com/o/impossible-date', published_at: '2026-13-45 06:29:35 UTC' },
+        { title: 'February 30', careers_url: 'https://x.recruitee.com/o/february-30', published_at: '2026-02-30 06:29:35 UTC' },
+        { title: 'Hour 24', careers_url: 'https://x.recruitee.com/o/hour-24', published_at: '2026-10-13 24:00:00 UTC' },
       ],
     },
     'X',
@@ -273,7 +275,7 @@ try {
     fail(`published postedAt = ${JSON.stringify(dateOffers[0]?.postedAt)}`);
   }
   if (dateOffers.slice(1).every(o => !('postedAt' in o))) {
-    pass('parseRecruiteeResponse omits postedAt for a null, malformed or impossible published_at');
+    pass('parseRecruiteeResponse omits postedAt for a null, malformed or impossible published_at, including a day or hour that Date.UTC would roll over (Feb 30, 24:00)');
   } else {
     fail(`bad-date rows = ${JSON.stringify(dateOffers.slice(1))}`);
   }

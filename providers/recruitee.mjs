@@ -170,12 +170,13 @@ function assembleLocation(j) {
 }
 
 // Recruitee publishes a timestamp as `YYYY-MM-DD HH:MM:SS UTC`, which is not an
-// ISO 8601 string, so it is rewritten to one before parsing rather than left to
+// ISO 8601 string, so its components are read directly rather than left to
 // Date.parse's implementation-defined handling of non-ISO input.
-const RECRUITEE_TIMESTAMP_RE = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) UTC$/;
+const RECRUITEE_TIMESTAMP_RE = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}) UTC$/;
 
 /**
- * Epoch ms of a Recruitee timestamp, or undefined when absent or unparseable.
+ * Epoch ms of a Recruitee timestamp, or undefined when absent, malformed, or
+ * not a real calendar date and time.
  *
  * @param {unknown} value
  * @returns {number|undefined}
@@ -184,8 +185,17 @@ function toEpochMs(value) {
   if (typeof value !== 'string') return undefined;
   const m = RECRUITEE_TIMESTAMP_RE.exec(value.trim());
   if (!m) return undefined;
-  const parsed = Date.parse(`${m[1]}T${m[2]}Z`);
-  return Number.isNaN(parsed) ? undefined : parsed;
+  const [year, month, day, hour, minute, second] = m.slice(1).map(Number);
+  const ms = Date.UTC(year, month - 1, day, hour, minute, second);
+  // Date.UTC rolls an impossible value over (Feb 30 → Mar 2, 24:00 → the next
+  // day) instead of returning NaN, so every component has to survive the round
+  // trip unchanged.
+  const d = new Date(ms);
+  if (
+    d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day
+    || d.getUTCHours() !== hour || d.getUTCMinutes() !== minute || d.getUTCSeconds() !== second
+  ) return undefined;
+  return ms;
 }
 
 // Annualization multipliers for the `salary.period` values Recruitee tenants
@@ -258,7 +268,7 @@ function parseSalary(salary) {
  *   and stripped to plain text here, so scan.mjs's content_filter /
  *   visa_filter see the whole posting. Omitted when neither carries a body.
  * - postedAt: `published_at` (`YYYY-MM-DD HH:MM:SS UTC`) → epoch ms; omitted
- *   when absent or unparseable.
+ *   when absent, malformed, or not a real calendar date and time.
  * - salary: `salary` annualized by its `period` (see parseSalary); omitted
  *   when the offer states no figure or no known period.
  * - a posting Recruitee itself marks "(Sample)" in the title is dropped
