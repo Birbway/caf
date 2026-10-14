@@ -16,6 +16,7 @@ import {
   isLeadSection,
   isVerdictHeading,
   splitSections,
+  sectionPreview,
   verdictReason,
 } from "../../src/lib/report-sections.mjs";
 
@@ -241,4 +242,15 @@ test("applyCtaQuiet: below the apply line or caution legitimacy", () => {
   assert.equal(applyCtaQuiet({ score: 3.3 }), true);
   assert.equal(applyCtaQuiet({ score: 4.5, legitimacy: "Proceed with Caution" }), true);
   assert.equal(applyCtaQuiet({ score: 4.5, legitimacy: "Legitimate" }), false);
+});
+
+test("sectionPreview summarizes a field table without markdown residue", () => {
+  const md = "| Field | Value |\n|---|---|\n| **Remote** | Seattle, WA |\n| **Comp** | $238k-$278k |\n| **TL;DR** | Fictional role at Monarch AI |";
+  assert.equal(sectionPreview(md), "Remote: Seattle, WA · Comp: $238k-$278k · TL;DR: Fictional role at Monarch AI");
+});
+
+test("sectionPreview prefers prose next to a table and counts a wide table", () => {
+  assert.equal(sectionPreview("| A | B |\n|---|---|\n| x | y |\n\nStrong fit overall. More detail."), "Strong fit overall.");
+  assert.equal(sectionPreview("| Gap | Severity | Mitigation |\n|---|---|---|\n| SQL | Low | Course |\n| K8s | Mid | Lab |"), "2 rows");
+  assert.equal(sectionPreview("| # | Situation | S | T | A | R | STAR story |\n|---|---|---|---|---|---|---|\n| 1 | a | b | c | d | e | f |"), "1 interview story");
 });
