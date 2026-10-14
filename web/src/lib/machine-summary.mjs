@@ -82,9 +82,14 @@ function byImportance(rows, match) {
  * @returns {ScoreLevers}
  */
 export function scoreLevers(s) {
+  const partial = byImportance(s.requirements, "partial");
+  const listed = new Set(partial.map((r) => r.text.toLowerCase()));
   return {
     holding: [...s.hardStops.map((text) => ({ text, importance: null })), ...byImportance(s.requirements, "missing")],
-    close: byImportance(s.requirements, "partial"),
+    close: [
+      ...partial,
+      ...s.softGaps.filter((text) => !listed.has(text.toLowerCase())).map((text) => ({ text, importance: null })),
+    ],
     verify: [...s.confidenceGaps, ...s.unknownEvidence.map((label) => `${label} evidence is unknown`)],
     strengths: s.strengths,
   };

@@ -114,3 +114,21 @@ requirement_importance:
 test("a report without a summary gives no card reason", () => {
   assert.equal(cardReason("# Evaluation: Old -- Role\n"), null);
 });
+
+test("a soft gap is a close call when nothing else holds the score down", () => {
+  const summary = report(`final_decision: "Apply"
+soft_gaps:
+  - "Light on people management"
+  - "On-call leadership"
+requirement_importance:
+  - requirement: "On-call leadership"
+    importance: "high"
+    match: "partial"`);
+  assert.deepEqual(scoreLevers(readMachineSummary(summary)).close, [
+    { text: "On-call leadership", importance: "high" },
+    { text: "Light on people management", importance: null },
+  ]);
+  assert.equal(cardReason(report(`final_decision: "Apply"
+soft_gaps:
+  - "Light on people management"`)).minus, "Light on people management");
+});
