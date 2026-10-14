@@ -55,13 +55,17 @@ export function KeywordCoverage({ reportId }: { reportId: string }) {
     );
   }
 
+  return <CoverageView model={model} className="mt-8" />;
+}
+
+export function CoverageView({ model, className = "", caption = "this JD vs your CV", children }: { model: CoverageModel; className?: string; caption?: string; children?: React.ReactNode }) {
+  // Stated, not hidden: "no keywords block" is a fact about this report that
+  // tells the reader what to do next, and silently omitting the panel would
+  // read as the check having passed.
   if (!model.available) {
-    // Stated, not hidden: "no keywords block" is a fact about this report that
-    // tells the reader what to do next, and silently omitting the panel would
-    // read as the check having passed.
     return (
-      <section className="mt-8 rounded-2xl border border-border bg-surface/40 px-5 py-4">
-        <Header />
+      <section className={`rounded-2xl border border-border bg-surface/40 px-5 py-4 ${className}`}>
+        <Header caption={caption} />
         <p className="mt-2 text-sm text-muted">{REASON_COPY[model.reason ?? "unavailable"] ?? REASON_COPY.unavailable}</p>
       </section>
     );
@@ -70,8 +74,8 @@ export function KeywordCoverage({ reportId }: { reportId: string }) {
   const band = coverageBand(model.coveragePct);
 
   return (
-    <section className="mt-8 rounded-2xl border border-border bg-surface/40 px-5 py-4">
-      <Header />
+    <section className={`rounded-2xl border border-border bg-surface/40 px-5 py-4 ${className}`}>
+      <Header caption={caption} />
 
       <div className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span className={`text-3xl tabular-nums ${BAND_CLASS[band]}`}>
@@ -108,6 +112,8 @@ export function KeywordCoverage({ reportId }: { reportId: string }) {
         )}
       </div>
 
+      {children}
+
       <p className="mt-4 text-xs text-faint">
         Diagnostic only — nothing here edits your CV. Reformulate what you genuinely have; never add a keyword you cannot
         back up.
@@ -116,12 +122,12 @@ export function KeywordCoverage({ reportId }: { reportId: string }) {
   );
 }
 
-function Header() {
+function Header({ caption }: { caption: string }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <ScanSearch className="size-4 text-brand" />
       <h2 className="font-display text-base text-landing">ATS keyword coverage</h2>
-      <span className="text-xs text-faint">this JD vs your CV</span>
+      <span className="text-xs text-faint">{caption}</span>
     </div>
   );
 }

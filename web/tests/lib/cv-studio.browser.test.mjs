@@ -51,3 +51,20 @@ test("hide, reorder, and save a tailored CV in CV Studio", { skip: !url || !root
   assert.equal(Buffer.compare(await served.body(), v1), 0, "the apply flow now serves the saved version");
   assert.deepEqual(errors, []);
 });
+
+test("keyword coverage follows the edits and names a keyword an edit removed", { skip: !url || !root, timeout: 120_000 }, async (t) => {
+  const { chromium } = await import("playwright-core");
+  const browser = await chromium.launch({ channel: "chrome", headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  await page.goto(new URL("/pipeline/7/cv", url).href);
+  const panel = page.locator("section").filter({ hasText: "this JD vs this version" });
+  await panel.getByText("found in your CV").waitFor({ timeout: 30_000 });
+  const before = await panel.innerText();
+  assert.match(before, /4 of 6 JD keywords found in your CV/);
+
+  await page.getByRole("button", { name: "Leave out Observability" }).click();
+  await page.getByText("Your edits removed Observability.").waitFor({ timeout: 15_000 });
+  assert.match(await panel.innerText(), /3 of 6 JD keywords found in your CV/);
+  if (shots) await page.screenshot({ path: path.join(shots, "studio-coverage.png"), fullPage: true });
+});

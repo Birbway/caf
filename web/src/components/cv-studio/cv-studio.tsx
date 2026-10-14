@@ -4,6 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, Check, Eye, EyeOff, Loader2, Pencil, RotateCcw } from "lucide-react";
 import { changeCount, emptyEdits, moveItem, outline, setText, toggleHidden } from "@/lib/cv-studio/edits.mjs";
 import type { CvPayload, OutlineItem, StudioEdits } from "@/lib/cv-studio/edits.mjs";
+import { coverageModel } from "@/lib/keyword-coverage.mjs";
+import type { CoverageModel } from "@/lib/keyword-coverage.mjs";
+import { CoverageView } from "@/components/keyword-coverage";
 
 type Version = { id: number; savedAt: string; edits: StudioEdits; pdf: string };
 type Loaded =
@@ -27,6 +30,7 @@ export function CvStudio({ n }: { n: string }) {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" });
   const [edits, setEdits] = useState<StudioEdits>(emptyEdits());
   const [html, setHtml] = useState<string | null>(null);
+  const [coverage, setCoverage] = useState<{ model: CoverageModel; dropped: string[] } | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveResult, setSaveResult] = useState<{ ok: boolean; message: string } | null>(null);
@@ -58,6 +62,7 @@ export function CvStudio({ n }: { n: string }) {
         .then((d) => {
           if (d.html) {
             setHtml(d.html);
+            setCoverage({ model: coverageModel(d.coverage), dropped: Array.isArray(d.coverage?.dropped) ? d.coverage.dropped : [] });
             setPreviewError(null);
           } else setPreviewError(d.error ?? "Preview failed.");
         })
@@ -126,6 +131,16 @@ export function CvStudio({ n }: { n: string }) {
           <p role={saveResult.ok ? "status" : "alert"} className={saveResult.ok ? "text-sm text-emerald-700 dark:text-emerald-400" : "text-sm text-red-600"}>
             {saveResult.message}
           </p>
+        )}
+
+        {coverage && (
+          <CoverageView model={coverage.model} caption="this JD vs this version">
+            {coverage.dropped.length > 0 && (
+              <p role="status" className="mt-3 text-sm text-foreground">
+                Your edits removed {coverage.dropped.join(", ")}. Bring back a line that mentions {coverage.dropped.length === 1 ? "it" : "them"}, or reword one you kept.
+              </p>
+            )}
+          </CoverageView>
         )}
 
         <fieldset className="flex items-center gap-2 text-sm">
