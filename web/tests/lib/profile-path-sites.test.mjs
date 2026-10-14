@@ -26,6 +26,7 @@ const { loadProfileTargets, readScanTimeoutMs } = await import("../../src/lib/co
 const { POST: updateProfile } = await import("../../src/app/api/profile/route.ts");
 const { GET: readCadence, POST: updateCadence } = await import("../../src/app/api/followups/cadence/route.ts");
 const { resolvePdfPaths } = await import("../../src/lib/pdf-paths.mjs");
+const { readFollowupsEnabled } = await import("../../src/lib/followups-server.ts");
 
 const PROFILE_A = `candidate:
   full_name: Alpha Person
@@ -48,6 +49,8 @@ scan:
   timeout_seconds: 222
 followup_cadence:
   applied_first_days: 2
+follow_ups:
+  enabled: false
 `;
 
 /** A data root with A at config/profile.yml and B in a sibling directory. */
@@ -201,4 +204,10 @@ test("doctorState still reports the profile missing when the override file does 
     },
     { writeB: false },
   );
+});
+
+test("readFollowupsEnabled reads the override profile", async () => {
+  await withProfiles(() => {
+    assert.equal(readFollowupsEnabled(), false);
+  });
 });
