@@ -160,7 +160,7 @@ export function AssistantConsole() {
   const feedbackId = useId();
   const latestReplyIndex = messages.findLastIndex((m) => m.role === "assistant");
   const latestReply = messages[latestReplyIndex];
-  const pendingConfirmations = latestReply?.parts.filter((p) => p.type === "confirm" && p.state === "pending").length ?? 0;
+  const pendingConfirmations = messages.reduce((count, m) => count + (m.role === "assistant" ? m.parts.filter((p) => p.type === "confirm" && p.state === "pending").length : 0), 0);
   const confirmationText = pendingConfirmations ? ` ${pendingConfirmations} ${pendingConfirmations === 1 ? "action needs" : "actions need"} confirmation.` : "";
   const feedbackText = requestFeedback?.phase === "working" ? `Processing your request.${confirmationText}`
     : requestFeedback?.phase === "error" ? "Request failed. Review the error."
@@ -570,6 +570,7 @@ export function AssistantConsole() {
       confirmRuns.current.set(cid, res.run);
       appendParts([{ type: "confirm", cid, summary: res.summary, state: "pending" }]);
     }
+    return res.status !== "ignored" || Boolean(res.note?.trim());
   }
 
   function resolveConfirm(cid: string, accept: boolean) {
@@ -647,6 +648,8 @@ export function AssistantConsole() {
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let acc = "";
+      let display = "";
+      let hasActionOutput = false;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -655,7 +658,7 @@ export function AssistantConsole() {
         const { complete, hidePartialFrom } = parseEnvelopes(acc);
         const cuts: [number, number][] = complete.map((e) => [e.start, e.end]);
         if (hidePartialFrom >= 0) cuts.push([hidePartialFrom, acc.length]);
-        let display = removeRanges(acc, cuts);
+        display = removeRanges(acc, cuts);
 
         // back-compat shims (strip + queue) on the cleaned text
         const shimNavs: string[] = [];
@@ -680,24 +683,26 @@ export function AssistantConsole() {
           } catch {
             continue;
           }
-          runDispatch(e.id, args);
+          hasActionOutput = runDispatch(e.id, args) || hasActionOutput;
         }
         for (const p of shimNavs) {
           const k = `go:${p}`;
           if (!shimsDone.has(k)) {
             shimsDone.add(k);
-            runDispatch("navigate", { path: p });
+            hasActionOutput = runDispatch("navigate", { path: p }) || hasActionOutput;
           }
         }
         for (const f of shimRems) {
           const k = `rem:${f}`;
           if (f && !shimsDone.has(k)) {
             shimsDone.add(k);
-            runDispatch("remember", { fact: f });
+            hasActionOutput = runDispatch("remember", { fact: f }) || hasActionOutput;
           }
         }
       }
-      if (!acc.trim()) {
+      // Hidden/truncated envelopes are wire data, not a usable reply. A valid
+      // action-only response still counts, without approving its confirmation.
+      if (!display.trim() && !hasActionOutput) {
         failed = true;
         setStreamText("_(no output — is the CLI authenticated?)_");
       }
@@ -920,12 +925,15 @@ export function AssistantConsole() {
               {feedbackText && <p id={feedbackId} className="text-muted">{feedbackText}</p>}
               <div className="flex flex-wrap gap-x-3 gap-y-1">
                 {!busy && latestReply?.parts.some((p) => p.type !== "text" || p.text.trim()) && (
-                  <button type="button" aria-describedby={feedbackText ? feedbackId : undefined} onClick={() => latestReplyRef.current?.focus()} className="text-brand-text underline">
+                  <button type="button" aria-describedby={feedbackText ? feedbackId : undefined} onClick={() => {
+                    latestReplyRef.current?.focus({ preventScroll: true });
+                    latestReplyRef.current?.scrollIntoView({ block: "start", behavior: "instant" });
+                  }} className="text-brand-text underline">
                     {requestFeedback?.phase === "error" ? "Review error" : "Read latest reply"}
                   </button>
                 )}
                 {pendingConfirmations > 0 && (
-                  <button type="button" onClick={() => latestReplyRef.current?.querySelector<HTMLElement>('[data-assistant-confirmation="pending"]')?.focus()} className="text-brand-text underline">
+                  <button type="button" onClick={() => scrollRef.current?.querySelector<HTMLElement>('[data-assistant-confirmation="pending"]')?.focus()} className="text-brand-text underline">
                     Review pending actions
                   </button>
                 )}

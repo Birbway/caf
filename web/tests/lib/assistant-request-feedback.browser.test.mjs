@@ -73,9 +73,15 @@ test("request feedback is transition-only, quiet when closed and user-navigated"
     await until(() => page.getByRole("button", { name: "Send", exact: true }).isEnabled());
     await page.keyboard.press("Enter");
     if (text !== "failure") {
-      await until(async () => (await status.innerText()) === "Processing your request.");
+      await until(async () => (await status.innerText()).startsWith("Processing your request."));
       await until(() => replies.has(text));
     }
+  }
+  async function hasLiveReply() {
+    return latest.evaluate((el) => Boolean(
+      el.closest('[aria-live], [role="status"], [role="alert"], [role="log"]') ||
+      el.querySelector('[aria-live], [role="status"], [role="alert"], [role="log"]')
+    ));
   }
   async function notices() { return page.evaluate(() => window.__assistantNotices); }
   async function watchStatus() {
@@ -99,19 +105,40 @@ test("request feedback is transition-only, quiet when closed and user-navigated"
   await page.getByText("First chunk. More text.", { exact: true }).waitFor();
   assert.deepEqual(await notices(), ["Processing your request."]);
   assert.equal(await focused(input), true);
-  assert.equal(await latest.locator('[aria-live], [role="status"], [role="alert"]').count(), 0);
+  assert.equal(await hasLiveReply(), false);
   replies.get("normal").end();
   await until(async () => (await status.innerText()) === "Reply ready.");
   assert.deepEqual(await notices(), ["Processing your request.", "Reply ready."]);
+  await latest.evaluate(async (el) => {
+    const viewport = el.parentElement;
+    let previous = -1;
+    let stable = 0;
+    while (stable < 5) {
+      await new Promise(requestAnimationFrame);
+      stable = viewport.scrollTop === previous ? stable + 1 : 0;
+      previous = viewport.scrollTop;
+    }
+  });
   await page.keyboard.press("Tab");
   assert.equal(await focused(page.getByRole("button", { name: "Read latest reply", exact: true })), true);
   await page.keyboard.press("Enter");
   assert.equal(await focused(latest), true);
-  assert.equal(await latest.evaluate((el) => {
+  await until(() => latest.evaluate((el) => {
     const viewport = el.parentElement.getBoundingClientRect();
     const reply = el.getBoundingClientRect();
     return reply.top >= viewport.top - 2 && reply.top < viewport.top + 40;
-  }), true, "deliberate reading starts at the top of a long reply");
+  })); // Wait for smooth scrolling to settle at the deliberate reading position.
+
+  // Prove the guard catches live semantics on the reply, its ancestors and
+  // a log descendant, then restore the DOM before testing actual behavior.
+  await latest.evaluate((el) => el.setAttribute("aria-live", "polite"));
+  assert.equal(await hasLiveReply(), true);
+  await latest.evaluate((el) => { el.removeAttribute("aria-live"); el.parentElement.setAttribute("aria-live", "polite"); });
+  assert.equal(await hasLiveReply(), true);
+  await latest.evaluate((el) => { el.parentElement.removeAttribute("aria-live"); const log = document.createElement("div"); log.setAttribute("role", "log"); log.dataset.testLiveGuard = ""; el.append(log); });
+  assert.equal(await hasLiveReply(), true);
+  await latest.evaluate((el) => el.querySelector("[data-test-live-guard]").remove());
+  assert.equal(await hasLiveReply(), false);
 
   await send("cards");
   replies.get("cards").write('Review the proposals.\n<<act:setStatus {"n":"11","status":"Interview"}>>\n<<act:setStatus {"n":"12","status":"Rejected"}>>');
@@ -132,6 +159,26 @@ test("request feedback is transition-only, quiet when closed and user-navigated"
   assert.equal((await notices()).length, countBeforeDecision, "card result focus does not also generate a request announcement");
   assert.deepEqual(writes, []);
 
+  // An unresolved proposal belongs to the conversation, not just its latest
+  // reply. A new request must preserve access without approving anything.
+  await send("follow-up");
+  await until(async () => (await status.innerText()) === "Processing your request. 1 action needs confirmation.");
+  replies.get("follow-up").end("A separate reply.");
+  await until(async () => (await status.innerText()) === "Reply ready. 1 action needs confirmation.");
+  await tabTo(page.getByRole("button", { name: "Review pending actions", exact: true }));
+  await page.keyboard.press("Enter");
+  const earlierCard = page.getByRole("group", { name: "Mark #12 → Rejected?", exact: true });
+  assert.equal(await focused(earlierCard), true);
+  const pendingTree = await cdp.send("Accessibility.getFullAXTree");
+  assert.ok(pendingTree.nodes.some((n) => !n.ignored && n.role?.value === "group" && n.name?.value === "Mark #12 → Rejected?" && n.properties?.some((p) => p.name === "focused" && p.value.value === true)));
+  assert.deepEqual(writes, [], "revisiting an earlier proposal must not approve it");
+  const beforeEarlierCancel = (await notices()).length;
+  await tabTo(page.getByRole("button", { name: "Cancel: Mark #12 → Rejected?", exact: true }));
+  await page.keyboard.press("Enter");
+  await until(async () => (await page.getByRole("button", { name: "Review pending actions", exact: true }).count()) === 0);
+  assert.equal((await notices()).length, beforeEarlierCancel);
+  assert.deepEqual(writes, []);
+
   await send("failure");
   await page.getByText("⚠️ Fixture unavailable", { exact: true }).waitFor();
   await until(async () => (await status.innerText()) === "Request failed. Review the error.");
@@ -141,6 +188,37 @@ test("request feedback is transition-only, quiet when closed and user-navigated"
   await send("empty"); replies.get("empty").end();
   await until(async () => (await status.innerText()) === "Request failed. Review the error.");
   assert.equal((await notices()).filter((n) => n === "Request failed. Review the error.").length, 2, "an empty response is not reported ready");
+
+  for (const [message, response] of [
+    ["partial-action", "<<act:setStatus "],
+    ["partial-opener", "<<act:set"],
+    ["malformed-action", "<<act:setStatus {broken}>>"],
+  ]) {
+    await send(message);
+    const beforeFinish = (await notices()).length;
+    replies.get(message).end(response);
+    await until(async () => (await status.innerText()) === "Request failed. Review the error.");
+    assert.deepEqual((await notices()).slice(beforeFinish), ["Request failed. Review the error."]);
+    await tabTo(page.getByRole("button", { name: "Review error", exact: true }));
+    await page.keyboard.press("Enter");
+    assert.equal(await focused(latest), true);
+    assert.match(await latest.innerText(), /no output/);
+  }
+  await send("visible-partial");
+  replies.get("visible-partial").end("Useful visible reply. <<act:setStatus ");
+  await until(async () => (await status.innerText()) === "Reply ready.");
+  assert.equal((await latest.innerText()).trim(), "Useful visible reply.");
+  await send("action-only");
+  replies.get("action-only").end('<<act:setStatus {"n":"13","status":"Interview"}>>');
+  await until(async () => (await status.innerText()) === "Reply ready. 1 action needs confirmation.");
+  assert.deepEqual(writes, [], "valid action-only output still requires human confirmation");
+  await tabTo(page.getByRole("button", { name: "Review pending actions", exact: true }));
+  await page.keyboard.press("Enter");
+  assert.equal(await focused(page.getByRole("group", { name: "Mark #13 → Interview?", exact: true })), true);
+  await tabTo(page.getByRole("button", { name: "Cancel: Mark #13 → Interview?", exact: true }));
+  await page.keyboard.press("Enter");
+  await until(async () => (await page.getByRole("button", { name: "Review pending actions", exact: true }).count()) === 0);
+  assert.deepEqual(writes, []);
 
   await send("closed");
   await page.keyboard.press("Escape");
