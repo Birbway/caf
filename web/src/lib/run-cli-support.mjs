@@ -451,3 +451,23 @@ export function killMsForKind(kind) {
 export function timeoutMessage(killMs, kind) {
   return `This run passed the ${Math.round(killMs / 1000)}s time limit and was stopped before it could finish — re-run it, or run a very long ${kind} on Claude Code directly. The CLI was working; we cut it off, so it isn't recorded as a result.`;
 }
+
+/**
+ * Structured CLIs stream each assistant message as text deltas with nothing
+ * between messages. A tool call ends a message, so the next text starts on a new
+ * line. Without the break, a <<cv-html>> opener that starts a new message lands
+ * mid-line after the previous message's prose, and parseCvEnvelope, which needs
+ * the opener on its own line, reports no envelope.
+ *
+ * @returns {(ev: ParsedEvent | null | undefined) => string} the text to append
+ */
+export function createAgentTextJoiner() {
+  let newMessage = false;
+  return (ev) => {
+    if (ev?.tool) newMessage = true;
+    if (!ev?.text) return "";
+    const text = newMessage ? `\n${ev.text}` : ev.text;
+    newMessage = false;
+    return text;
+  };
+}

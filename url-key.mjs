@@ -341,4 +341,16 @@ export function normalizeUrl(raw) {
   return u.toString();
 }
 
+/**
+ * One key per posting: the board's own posting id on a known aggregator, so a
+ * LinkedIn alert link and the plain /jobs/view/ link agree, else normalizeUrl.
+ *
+ * @param {string} raw
+ * @returns {string} '' when the input is not a usable posting URL
+ */
+export function postingKey(raw) {
+  const agg = aggregatorPostingId(raw);
+  return agg ? `${agg.domain}:${agg.id}` : normalizeUrl(raw);
+}
+
 export default normalizeUrl;

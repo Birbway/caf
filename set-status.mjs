@@ -109,7 +109,7 @@ import { roleFuzzyMatch } from './role-matcher.mjs';
 import { localToday } from './lib/local-today.mjs';
 import {
   resolveTrackerPath, writeFileAtomic, loadCanonicalStates, resolveCanonicalState,
-  normalizeCompany, cell, CLI_EXIT, makeCliFailWith, acquireTrackerLockForCli, resolveWorkspaceRoot,
+  normalizeCompany, cell, CLI_EXIT, makeCliFailWith, makeCliFailUsage, acquireTrackerLockForCli, resolveWorkspaceRoot,
 } from './tracker-utils.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 import { claimActivity, releaseActivity, describeActiveOwner } from './session-activity.mjs';
@@ -252,6 +252,14 @@ if (wantsHelp(rawArgs)) {
 // disagreeing about what a valid source is.
 const WRITER_SOURCES = new Set(['set-status', 'web', 'reply-watch']);
 
+// Before the parse loop: failUsage runs on the first bad token, and a const
+// is not hoisted the way the previous function declaration was.
+const failUsage = makeCliFailUsage({
+  argv: rawArgs,
+  usage: USAGE,
+  defaultMessage: 'Expected 2 arguments: <report#|company> <state>',
+});
+
 for (let i = 0; i < rawArgs.length; i++) {
   const a = rawArgs[i];
   if (a.startsWith('--note=')) {
@@ -335,30 +343,6 @@ const isBareNumericSelector = selector !== null && /^\d+$/.test(selector);
 // Shared with every other canonical tracker-writer CLI (tracker-utils.mjs) so
 // the JSON-vs-human error contract can't drift between them.
 const failWith = makeCliFailWith(flags.json);
-
-/**
- * Print usage (plus an optional specific complaint) and exit 1.
- *
- * With --json a structured usage-error payload goes to stdout (same shape as
- * failWith) so machine callers always parse one stream. failUsage can fire
- * mid-argv-parse — before flags.json is settled — so JSON mode is detected
- * from the raw argv directly.
- *
- * @param {string|null} message - What was wrong with the invocation, if known.
- * @returns {never}
- */
-function failUsage(message) {
-  const msg = message ?? 'Expected 2 arguments: <report#|company> <state>';
-  if (rawArgs.includes('--json')) {
-    // JSON must be the last thing written to stdout; machine callers parse stdout as one JSON document.
-    console.log(JSON.stringify({ error: msg, code: 'usage' }));
-    console.error(`❌ ${msg}`);
-  } else {
-    if (message) console.error(`❌ ${message}\n`);
-    console.error(USAGE);
-  }
-  process.exit(EXIT_USAGE);
-}
 
 // ── state validation (before anything touches the tracker) ──────
 
