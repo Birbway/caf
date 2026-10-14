@@ -88,7 +88,7 @@ export function scoreLevers(s) {
     holding: [...s.hardStops.map((text) => ({ text, importance: null })), ...byImportance(s.requirements, "missing")],
     close: [
       ...partial,
-      ...s.softGaps.filter((text) => !listed.has(text.toLowerCase())).map((text) => ({ text, importance: null })),
+      ...[...new Set(s.softGaps)].filter((text) => !listed.has(text.toLowerCase())).map((text) => ({ text, importance: null })),
     ],
     verify: [...s.confidenceGaps, ...s.unknownEvidence.map((label) => `${label} evidence is unknown`)],
     strengths: s.strengths,

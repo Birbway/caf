@@ -132,3 +132,12 @@ requirement_importance:
 soft_gaps:
   - "Light on people management"`)).minus, "Light on people management");
 });
+
+test("a soft gap listed twice is one close call", () => {
+  const summary = report(`soft_gaps:
+  - "Light on people management"
+  - "Light on people management"`);
+  assert.deepEqual(scoreLevers(readMachineSummary(summary)).close, [
+    { text: "Light on people management", importance: null },
+  ]);
+});
