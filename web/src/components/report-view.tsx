@@ -17,6 +17,7 @@ import { isStarTableHeader, parsePipeTable } from "@/lib/report-tables.mjs";
 import { StatusSelect } from "@/components/status-select";
 import { CompanyLogo } from "@/components/company-logo";
 import { ScoreMethodology } from "@/components/score-methodology";
+import { ScoreLevers } from "@/components/score-levers";
 import { GeneratePdfButton } from "@/components/generate-pdf-button";
 import { ApplyButton } from "@/components/apply-button";
 import { DeleteFromTracker } from "@/components/delete-from-tracker";
@@ -202,6 +203,7 @@ export function ReportView({
               return (
                 <div className="mt-8 max-w-4xl">
                   {callout}
+                  <ScoreLevers report={report} />
                   <article className="report-prose mt-6">
                     <ReportMarkdown>{meta?.body ?? report}</ReportMarkdown>
                   </article>
@@ -211,6 +213,7 @@ export function ReportView({
             return (
               <div className="mt-8 max-w-4xl">
                 {callout}
+                <ScoreLevers report={report} />
 
                 {mainSections.map((s, i) => {
                   const expanded = isLeadSection(s);
