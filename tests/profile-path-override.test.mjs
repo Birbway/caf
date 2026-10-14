@@ -199,7 +199,7 @@ try {
   }
 
   // A data-root profile that exists does not make the .env override harmless:
-  // scan.mjs and the evaluators read the file the .env names, the rest read this one.
+  // scan.mjs reads the file the .env names, the other readers read this one.
   const bothRoot = join(scratch, 'both-root');
   mkdirSync(join(bothRoot, 'config'), { recursive: true });
   writeFileSync(join(bothRoot, 'config', 'profile.yml'), 'candidate:\n  full_name: Root\n', 'utf-8');
@@ -273,8 +273,8 @@ try {
   // The onboarding steps act only on `missing`, so the warning changes nothing
   // unless AGENTS.md tells the agent to read it before copying the example profile.
   const agentsOnboarding = readFileSync(join(ROOT, 'AGENTS.md'), 'utf-8').split('#### Step 2: Profile')[1]?.split('#### Step 3')[0] ?? '';
-  /warnings/.test(agentsOnboarding) && /CAREER_OPS_PROFILE/.test(agentsOnboarding) && /export/.test(agentsOnboarding)
-    ? pass('AGENTS.md onboarding Step 2 sends an agent to the doctor warning before copying the example profile')
+  /warnings/.test(agentsOnboarding) && /CAREER_OPS_PROFILE/.test(agentsOnboarding) && /export/.test(agentsOnboarding) && /restart/.test(agentsOnboarding)
+    ? pass('AGENTS.md onboarding Step 2 sends an agent to the doctor warning, and says an export needs a restarted session, before copying the example profile')
     : fail('AGENTS.md onboarding Step 2 does not mention the doctor --json warning for a .env-set CAREER_OPS_PROFILE');
 
   // --target diagnoses another checkout, so CAREER_OPS_PROFILE does not apply to
