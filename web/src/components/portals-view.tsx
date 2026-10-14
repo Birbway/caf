@@ -161,8 +161,8 @@ function WatchedList({ watched }: { watched: WatchedCompany[] }) {
         still answer
       </p>
       <ul className="mt-4 divide-y divide-border overflow-hidden rounded-2xl border border-border bg-surface/40">
-        {watched.map((c) => (
-          <li key={c.name} className={cn("flex items-center gap-3 px-4 py-2.5", !c.enabled && "opacity-60")}>
+        {watched.map((c, i) => (
+          <li key={`${i}-${c.name}`} className={cn("flex items-center gap-3 px-4 py-2.5", !c.enabled && "opacity-60")}>
             <CompanyLogo name={c.name} size={20} />
             <span className="shrink-0 text-sm font-medium">{c.name}</span>
             <span className="truncate font-mono text-xs text-faint">{c.host}</span>
