@@ -53,7 +53,10 @@ async function findTailoredHtml(n: string, slug: string): Promise<string | null>
   try {
     files = fs
       .readdirSync(dir)
-      .filter((f) => f.toLowerCase().endsWith(".html") && !f.endsWith(`${EDITED_SUFFIX}.html`) && !f.endsWith("-ats.html"))
+      .filter((f) => {
+        const name = f.toLowerCase();
+        return name.endsWith(".html") && !name.endsWith(`${EDITED_SUFFIX}.html`) && !name.endsWith("-ats.html");
+      })
       .filter((f) => matchesTailoredCv(f.toLowerCase(), slug))
       .filter((f) => isRegularContainedFile(path.join(dir, f), dir));
   } catch {
@@ -151,12 +154,17 @@ export async function renderEditedPdf(load: Extract<StudioLoad, { ok: true }>, e
   const { view, added } = resolveStudio(load.doc, edits);
   const html = renderBlocks(load.tree, view, { added });
   const outDir = path.join(root, "output");
-  const editedHtml = path.join(outDir, load.file.replace(/\.html$/, `${EDITED_SUFFIX}.html`));
+  const editedHtml = path.join(outDir, load.file.replace(/\.html$/i, `${EDITED_SUFFIX}.html`));
   const editedPdf = editedHtml.replace(/\.html$/, ".pdf");
+  const previousHtml = fs.existsSync(editedHtml) ? fs.readFileSync(editedHtml, "utf8") : null;
   atomicWrite(editedHtml, html);
   const format = /size:\s*a4/i.test(html) ? "a4" : "letter";
   const render = await spawnGeneratePdf({ spawnFn: spawn, execPath: process.execPath, root, html: editedHtml, finalPdf: editedPdf, format, reportNum: load.reportNum });
-  if (!render.ok) return { ok: false, error: render.stderr || "PDF rendering failed." };
+  if (!render.ok) {
+    if (previousHtml === null) fs.rmSync(editedHtml, { force: true });
+    else atomicWrite(editedHtml, previousHtml);
+    return { ok: false, error: render.stderr || "PDF rendering failed." };
+  }
   const warnings = render.stderr.split("\n").map((l: string) => l.trim()).filter(Boolean);
   const mark = await markTrackerReady({ spawnFn: spawn, execPath: process.execPath, root, reportNum: load.reportNum });
   if (!mark.ok) warnings.push(`PDF rendered, but the tracker's PDF column was not updated${mark.data?.error ? `: ${mark.data.error}` : "."}`);
