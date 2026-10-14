@@ -53,7 +53,7 @@ export function readMachineSummary(report) {
     hardStops: strings(raw.hard_stops),
     softGaps: strings(raw.soft_gaps),
     requirements: (Array.isArray(raw.requirement_importance) ? raw.requirement_importance : [])
-      .filter((r) => r && String(r.requirement ?? "").trim() && String(r.importance) in IMPORTANCE_RANK)
+      .filter((r) => r && String(r.requirement ?? "").trim() && Object.hasOwn(IMPORTANCE_RANK, String(r.importance)))
       .map((r) => ({
         requirement: String(r.requirement).trim(),
         importance: /** @type {Importance} */ (String(r.importance)),
@@ -133,7 +133,7 @@ const QUESTION_BY_MATCH = {
  */
 export function prepQuestions(s, limit = 6) {
   return s.requirements
-    .filter((r) => r.match in QUESTION_BY_MATCH && IMPORTANCE_RANK[r.importance] <= IMPORTANCE_RANK.meaningful)
+    .filter((r) => Object.hasOwn(QUESTION_BY_MATCH, r.match) && IMPORTANCE_RANK[r.importance] <= IMPORTANCE_RANK.meaningful)
     .sort((a, b) => IMPORTANCE_RANK[a.importance] - IMPORTANCE_RANK[b.importance])
     .slice(0, limit)
     .map((r) => ({ ...r, question: QUESTION_BY_MATCH[r.match](r.requirement) }));

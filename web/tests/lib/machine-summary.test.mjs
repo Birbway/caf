@@ -154,3 +154,18 @@ test("prep questions follow importance and pick the question from the match", ()
 test("prep questions stop at the limit", () => {
   assert.deepEqual(prepQuestions(readMachineSummary(full), 1).map((q) => q.requirement), ["Kubernetes in production"]);
 });
+
+test("an inherited key is not a valid importance or match", () => {
+  const s = readMachineSummary(report(`requirement_importance:
+  - requirement: "Rust"
+    importance: "constructor"
+    match: "missing"
+  - requirement: "Go"
+    importance: "high"
+    match: "__proto__"
+  - requirement: "Python"
+    importance: "high"
+    match: "strong"`));
+  assert.deepEqual(s.requirements.map((r) => r.requirement), ["Go", "Python"]);
+  assert.deepEqual(prepQuestions(s).map((q) => q.requirement), ["Python"]);
+});
