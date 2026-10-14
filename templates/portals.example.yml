@@ -1325,6 +1325,10 @@ search_queries:
 #   careers_url: https://apply.workable.com/exampleco   # any apply.workable.com/<slug> host
 #   enabled: true
 #
+# - name: Example Recruitee Co
+#   careers_url: https://exampleco.recruitee.com         # any *.recruitee.com host
+#   enabled: true
+#
 # - name: Example ADP Workforce Now Co
 #   careers_url: https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=00000000-0000-0000-0000-000000000000&ccId=19000101_000001
 #   max_pages: 100          # optional page cap (20 jobs/page, default 100, max 1500)
@@ -2366,6 +2370,11 @@ tracked_companies:
     scan_method: websearch
     scan_query: 'site:jobs.ashbyhq.com/perk'
     notes: "Barcelona. Business travel unicorn (rebranded Perk)."
+    enabled: true
+
+  - name: Channable
+    careers_url: https://channable.recruitee.com
+    notes: "Utrecht. Product feed management for e-commerce. Recruitee board."
     enabled: true
 
   # -- DACH & European AI ecosystem --
