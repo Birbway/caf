@@ -18,6 +18,7 @@ import { StatusSelect } from "@/components/status-select";
 import { CompanyLogo } from "@/components/company-logo";
 import { ScoreMethodology } from "@/components/score-methodology";
 import { ScoreLevers } from "@/components/score-levers";
+import { PrepPack } from "@/components/prep-pack";
 import { GeneratePdfButton } from "@/components/generate-pdf-button";
 import { ApplyButton } from "@/components/apply-button";
 import { DeleteFromTracker } from "@/components/delete-from-tracker";
@@ -222,6 +223,7 @@ export function ReportView({
                     </details>
                   );
                 })}
+                <PrepPack report={report} company={companyName} />
 
                 {machine.length > 0 && (
                   <>

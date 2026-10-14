@@ -112,3 +112,29 @@ export function cardReason(report) {
   const reason = { decision: s.decision, plus: s.strengths[0] ?? null, minus: (holding[0] ?? close[0])?.text ?? null };
   return reason.decision || reason.plus || reason.minus ? reason : null;
 }
+
+/**
+ * @typedef {{ requirement: string, importance: Importance, match: string, question: string }} PrepQuestion
+ */
+
+const QUESTION_BY_MATCH = {
+  strong: (r) => `Walk me through your strongest example of ${r}. What was the outcome?`,
+  partial: (r) => `Where have you used ${r}, and how deep did you go?`,
+  missing: (r) => `The role asks for ${r}. How would you close that gap?`,
+};
+
+/**
+ * Likely screening questions, one per important requirement, most important
+ * first. The match verdict picks the question: proof for a strong match,
+ * depth for a partial one, a gap plan for a missing one.
+ * @param {MachineSummary} s
+ * @param {number} [limit]
+ * @returns {PrepQuestion[]}
+ */
+export function prepQuestions(s, limit = 6) {
+  return s.requirements
+    .filter((r) => r.match in QUESTION_BY_MATCH && IMPORTANCE_RANK[r.importance] <= IMPORTANCE_RANK.meaningful)
+    .sort((a, b) => IMPORTANCE_RANK[a.importance] - IMPORTANCE_RANK[b.importance])
+    .slice(0, limit)
+    .map((r) => ({ ...r, question: QUESTION_BY_MATCH[r.match](r.requirement) }));
+}
