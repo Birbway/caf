@@ -40,6 +40,26 @@ function resolveApiUrl(entry) {
   return `https://${parsed.hostname}/api/offers/`;
 }
 
+/**
+ * The language a careers_url asks for (`?lang=xx`, Recruitee's own param), or
+ * null.
+ *
+ * @param {any} entry
+ * @returns {string|null} Lowercased, already checked against LANGUAGE_RE.
+ */
+function entryLanguage(entry) {
+  if (typeof entry?.careers_url !== 'string') return null;
+  let parsed;
+  try {
+    parsed = new URL(entry.careers_url);
+  } catch {
+    return null;
+  }
+  if (!RECRUITEE_HOST_RE.test(parsed.hostname)) return null;
+  const language = (parsed.searchParams.get(LANGUAGE_PARAM) || '').trim().toLowerCase();
+  return LANGUAGE_RE.test(language) ? language : null;
+}
+
 /** @type {Provider} */
 export default {
   id: 'recruitee',
@@ -57,6 +77,7 @@ export default {
     return parseRecruiteeResponse(json, entry.name, {
       allLanguages: ctx?.dedupIncludeLanguage === true,
       preferredLanguageRank: typeof ctx?.preferredLanguageRank === 'function' ? ctx.preferredLanguageRank : null,
+      entryLanguage: entryLanguage(entry),
     });
   },
 };
@@ -93,19 +114,22 @@ function withLanguage(url, language) {
  * no translation matches, the language is unknown and the offer comes back
  * once, from its top-level fields, with no `language`.
  *
- * Further translations are returned when `allLanguages` is true; otherwise
- * only those in a preferred language (`rank` ≥ 0), so scan.mjs can keep the
- * preferred version over the default one. A translation that would come out as
- * the same Job text as a version already returned — same trimmed title and
- * same plain-text description — is a copy under another label, not a
- * translation, and is skipped.
+ * Further translations are returned when `allLanguages` is true. Otherwise a
+ * careers_url language (`entryLanguage`) replaces the default version wherever
+ * the offer has that translation, and decides alone for that entry; without
+ * one, the translations in a preferred language (`rank` ≥ 0) come back next to
+ * the default one, so scan.mjs can keep the preferred version. A translation
+ * that would come out as the same Job text as a version already returned —
+ * same trimmed title and same plain-text description — is a copy under
+ * another label, not a translation, and is skipped.
  *
  * @param {any} j - One offer.
  * @param {boolean} allLanguages
  * @param {((language: string) => number)|null} rank - ctx.preferredLanguageRank, if set.
+ * @param {string|null} entryLanguage - The careers_url language, if any.
  * @returns {Array<{title: string, description: string, language?: string}>}
  */
-function languageVersions(j, allLanguages, rank) {
+function languageVersions(j, allLanguages, rank, entryLanguage) {
   const top = versionText(j.title, j.description, j.requirements);
   const translations = j.translations && typeof j.translations === 'object' ? j.translations : {};
   const entries = Object.entries(translations)
@@ -113,6 +137,11 @@ function languageVersions(j, allLanguages, rank) {
   const defaultEntry = entries.find(([, t]) => t.title === j.title && t.description === j.description);
   if (!defaultEntry) return [top];
   const versions = [{ ...top, language: defaultEntry[0] }];
+  if (!allLanguages && entryLanguage) {
+    const asked = entries.find(([code]) => code.toLowerCase() === entryLanguage && code !== defaultEntry[0]);
+    const version = asked && versionText(asked[1].title, asked[1].description, asked[1].requirements);
+    return version && version.title ? [{ ...version, language: asked[0] }] : versions;
+  }
   if (!allLanguages && !rank) return versions;
   const versionKey = (v) => JSON.stringify([v.title, v.description]);
   const seen = new Set([versionKey(top)]);
@@ -363,11 +392,13 @@ function parseSalary(salary) {
  *   each further translation comes back as its own Job, after the default
  *   one, with its own title and description and the same location, date and
  *   salary; without it, only the translations `preferredLanguageRank`
- *   (portals.yml preferred_languages) ranks do. Every Job that carries a
+ *   (portals.yml preferred_languages) ranks do — or, when the entry's
+ *   careers_url carries `?lang=xx`, that translation alone replaces the
+ *   default one wherever the offer has it. Every Job that carries a
  *   `language` carries it as `?lang=` on its URL too, so the language
- *   versions of one offer share a dedup key in
- *   scan.mjs and are told apart by `language`. The translations ship in the
- *   same response, so no request is added.
+ *   versions of one offer share a dedup key in scan.mjs and are told apart by
+ *   `language`. The translations ship in the same response, so no request is
+ *   added.
  * - a posting Recruitee itself marks "(Sample)" in the title is dropped
  *   entirely (see isRecruiteeSamplePosting), so a tenant serving only its
  *   seeded sample posting resolves as empty rather than as a live board.
@@ -393,10 +424,10 @@ function parseSalary(salary) {
  *
  * @param {any} json
  * @param {string} companyName
- * @param {{allLanguages?: boolean, preferredLanguageRank?: ((language: string) => number)|null}} [options]
+ * @param {{allLanguages?: boolean, preferredLanguageRank?: ((language: string) => number)|null, entryLanguage?: string|null}} [options]
  * @returns {Array<{title: string, url: string, company: string, location: string, description?: string, postedAt?: number, salary?: {min: number, max: number, currency: string}, language?: string}>}
  */
-export function parseRecruiteeResponse(json, companyName, { allLanguages = false, preferredLanguageRank = null } = {}) {
+export function parseRecruiteeResponse(json, companyName, { allLanguages = false, preferredLanguageRank = null, entryLanguage = null } = {}) {
   const offers = json && typeof json === 'object' && Array.isArray(json.offers) ? json.offers : null;
   if (!offers) {
     const got = json && typeof json === 'object' ? Object.keys(json).join(', ') : typeof json;
@@ -438,7 +469,7 @@ export function parseRecruiteeResponse(json, companyName, { allLanguages = false
     const postedAt = toEpochMs(j.published_at);
     const salary = parseSalary(j.salary);
 
-    for (const version of languageVersions(j, allLanguages, preferredLanguageRank)) {
+    for (const version of languageVersions(j, allLanguages, preferredLanguageRank, entryLanguage)) {
       out.push({
         title: version.title,
         url: version.language ? withLanguage(url, version.language) : url,

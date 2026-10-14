@@ -469,6 +469,26 @@ try {
     fail(`fetch preferred languages = ${JSON.stringify(fetchedPreferred.map(v => v.language))}`);
   }
 
+  // A ?lang= on one entry's careers_url (Recruitee's own param) asks for that
+  // language for that entry: it replaces the default version wherever the offer
+  // has it, and wins over the preferred languages. With dedupIncludeLanguage
+  // every version comes back regardless.
+  const fetchLanguages = async (careersUrl, extra = {}) => (await recruitee.fetch(
+    { name: 'Acme', careers_url: careersUrl },
+    { fetchJson: async () => ({ offers: [trilingual] }), ...extra },
+  )).map(v => `${v.language}|${v.url.replace('https://acme.recruitee.com/o/senior-qa', '')}`);
+  const entryCases = [
+    ['?lang=en on careers_url → the English version alone', await fetchLanguages('https://acme.recruitee.com/?lang=en'), ['en|?lang=en']],
+    ['?lang= the offer lacks → the default version', await fetchLanguages('https://acme.recruitee.com/?lang=es'), ['de|?lang=de']],
+    ['?lang= wins over the preferred languages', await fetchLanguages('https://acme.recruitee.com/?lang=EN', { preferredLanguageRank: rankOf('fr') }), ['en|?lang=en']],
+    ['a malformed ?lang= is ignored', await fetchLanguages('https://acme.recruitee.com/?lang=en%20US'), ['de|?lang=de']],
+    ['with dedupIncludeLanguage every version comes back', await fetchLanguages('https://acme.recruitee.com/?lang=en', { dedupIncludeLanguage: true }), ['de|?lang=de', 'en|?lang=en', 'fr|?lang=fr']],
+  ];
+  for (const [label, actual, expected] of entryCases) {
+    if (JSON.stringify(actual) === JSON.stringify(expected)) pass(`recruitee.fetch(): ${label}`);
+    else fail(`recruitee.fetch(): ${label} — got ${JSON.stringify(actual)}`);
+  }
+
   // ── Demo-tenant filtering ──────────────────────────────────────────────────
   // Recruitee itself stamps "(Sample)" on its own seeded posting — captured
   // live, byte-identical, from two unrelated tenants (adecco, accenture).

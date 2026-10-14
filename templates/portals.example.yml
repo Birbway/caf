@@ -86,8 +86,9 @@
 # ones come first. Regional variants count as one language (en-GB equals en).
 #
 # Personio fetches one more careers page per preferred language; Recruitee
-# needs no extra request. A `?language=xx` on one Personio careers_url
-# overrides this list for that entry.
+# needs no extra request. To set the language of one company only, put the
+# ATS's own language param on its careers_url — `?language=xx` on Personio,
+# `?lang=xx` on Recruitee; it overrides this list for that entry.
 #
 # preferred_languages: [en]
 
@@ -1340,7 +1341,9 @@ search_queries:
 #   enabled: true
 #
 # - name: Example Recruitee Co
-#   careers_url: https://exampleco.recruitee.com         # any *.recruitee.com host
+#   careers_url: https://exampleco.recruitee.com         # any *.recruitee.com host;
+#                                                        # ?lang=<code> sets this entry's language
+#                                                        # (see "Preferred posting languages")
 #   enabled: true
 #
 # - name: Example ADP Workforce Now Co
