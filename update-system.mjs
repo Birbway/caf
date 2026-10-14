@@ -188,6 +188,7 @@ const SYSTEM_PATHS = [
   'modes/_brief.template.md',
   'voice-dna.template.md',
   'modes/oferta.md',
+  'modes/oferta-signals/',
   'modes/master-profile.md',
   'modes/pdf.md',
   'modes/ats.md',
