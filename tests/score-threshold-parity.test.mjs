@@ -28,10 +28,10 @@ test('AGENTS.md states the threshold', () => {
 for (const rel of sharedCopies) {
   test(`modes/${rel} names the AGENTS.md threshold in its 3.5-3.9 band`, () => {
     const src = readFileSync(join(ROOT, 'modes', ...rel.split('/')), 'utf-8');
-    const band = src.split('\n').find((line) => /3\.5 ?[-–] ?3\.9/.test(line));
+    const band = src.split('\n').find((line) => /3[.,]5 ?[-–] ?3[.,]9/.test(line));
     if (!band) return;
     // The Russian band points at the threshold paragraph right after it.
     const scope = rel === 'ru/_shared.md' ? src.slice(src.indexOf(band), src.indexOf(band) + band.length + 800) : band;
-    assert.ok(scope.includes(threshold), band);
+    assert.ok(scope.includes(threshold) || scope.includes(threshold.replace('.', ',')), band);
   });
 }
