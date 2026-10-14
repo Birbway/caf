@@ -15,7 +15,6 @@ import { readFileSync, copyFileSync, existsSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { getCareerOpsRoot, resolveTrackerPath } from './path-resolver.mjs';
-import { roleFuzzyMatch } from './role-matcher.mjs';
 import { postingUrlRelation } from './url-key.mjs';
 import {
   openTrackerTransaction, rebuildRow, normalizeCompany,
