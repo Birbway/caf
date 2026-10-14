@@ -51,8 +51,9 @@ const DEFAULT_MAX_PAGES = 200;
 // Every request after the first pays it — across pages and keyword switches
 // (same idiom as avature/workday/alibaba).
 const INTER_PAGE_DELAY_MS = 300;
-// Pages fetched in parallel after the first one. Checked live 2026-10 against
-// jobs.bytedance.com: 8 concurrent requests all returned code 0.
+// Pages fetched in parallel after the first one. Checked live 2026-10: 8
+// concurrent requests on jobs.bytedance.com and three rounds of 4 on the
+// vrfi1sk8a0.jobs.feishu.cn tenant all returned code 0.
 const PAGE_CONCURRENCY = 4;
 // Sent unconditionally: a no-op on tenants without ByteDance's own domain's
 // UA-sniffing rule, required on jobs.bytedance.com itself (see header).
